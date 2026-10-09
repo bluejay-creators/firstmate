@@ -5,6 +5,9 @@
 # state/peers/peers.tsv and peer logs, and bd's CURRENT configured store as
 # resolved from the caller's working directory or Beads environment. Run from
 # a directory where `bd where` finds the intended board (or set BEADS_DIR).
+# Registry rows are name<TAB>label; a state/peers/<name>.log report line
+# starts with needs-decision|blocked|resolved|done|note and may carry
+# [key=<slug>] and [at=<epoch>] tags before its colon.
 # No pane, board, inbox cursor, watcher, or task mutation. Herdr calls only
 # pane current, tab list, and agent list; bd calls only --readonly --sandbox
 # where/list. A failed read is explicit in sources/errors; exit 1 on partial.
