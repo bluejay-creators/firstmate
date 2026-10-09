@@ -1,0 +1,22 @@
+### Board after ~25 roster runs (bd --readonly --sandbox reads only): same six issues, statuses, assignees, dependencies
+{"id":"fmr-2mk","status":"open","assignee":"Alice","labels":["agents"],"deps":[]}
+{"id":"fmr-1xt","status":"closed","assignee":"bob","labels":["bridge"],"deps":[]}
+{"id":"fmr-8mb","status":"open","assignee":"bob","labels":["bridge"],"deps":["fmr-1xt"]}
+{"id":"fmr-21g","status":"open","assignee":null,"labels":["usga"],"deps":[]}
+{"id":"fmr-elf","status":"open","assignee":"other","labels":["platform"],"deps":[]}
+{"id":"fmr-2jz","status":"in_progress","assignee":"alice","labels":["auditless"],"deps":["fmr-elf"]}
+--- git status of board repo:
+untracked or modified entries:        0
+--- dolt history count:
+
+### Herdr lab workspace after: tabs and agents unchanged, no tab/pane created or closed by the roster
+[{"tab_id":"w1:t1","label":"1","agent_status":"unknown"},{"tab_id":"w1:t2","label":"◐ Alice","agent_status":"working"},{"tab_id":"w1:t3","label":"Bob","agent_status":"idle"},{"tab_id":"w1:t4","label":"◐ fm-job","agent_status":"working"},{"tab_id":"w1:t5","label":"Stranger","agent_status":"idle"},{"tab_id":"w1:t6","label":"plain-shell","agent_status":"unknown"}]
+[{"tab_id":"w1:t2","pane_id":"w1:p2","agent_status":"working"},{"tab_id":"w1:t3","pane_id":"w1:p3","agent_status":"idle"},{"tab_id":"w1:t4","pane_id":"w1:p4","agent_status":"working"},{"tab_id":"w1:t5","pane_id":"w1:p5","agent_status":"idle"},{"tab_id":"w2:t2","pane_id":"w2:p2","agent_status":"working"}]
+[{"workspace_id":"w1","label":"fm-roster-lab"},{"workspace_id":"w2","label":"other-workspace"}]
+
+### Lab FM_HOME state after: only the files the test wrote (no inbox cursor, watcher, or task files added)
+<LAB>/.fm-lab-home
+<LAB>/state/job.meta
+<LAB>/state/peers/alice.log
+<LAB>/state/peers/bob.log
+<LAB>/state/peers/peers.tsv

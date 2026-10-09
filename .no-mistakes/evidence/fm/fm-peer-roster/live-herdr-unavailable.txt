@@ -1,0 +1,20 @@
+### roster run with no Herdr pane identity (HERDR_PANE_ID unset), lab session
+exit=0
+{"partial":false,"sources":{"beads":"ok","herdr":"ok","peers":"ok"},"errors":[],"workspace":"w1","board":"/tmp/fm-roster-board.lFRkrY/.beads","peers":[{"name":"alice","resolution":"matched","activity":"working","work_evidence":"blocked","beads":["fmr-2jz"]},{"name":"bob","resolution":"matched","activity":"idle","work_evidence":"unknown","beads":["fmr-8mb"]},{"name":"charlie","resolution":"unavailable","activity":"unknown","work_evidence":"unknown","beads":[]}],"managed_tabs":[{"activity":"working","label":"fm-job","pane_ids":["w1:p4"],"tab_id":"w1:t4","workers":["job"]}],"unregistered_tabs":[{"activity":"idle","label":"Stranger","pane_ids":["w1:p5"],"resolution":"unmapped","tab_id":"w1:t5"}],"unassigned":["fmr-21g"]}
+
+### roster run against a non-existent Herdr session name
+exit=1
+{"partial":true,"sources":{"beads":"ok","herdr":"unknown","peers":"ok"},"errors":["herdr: {\"id\":\"cli:pane:current\",\"error\":{\"code\":\"server_not_running\",\"message\":\"no herdr server is running at /Users/jubin/.config/herdr/sessions/fm-lab-does-not-exist-60082/herdr.sock; run `herdr session attach fm-lab-does-not-exist-60082` to start or attach it\"}}"],"workspace":null,"peers":[{"name":"alice","resolution":"unknown","work_evidence":"unknown"},{"name":"bob","resolution":"unknown","work_evidence":"unknown"},{"name":"charlie","resolution":"unknown","work_evidence":"unknown"}]}
+
+--- human
+Workspace unknown | Herdr unknown | Beads ok | peers ok
+alice: unknown activity=unknown work=unknown report=fresh@2026-10-09T22:57Z note [at=1791586621] [key=build]: work underway on the roster beads=fmr-2jz(in_progress,deps:blocked:fmr-elf=open)
+bob: unknown activity=unknown work=unknown report=stale@1970-01-01T00:00Z done [at=1]: old task beads=fmr-8mb(open,deps:clear:)
+charlie: unknown activity=unknown work=unknown report=missing@-  beads=-
+unassigned: 1
+  fmr-21g [usga] assignee=- open deps=clear
+other assignees: 2
+  fmr-2mk [agents] assignee=Alice open deps=clear
+  fmr-elf [platform] assignee=other open deps=clear
+unknown: herdr: {"id":"cli:pane:current","error":{"code":"server_not_running","message":"no herdr server is running at /Users/jubin/.config/herdr/sessions/fm-lab-does-not-exist-60082/herdr.sock; run `herdr session attach fm-lab-does-not-exist-60082` to start or attach it"}}
+exit=1

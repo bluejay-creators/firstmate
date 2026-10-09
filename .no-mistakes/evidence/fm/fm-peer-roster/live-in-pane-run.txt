@@ -1,0 +1,19 @@
+### fm-peer-roster.sh launched by `herdr pane run` inside lab pane w1:p1 (Herdr-injected environment, no HERDR_* set by the test)
+--- herdr pane current, as seen from that pane
+{"workspace_id":"w1","pane_id":"w1:p1","tab_id":"w1:t1"}
+--- exit
+exit=0
+--- json summary
+{"workspace":"w1","partial":false,"sources":{"beads":"ok","herdr":"ok","peers":"ok"},"board":"/tmp/fm-roster-board.lFRkrY/.beads","peers":[{"name":"alice","resolution":"matched","activity":"working","work_evidence":"blocked","tab_id":"w1:t2","open_keys":[]},{"name":"bob","resolution":"matched","activity":"idle","work_evidence":"unknown","tab_id":"w1:t3","open_keys":[]},{"name":"charlie","resolution":"unavailable","activity":"unknown","work_evidence":"unknown","tab_id":null,"open_keys":null}],"managed":[{"tab_id":"w1:t4","workers":["job"],"activity":"working"}],"unregistered":[{"tab_id":"w1:t5","label":"Stranger","resolution":"unmapped","activity":"idle"}],"unassigned":[{"id":"fmr-21g","labels":["usga"]}],"other_assigned":[{"id":"fmr-2mk","assignee":"Alice"},{"id":"fmr-elf","assignee":"other"}]}
+--- default human view
+Workspace w1 | Herdr ok | Beads ok | peers ok
+alice: matched activity=working work=blocked report=fresh@2026-10-09T22:57Z note [at=1791586621] [key=build]: work underway on the roster beads=fmr-2jz(in_progress,deps:blocked:fmr-elf=open)
+bob: matched activity=idle work=unknown report=stale@1970-01-01T00:00Z done [at=1]: old task beads=fmr-8mb(open,deps:clear:)
+charlie: unavailable activity=unknown work=unknown report=missing@-  beads=-
+managed w1:t4 fm-job: activity=working worker=job
+unmapped w1:t5 Stranger: activity=idle
+unassigned: 1
+  fmr-21g [usga] assignee=- open deps=clear
+other assignees: 2
+  fmr-2mk [agents] assignee=Alice open deps=clear
+  fmr-elf [platform] assignee=other open deps=clear
