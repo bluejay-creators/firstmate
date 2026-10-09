@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fm-peer-roster.sh - observe hand-launched Herdr agents without owning them.
-# Usage: FM_HOME=<active-firstmate-home> bin/fm-peer-roster.sh [--json] [--stale-after SECONDS]
+# Usage: FM_HOME=<active-firstmate-home> bin/fm-peer-roster.sh [--json]
 # Reads the current Herdr pane's workspace, the active home's
 # state/peers/peers.tsv and peer logs, and bd's CURRENT configured store as
 # resolved from the caller's working directory or Beads environment. Run from
@@ -11,10 +11,13 @@
 # JSON: {workspace, sources, peers, unregistered_tabs, managed_tabs,
 #        unassigned_beads, other_assigned_beads, errors, partial}; board on success.
 # Peers resolve by exact registry tab label after stripping Herdr's one-glyph
-# status prefix; Beads join only exact assignee == peer name or tab label.
-# Dependency status uses blocking edges and the complete board snapshot;
-# unknown references are not treated as clear. Log timestamps are historical
-# reports, never substituted for current Herdr agent activity or Beads state.
+# status prefix; Beads join only on exact assignee == peer name. Herdr reads
+# target the HERDR_SESSION (default) session, the same one worker metadata is
+# filtered by. Dependency status uses blocking edges and the complete board
+# snapshot; unknown or tombstone references are not treated as clear. Log
+# timestamps are historical reports, never substituted for current Herdr agent
+# activity or Beads state; a latest blocked/needs-decision report whose key has
+# no later resolved line keeps work_evidence blocked regardless of freshness.
 set -euo pipefail
 FM_HOME=${FM_HOME:-$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}
 export FM_HOME
@@ -30,27 +33,24 @@ import time
 
 
 def usage():
-    print('usage: fm-peer-roster.sh [--json] [--stale-after SECONDS]', file=sys.stderr)
+    print('usage: fm-peer-roster.sh [--json]', file=sys.stderr)
     sys.exit(2)
 
 
-args = sys.argv[1:]
 as_json = False
-stale_after = 4 * 3600
-while args:
-    arg = args.pop(0)
+STALE_AFTER = 4 * 3600
+for arg in sys.argv[1:]:
     if arg == '--json':
         as_json = True
-    elif arg == '--stale-after' and args and re.fullmatch(r'[0-9]+', args[0]):
-        stale_after = int(args.pop(0))
     elif arg in ('--help', '-h'):
-        print('usage: fm-peer-roster.sh [--json] [--stale-after SECONDS]')
+        print('usage: fm-peer-roster.sh [--json]')
         sys.exit(0)
     else:
         usage()
 
 home = Path(os.environ['FM_HOME'])
 state = home / 'state'
+session = os.environ.get('HERDR_SESSION', 'default')
 result = dict(workspace=None, sources={'herdr': 'unknown', 'beads': 'unknown', 'peers': 'unknown'},
               peers=[], unregistered_tabs=[], managed_tabs=[], unassigned_beads=[],
               other_assigned_beads=[], errors=[], partial=False)
@@ -76,7 +76,7 @@ def source_error(source, message):
 
 
 def herdr(command, expected):
-    data = run(['herdr', *command])
+    data = run(['herdr', *command, '--session', session])
     value = data.get('result')
     if not isinstance(value, dict) or not isinstance(value.get(expected), (list if expected.endswith('s') else dict)):
         raise ValueError(f'missing result.{expected}')
@@ -107,29 +107,49 @@ except (OSError, ValueError) as exc:
     source_error('peers', str(exc))
 result['peers'] = registry
 
-def report_stamp(line):
+REPORT_LINE = re.compile(r'^(needs-decision|blocked|resolved|done|note)(?:\s|\[)')
+
+
+def report_tag(line, name):
     head, sep, _ = line.partition(':')
     if not sep:
         return None
-    tags = re.findall(r'\[at=([^\]]*)\]', head)
-    if len(tags) != 1 or not re.fullmatch(r'(?:0|[1-9][0-9]{0,11})', tags[0]):
-        return None
-    return int(tags[0])
+    tags = re.findall(r'\[' + name + r'=([^\]]*)\]', head)
+    return tags[0] if len(tags) == 1 and tags[0] else None
+
+
+def report_stamp(line):
+    stamp = report_tag(line, 'at')
+    return int(stamp) if stamp is not None and re.fullmatch(r'(?:0|[1-9][0-9]{0,11})', stamp) else None
+
+
+def open_request(reports):
+    resolved = set()
+    for verb, line in reversed(reports):
+        key = report_tag(line, 'key')
+        if verb == 'done':
+            return None
+        if verb == 'resolved' and key is not None:
+            resolved.add(key)
+        elif verb in ('blocked', 'needs-decision') and key is not None:
+            return None if key in resolved else key
+    return None
 
 
 for peer in registry:
     log = state / 'peers' / (peer['name'] + '.log')
     try:
-        lines = log.read_text(errors='replace').splitlines()
-        line = next((value for value in reversed(lines)
-                     if re.match(r'^(?:needs-decision|blocked|resolved|done|note)(?:\s|\[)', value)), None)
-        if line is not None:
+        reports = [(match.group(1), value) for value in log.read_text(errors='replace').splitlines()
+                   for match in [REPORT_LINE.match(value)] if match]
+        if reports:
+            line = reports[-1][1]
             stamp = report_stamp(line)
             if stamp is None:
                 peer['report'] = {'freshness': 'unknown', 'line': line}
             else:
-                freshness = 'fresh' if 0 <= now - stamp <= stale_after else 'stale'
+                freshness = 'fresh' if 0 <= now - stamp <= STALE_AFTER else 'stale'
                 peer['report'] = {'at': stamp, 'freshness': freshness, 'line': line}
+            peer['report']['open_key'] = open_request(reports)
     except FileNotFoundError:
         pass
     except OSError as exc:
@@ -160,7 +180,7 @@ managed = {}
 try:
     for meta in state.glob('*.meta'):
         fields = dict(line.split('=', 1) for line in meta.read_text().splitlines() if '=' in line)
-        if fields.get('backend') == 'herdr' and fields.get('herdr_session', 'default') == os.environ.get('HERDR_SESSION', 'default'):
+        if fields.get('backend') == 'herdr' and fields.get('herdr_session', 'default') == session:
             tab_id = fields.get('herdr_tab_id')
             pane_id = fields.get('window', '').split(':', 1)[-1]
             if tab_id and pane_id:
@@ -238,8 +258,9 @@ for issue in issues:
                     'caused-by', 'validates', 'supersedes'):
             continue
         target = by_id.get(edge.get('depends_on_id'))
+        status = target.get('status', 'unknown') if target else 'unknown'
         dependencies.append(dict(id=edge.get('depends_on_id'), type=kind,
-                                 status=target.get('status', 'unknown') if target else 'unknown'))
+                                 status='unknown' if status == 'tombstone' else status))
     unresolved = [edge for edge in dependencies if edge['status'] != 'closed']
     count = issue.get('dependency_count')
     dep_state = ('unknown' if not isinstance(count, int) or count > len(dependencies)
@@ -254,18 +275,19 @@ for issue in issues:
     if not item['assignee']:
         result['unassigned_beads'].append(item)
     else:
-        matches = [peer for peer in registry if item['assignee'] in (peer['name'], peer['label'])]
-        if len(matches) == 1:
-            matches[0]['beads'].append(item)
+        owner = next((peer for peer in registry if item['assignee'] == peer['name']), None)
+        if owner:
+            owner['beads'].append(item)
         else:
-            item['resolution'] = 'ambiguous' if matches else ('unmapped' if result['sources']['peers'] == 'ok' else 'unknown')
+            item['resolution'] = 'unmapped' if result['sources']['peers'] == 'ok' else 'unknown'
             result['other_assigned_beads'].append(item)
 
 for peer in registry:
     peer['beads_state'] = result['sources']['beads']
     if result['sources']['beads'] != 'ok' or result['sources']['herdr'] != 'ok' or peer['resolution'] != 'matched':
         peer['work_evidence'] = 'unknown'
-    elif any(b['dependency_state'] == 'blocked' or b['status'] == 'blocked' for b in peer['beads']):
+    elif peer['report'].get('open_key') or any(
+            b['dependency_state'] == 'blocked' or b['status'] == 'blocked' for b in peer['beads']):
         peer['work_evidence'] = 'blocked'
     elif not peer['beads'] or peer['report']['freshness'] != 'fresh' or any(
             b['dependency_state'] == 'unknown' or b['status'] == 'deferred' for b in peer['beads']):

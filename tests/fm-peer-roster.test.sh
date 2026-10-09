@@ -30,15 +30,17 @@ cat > "$FIXTURE/agents.json" <<'JSON'
 JSON
 cat > "$FIXTURE/issues.json" <<'JSON'
 [
-  {"id":"b1","title":"Build","status":"in_progress","assignee":"Alice","labels":["auditless"],"dependency_count":1,"dependencies":[{"type":"blocks","depends_on_id":"b2"}]},
+  {"id":"b1","title":"Build","status":"in_progress","assignee":"alice","labels":["auditless"],"dependency_count":1,"dependencies":[{"type":"blocks","depends_on_id":"b2"}]},
   {"id":"b2","title":"Need deploy","status":"open","assignee":"other","labels":["platform"],"dependency_count":0},
   {"id":"b3","title":"Unowned","status":"open","labels":["usga"],"dependency_count":0},
   {"id":"b4","title":"Follow-up","status":"open","assignee":"bob","labels":["bridge"],"dependency_count":1,"dependencies":[{"type":"blocks","depends_on_id":"b5"}]},
   {"id":"b5","title":"Finished","status":"closed","labels":["bridge"],"dependency_count":0},
-  {"id":"b6","title":"Stale reference","status":"open","assignee":"Alice","labels":["auditless"],"dependency_count":1,"dependencies":[{"type":"blocks","depends_on_id":"missing"}]},
-  {"id":"b7","title":"Not exact","status":"open","assignee":"ALICE","labels":["agents"],"dependency_count":0},
-  {"id":"b8","title":"Wait","status":"open","assignee":"Alice","labels":["auditless"],"dependency_count":0,"dependencies":[{"type":"waits-for","depends_on_id":"b2"}]},
-  {"id":"b9","title":"Conditional","status":"open","assignee":"Alice","labels":["auditless"],"dependency_count":0,"dependencies":[{"type":"conditional-blocks","depends_on_id":"b2"}]}
+  {"id":"b6","title":"Stale reference","status":"open","assignee":"alice","labels":["auditless"],"dependency_count":1,"dependencies":[{"type":"blocks","depends_on_id":"missing"}]},
+  {"id":"b7","title":"Label alias","status":"open","assignee":"Alice","labels":["agents"],"dependency_count":0},
+  {"id":"b8","title":"Wait","status":"open","assignee":"alice","labels":["auditless"],"dependency_count":0,"dependencies":[{"type":"waits-for","depends_on_id":"b2"}]},
+  {"id":"b9","title":"Conditional","status":"open","assignee":"alice","labels":["auditless"],"dependency_count":0,"dependencies":[{"type":"conditional-blocks","depends_on_id":"b2"}]},
+  {"id":"b10","title":"Deleted blocker","status":"open","assignee":"charlie","labels":["bridge"],"dependency_count":1,"dependencies":[{"type":"blocks","depends_on_id":"b11"}]},
+  {"id":"b11","title":"Deleted","status":"tombstone","labels":["bridge"],"dependency_count":0}
 ]
 JSON
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
@@ -46,9 +48,9 @@ cat > "$FAKEBIN/herdr" <<'SH'
 #!/usr/bin/env bash
 printf 'herdr %s\n' "$*" >> "$FIXTURE/calls"
 case "$*" in
-  'pane current') cat "$FIXTURE/current.json" ;;
-  'tab list --workspace w1') cat "$FIXTURE/tabs.json" ;;
-  'agent list') [ ! -e "$FIXTURE/herdr-fails" ] || exit 3; cat "$FIXTURE/agents.json" ;;
+  'pane current --session default') cat "$FIXTURE/current.json" ;;
+  'tab list --workspace w1 --session default') cat "$FIXTURE/tabs.json" ;;
+  'agent list --session default') [ ! -e "$FIXTURE/herdr-fails" ] || exit 3; cat "$FIXTURE/agents.json" ;;
   *) exit 4 ;;
 esac
 SH
@@ -76,12 +78,30 @@ jq -e '.sources == {"herdr":"ok","beads":"ok","peers":"ok"} and .partial == fals
     [.beads[] | select(.id == "b9")][0].dependency_state == "unknown") and
   ([.peers[] | select(.name == "bob")][0] | .activity == "idle" and .work_evidence == "unknown" and .report.freshness == "stale" and
     [.beads[] | select(.id == "b4")][0].dependency_state == "clear") and
-  ([.peers[] | select(.name == "charlie")][0] | .resolution == "unavailable" and .work_evidence == "unknown" and .report.freshness == "missing") and
+  ([.peers[] | select(.name == "charlie")][0] | .resolution == "unavailable" and .work_evidence == "unknown" and .report.freshness == "missing" and
+    [.beads[] | select(.id == "b10")][0].dependency_state == "unknown" and
+    [.beads[] | select(.id == "b10")][0].dependencies[0].status == "unknown") and
   [.managed_tabs[].workers[]] == ["job"] and [.unregistered_tabs[].label] == ["Stranger"] and
   [.unassigned_beads[].id] == ["b3"] and [.other_assigned_beads[].id] == ["b2","b7"]' "$FIXTURE/out" >/dev/null || fail 'roster failed to separate activity, reports, exact ownership and dependencies'
 pass 'current agent inventory, managed workers, exact assignment and blockers remain distinct'
 "$ROSTER" > "$FIXTURE/human"
 [ "$(wc -l < "$FIXTURE/human")" -lt 30 ] || fail 'default roster not concise'
+
+# An open blocked or needs-decision request key outweighs fresh, dependency-clear beads.
+printf 'needs-decision [at=1] [key=gcloud-auth]: waiting on login\nnote [at=%s]: still here\n' "$now" > "$FM_HOME/state/peers/bob.log"
+"$ROSTER" --json > "$FIXTURE/out"
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_key == "gcloud-auth" and .report.freshness == "fresh"' \
+  "$FIXTURE/out" >/dev/null || fail 'open request key reported as tracked work'
+printf 'resolved [at=%s] [key=other]: unrelated\n' "$now" >> "$FM_HOME/state/peers/bob.log"
+"$ROSTER" --json > "$FIXTURE/out"
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_key == "gcloud-auth"' \
+  "$FIXTURE/out" >/dev/null || fail 'resolved line for a different key closed the request'
+printf 'resolved [at=%s] [key=gcloud-auth]: logged in\n' "$now" >> "$FM_HOME/state/peers/bob.log"
+"$ROSTER" --json > "$FIXTURE/out"
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "tracked" and .report.open_key == null' \
+  "$FIXTURE/out" >/dev/null || fail 'matching resolved line left the request open'
+printf 'done [at=1]: old task\n' > "$FM_HOME/state/peers/bob.log"
+pass 'unresolved peer request keeps work evidence blocked until its matching resolved line'
 
 # A reused tab id with a different agent pane is not a Firstmate worker.
 cp "$FM_HOME/state/job.meta" "$FIXTURE/job.meta"
@@ -146,5 +166,5 @@ jq -e '.partial == true and .sources.herdr == "unknown" and .sources.beads == "u
 pass 'unavailable Herdr/Beads reads produce explicit partial unknown state'
 
 # Stubs reject any command not on the observation allowlist, including writes.
-[ "$(wc -l < "$FIXTURE/calls")" -eq 43 ] || fail 'unexpected observation command count'
+[ "$(wc -l < "$FIXTURE/calls")" -eq 58 ] || fail 'unexpected observation command count'
 pass 'all CLI calls stayed on read-only observation paths'
