@@ -123,12 +123,15 @@ def report_stamp(line):
     return int(stamp) if stamp is not None and re.fullmatch(r'(?:0|[1-9][0-9]{0,11})', stamp) else None
 
 
+def report_key(line):
+    slug = (report_tag(line, 'key') or '').split(' ', 1)[0]
+    return slug if slug and '=' not in slug else None
+
+
 def open_request(reports):
     resolved = set()
     for verb, line in reversed(reports):
-        key = report_tag(line, 'key')
-        if verb == 'done':
-            return None
+        key = report_key(line)
         if verb == 'resolved' and key is not None:
             resolved.add(key)
         elif verb in ('blocked', 'needs-decision') and key is not None:
