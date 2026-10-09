@@ -116,10 +116,15 @@ printf 'blocked [at=1] [key=runner-github-app]: waiting on app install\nneeds-de
 "$ROSTER" --json > "$FIXTURE/out"
 jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["runner-github-app","runner-idle-stop"]' \
   "$FIXTURE/out" >/dev/null || fail 'two open requests were not both listed'
+"$ROSTER" > "$FIXTURE/human"
+grep -q '^bob: matched activity=idle work=blocked open=runner-github-app,runner-idle-stop ' "$FIXTURE/human" || fail 'default view omitted the open request keys'
 printf 'resolved [at=%s] [key=runner-idle-stop]: keep it\n' "$now" >> "$FM_HOME/state/peers/bob.log"
 "$ROSTER" --json > "$FIXTURE/out"
 jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["runner-github-app"] and .report.freshness == "fresh"' \
   "$FIXTURE/out" >/dev/null || fail 'resolving the newer request hid the older open request'
+"$ROSTER" > "$FIXTURE/human"
+grep -q '^bob: matched activity=idle work=blocked open=runner-github-app ' "$FIXTURE/human" || fail 'default view did not drop the resolved key'
+grep -q '^alice: matched activity=working work=blocked report=' "$FIXTURE/human" || fail 'default view printed open keys for a peer without open requests'
 printf 'done [at=1]: old task\n' > "$FM_HOME/state/peers/bob.log"
 pass 'unresolved peer request keeps work evidence blocked until its matching resolved line'
 
@@ -186,5 +191,5 @@ jq -e '.partial == true and .sources.herdr == "unknown" and .sources.beads == "u
 pass 'unavailable Herdr/Beads reads produce explicit partial unknown state'
 
 # Stubs reject any command not on the observation allowlist, including writes.
-[ "$(wc -l < "$FIXTURE/calls")" -eq 83 ] || fail 'unexpected observation command count'
+[ "$(wc -l < "$FIXTURE/calls")" -eq 93 ] || fail 'unexpected observation command count'
 pass 'all CLI calls stayed on read-only observation paths'

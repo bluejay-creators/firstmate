@@ -313,7 +313,8 @@ else:
         ids = ', '.join(f'{b["id"]}({b["status"]},deps:{b["dependency_state"]}' +
                         (':' + ','.join(d['id'] + '=' + d['status'] for d in b['dependencies'] if d['status'] != 'closed')
                          if b['dependencies'] else '') + ')' for b in peer['beads']) or '-'
-        print(f'{peer["name"]}: {peer["resolution"]} activity={peer["activity"]} work={peer["work_evidence"]} '
+        open_keys = f' open={",".join(report["open_keys"])}' if report.get('open_keys') else ''
+        print(f'{peer["name"]}: {peer["resolution"]} activity={peer["activity"]} work={peer["work_evidence"]}{open_keys} '
               f'report={report["freshness"]}@{timestamp} {report_text} '
               f'beads={ids if result["sources"]["beads"] == "ok" else "unknown"}')
     for tab in result['managed_tabs']:
