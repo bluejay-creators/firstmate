@@ -90,28 +90,36 @@ pass 'current agent inventory, managed workers, exact assignment and blockers re
 # An open blocked or needs-decision request key outweighs fresh, dependency-clear beads.
 printf 'needs-decision [at=1] [key=gcloud-auth]: waiting on login\nnote [at=%s]: still here\n' "$now" > "$FM_HOME/state/peers/bob.log"
 "$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_key == "gcloud-auth" and .report.freshness == "fresh"' \
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["gcloud-auth"] and .report.freshness == "fresh"' \
   "$FIXTURE/out" >/dev/null || fail 'open request key reported as tracked work'
 printf 'resolved [at=%s] [key=other]: unrelated\n' "$now" >> "$FM_HOME/state/peers/bob.log"
 "$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_key == "gcloud-auth"' \
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["gcloud-auth"]' \
   "$FIXTURE/out" >/dev/null || fail 'resolved line for a different key closed the request'
 printf 'resolved [at=%s] [key=gcloud-auth]: logged in\n' "$now" >> "$FM_HOME/state/peers/bob.log"
 "$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "tracked" and .report.open_key == null' \
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "tracked" and .report.open_keys == []' \
   "$FIXTURE/out" >/dev/null || fail 'matching resolved line left the request open'
 printf 'blocked [at=%s] [key=fm-zfi]: waiting on proof\ndone [at=%s]: other proof finished\n' "$now" "$now" > "$FM_HOME/state/peers/bob.log"
 "$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_key == "fm-zfi" and .report.freshness == "fresh"' \
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["fm-zfi"] and .report.freshness == "fresh"' \
   "$FIXTURE/out" >/dev/null || fail 'done line without a matching resolved closed the request'
 printf 'blocked [key=fm-l1v at=1]: waiting on review\n' > "$FM_HOME/state/peers/bob.log"
 "$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_key == "fm-l1v"' \
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["fm-l1v"]' \
   "$FIXTURE/out" >/dev/null || fail 'combined key tag did not open the request'
 printf 'resolved [key=fm-l1v at=%s]: reviewed\n' "$now" >> "$FM_HOME/state/peers/bob.log"
 "$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence != "blocked" and .report.open_key == null' \
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence != "blocked" and .report.open_keys == []' \
   "$FIXTURE/out" >/dev/null || fail 'combined-form resolved line did not match its blocked key'
+printf 'blocked [at=1] [key=runner-github-app]: waiting on app install\nneeds-decision [at=%s] [key=runner-idle-stop]: stop idle runner?\n' "$now" > "$FM_HOME/state/peers/bob.log"
+"$ROSTER" --json > "$FIXTURE/out"
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["runner-github-app","runner-idle-stop"]' \
+  "$FIXTURE/out" >/dev/null || fail 'two open requests were not both listed'
+printf 'resolved [at=%s] [key=runner-idle-stop]: keep it\n' "$now" >> "$FM_HOME/state/peers/bob.log"
+"$ROSTER" --json > "$FIXTURE/out"
+jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["runner-github-app"] and .report.freshness == "fresh"' \
+  "$FIXTURE/out" >/dev/null || fail 'resolving the newer request hid the older open request'
 printf 'done [at=1]: old task\n' > "$FM_HOME/state/peers/bob.log"
 pass 'unresolved peer request keeps work evidence blocked until its matching resolved line'
 
@@ -178,5 +186,5 @@ jq -e '.partial == true and .sources.herdr == "unknown" and .sources.beads == "u
 pass 'unavailable Herdr/Beads reads produce explicit partial unknown state'
 
 # Stubs reject any command not on the observation allowlist, including writes.
-[ "$(wc -l < "$FIXTURE/calls")" -eq 73 ] || fail 'unexpected observation command count'
+[ "$(wc -l < "$FIXTURE/calls")" -eq 83 ] || fail 'unexpected observation command count'
 pass 'all CLI calls stayed on read-only observation paths'

@@ -117,7 +117,7 @@ Run `FM_HOME=<active-home> bin/fm-peer-roster.sh` from a directory where `bd whe
 Use `--json` for the complete structured view; peer reports older than four hours count as stale.
 The roster observes agent tabs in the current Herdr workspace, exact peer identities from the home's registry, Beads assigned by exact peer name with their blocking dependencies, and timestamped historical peer reports.
 Herdr reads target the `HERDR_SESSION` session (default `default`), the same session used to recognise Firstmate-managed worker tabs.
-A peer whose latest `blocked` or `needs-decision` report key has no later matching `resolved` line stays blocked regardless of report age.
+Any `blocked` or `needs-decision` report key in a peer's log with no later `resolved` line for the same key stays open; the peer is blocked regardless of report age and every open key is listed.
 It identifies Firstmate-managed worker tabs separately and shows unmapped tabs, unavailable or ambiguous peers, and unassigned Beads without taking ownership or changing any of them.
 An unavailable Herdr or Beads read yields an explicit partial/unknown result and a nonzero exit status rather than an empty or unblocked roster.
 The script header owns CLI flags, output fields, and observation boundaries.

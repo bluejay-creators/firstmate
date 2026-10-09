@@ -16,8 +16,9 @@
 # filtered by. Dependency status uses blocking edges and the complete board
 # snapshot; unknown or tombstone references are not treated as clear. Log
 # timestamps are historical reports, never substituted for current Herdr agent
-# activity or Beads state; a latest blocked/needs-decision report whose key has
-# no later resolved line keeps work_evidence blocked regardless of freshness.
+# activity or Beads state; any blocked/needs-decision report key in the log
+# with no later resolved line for the same key keeps work_evidence blocked
+# regardless of freshness, and every such key is listed in report.open_keys.
 set -euo pipefail
 FM_HOME=${FM_HOME:-$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}
 export FM_HOME
@@ -128,15 +129,17 @@ def report_key(line):
     return slug if slug and '=' not in slug else None
 
 
-def open_request(reports):
-    resolved = set()
-    for verb, line in reversed(reports):
+def open_requests(reports):
+    opened = []
+    for verb, line in reports:
         key = report_key(line)
-        if verb == 'resolved' and key is not None:
-            resolved.add(key)
-        elif verb in ('blocked', 'needs-decision') and key is not None:
-            return None if key in resolved else key
-    return None
+        if key is None:
+            continue
+        if verb == 'resolved':
+            opened = [item for item in opened if item != key]
+        elif verb in ('blocked', 'needs-decision') and key not in opened:
+            opened.append(key)
+    return opened
 
 
 for peer in registry:
@@ -152,7 +155,7 @@ for peer in registry:
             else:
                 freshness = 'fresh' if 0 <= now - stamp <= STALE_AFTER else 'stale'
                 peer['report'] = {'at': stamp, 'freshness': freshness, 'line': line}
-            peer['report']['open_key'] = open_request(reports)
+            peer['report']['open_keys'] = open_requests(reports)
     except FileNotFoundError:
         pass
     except OSError as exc:
@@ -289,7 +292,7 @@ for peer in registry:
     peer['beads_state'] = result['sources']['beads']
     if result['sources']['beads'] != 'ok' or result['sources']['herdr'] != 'ok' or peer['resolution'] != 'matched':
         peer['work_evidence'] = 'unknown'
-    elif peer['report'].get('open_key') or any(
+    elif peer['report'].get('open_keys') or any(
             b['dependency_state'] == 'blocked' or b['status'] == 'blocked' for b in peer['beads']):
         peer['work_evidence'] = 'blocked'
     elif not peer['beads'] or peer['report']['freshness'] != 'fresh' or any(
