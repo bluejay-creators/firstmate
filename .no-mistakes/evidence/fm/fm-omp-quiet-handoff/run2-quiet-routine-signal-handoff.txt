@@ -1,0 +1,17 @@
+pre-quiet extension watcher pid=72253
+pane hash before routine signal: 886d8d9172fa
+wrote state/demo.status = working (routine signal) at 16:59:16Z
+waited 000ms
+pane hash after routine signal:  886d8d9172fa (UNCHANGED - nothing reached the omp conversation)
+---- state/.watch-cycle-exits.log:
+arm_pid=72234	watcher_pid=72253	origin=started	started_at=1791651489	ended_at=1791651557	exit_code=0	signal=none	reason=actionable-signal	beacon_age=1	lock_before=pid:72253|identity:Sat Oct 10 09:58:09 2026     bash /private/var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T/fm-lab.G5Q0Nc/project/bin/fm-watch.sh	lock_after=pid:none|identity:none	successor=none
+---- daemon log:
+[2026-10-10T09:58:54-0700] daemon starting (pid 83419); target=%0; target_source=FM_SUPERVISOR_TARGET; backend=tmux; backend_source=FM_SUPERVISOR_BACKEND; afk=on; inject_skip='heartbeat'; stale_escalate=240s; batch=90s
+[2026-10-10T09:58:55-0700] watcher non-wake stdout, idling: watcher: already running pid 72253
+[2026-10-10T09:59:11-0700] watcher non-wake stdout, idling: watcher: already running pid 72253
+---- watch.lock pid now:  (alive: no)
+---- pane tail:
+ watcher: started omp extension arm child 1; future ordinary re-arms are automatic; call fm_watch_arm_omp again only after a later notification says the cycle is missing, failed,
+ or unhealthy
+ 󰵗  󰪟 GPT-6-Astra  ⇄ collab:1   fm-lab.G5Q0Nc/project   detached  󰙺 ─────────9%──────────────────────────────────────────────────────────────󰕝─────────󰁨──────────────272K─
+╰─                                                                                                                                                     󰘶 󰌒 to change thinking effort

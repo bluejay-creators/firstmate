@@ -1,0 +1,12 @@
+[2026-10-09T16:03:42-0700] daemon starting (pid 51051); target=%0; target_source=FM_SUPERVISOR_TARGET; backend=tmux; backend_source=FM_SUPERVISOR_BACKEND; afk=on; inject_skip='heartbeat'; stale_escalate=240s; batch=0s
+[2026-10-09T16:03:43-0700] watcher non-wake stdout, idling: watcher: already running pid 2849
+[2026-10-09T16:03:59-0700] watcher non-wake stdout, idling: watcher: already running pid 2849
+[2026-10-09T16:04:15-0700] watcher non-wake stdout, idling: watcher: already running pid 2849
+[2026-10-09T16:04:32-0700] watcher non-wake stdout, idling: watcher: already running pid 2849
+[2026-10-09T16:04:48-0700] wake: check: rearm-resurface
+[2026-10-09T16:04:50-0700] self-handle: signal: /private/var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T/fm-lab.G1i2U1/project/state/demo.status -> routine signal: demo.status: working [at=1791587070]: in flight
+[2026-10-09T16:04:55-0700] wake: stale: primary:demo
+[2026-10-09T16:04:56-0700] self-handle: stale: primary:demo -> transient stale (primary:demo): working [at=1791587070]: in flight
+[2026-10-09T16:05:20-0700] wake: signal: /var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T/fm-lab.G1i2U1/project/state/demo.status
+[2026-10-09T16:05:21-0700] escalate: signal: /var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T/fm-lab.G1i2U1/project/state/demo.status -> demo.status: failed [at=1791587118]: pipeline broke on demo
+[2026-10-09T16:06:39-0700] daemon shutting down

@@ -1,0 +1,22 @@
+$ bin/fm-afk-launch.sh quiet-check
+Quiet mode is not already the ordinary posture on this home, because the dialog mirror is missing or could not be read, so every attended wake reaches this conversation; quiet mode enters through the quiet daemon instead.
+exit=1
+$ FM_AFK_MODE=quiet bin/fm-afk-launch.sh enter --words 'lab quiet validation'
+Quiet mode recorded at 2026-10-10T16:58:52Z: you are present, so nothing waits for your return: every action you ask for, a local landing or a merge included, proceeds now under ordinary attended authority, and quiet mode changes only which updates reach this conversation. Only an explicit /quiet off ends it.
+Quiet mode (recorded):
+  entered: 2026-10-10T16:58:52Z
+  holds: none - you are present, so nothing waits for your return: every action you ask for, a local landing or a merge included, proceeds now under ordinary attended authority, and quiet mode changes only which updates reach this conversation.
+  your words (verbatim):
+    lab quiet validation
+exit=0
+$ FM_AFK_MODE=quiet bin/fm-afk-launch.sh start
+fm-afk-launch: daemon launched in detached tmux session 'fm-afk-daemon-1108769092-82969-19745-1791651533', supervising %0
+exit=0
+---- state/.afk:
+quiet
+1791651533
+---- lab tmux sessions:
+fm-afk-daemon-1108769092-82969-19745-1791651533 1w
+primary 1w
+---- daemon log:
+[2026-10-10T09:58:54-0700] daemon starting (pid 83419); target=%0; target_source=FM_SUPERVISOR_TARGET; backend=tmux; backend_source=FM_SUPERVISOR_BACKEND; afk=on; inject_skip='heartbeat'; stale_escalate=240s; batch=90s

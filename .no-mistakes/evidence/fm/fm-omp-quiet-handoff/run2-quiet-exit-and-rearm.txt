@@ -1,0 +1,22 @@
+daemon one-shot watcher before stop: pid=41803
+$ bin/fm-afk-launch.sh stop
+fm-afk-launch: terminal close command failed, but exact absence was confirmed
+fm-afk-launch: away-posture record archived at /var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T//fm-lab.G5Q0Nc/project/state/afk-contracts/1791651532.afk-contract
+fm-afk-launch: away mode stopped; daemon terminal torn down, .afk cleared, and the posture record archived
+exit=0
+state/.afk present after stop: no
+lab tmux sessions: primary 
+re-armed within 700ms of the flag clearing, with no fm_watch_arm_omp call (a session event from the in-flight turn triggered it)
+new watcher pid=68877
+---- ancestry of the new watcher (must lead to omp pid 48152):
+68877 68859 bash /private/var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T/fm-lab.G5Q0Nc/project/bin/fm-watch.sh
+68859 48152 bash /private/var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T/fm-lab.G5Q0Nc/project/bin/fm-watch-arm.sh --re
+48152 48151 omp --no-session --cwd LAB/project --auto-approve --model openai-codex/gpt-6-astra --thinking low
+48151     1 tmux -L fm-lab new-session -d -s primary -x 180 -y 45 -c LAB/project -e FM_HOME=LAB/project -e OMP_SKIP_SETU
+---- state/.watch-cycle-exits.log:
+arm_pid=72234	watcher_pid=72253	origin=started	started_at=1791651489	ended_at=1791651557	exit_code=0	signal=none	reason=actionable-signal	beacon_age=1	lock_before=pid:72253|identity:Sat Oct 10 09:58:09 2026     bash /private/var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T/fm-lab.G5Q0Nc/project/bin/fm-watch.sh	lock_after=pid:none|identity:none	successor=none
+---- daemon log tail:
+[2026-10-10T10:08:24-0700] wake force-self (FM_INJECT_SKIP): heartbeat
+[2026-10-10T10:11:31-0700] wake: signal: /var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T//fm-lab.G5Q0Nc/project/state/demo.status
+[2026-10-10T10:11:32-0700] escalate: signal: /var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T//fm-lab.G5Q0Nc/project/state/demo.status -> demo.status: failed [at=1791652251]: pipeline broke on demo (appended)
+[2026-10-10T10:13:39-0700] daemon shutting down

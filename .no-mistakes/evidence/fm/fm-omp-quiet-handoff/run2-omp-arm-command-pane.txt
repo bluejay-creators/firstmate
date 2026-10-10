@@ -1,0 +1,8 @@
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 18.8.8 is available. Run: omp update
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ watcher: started omp extension arm child 1; future ordinary re-arms are automatic; call fm_watch_arm_omp again only after a later notification says the cycle is missing, failed,
+ or unhealthy
+ 󰵗  󰪟 GPT-6-Astra  ⇄ collab:1   fm-lab.G5Q0Nc/project   detached  󰙺 ─────────9%──────────────────────────────────────────────────────────────󰕝─────────󰁨──────────────272K─
+╰─                                                                                                                                                     󰘶 󰌒 to change thinking effort

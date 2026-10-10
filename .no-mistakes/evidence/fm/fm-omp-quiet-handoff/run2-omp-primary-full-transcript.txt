@@ -1,0 +1,32 @@
+                                                                          ████████████
+                                                                             ██  ██       ▄▀▀▄ █▀▄▀▄ █▀▀▄
+                                                                             ██  ██       ▀▄▄▀ █ █ █ █▄▄▀
+                                                                             ▒▒  ██                  █
+                                                                                 ██       v18.8.7
+                                                         Tip: With default keybindings, 󰘴 D deletes the character under the
+                                                       cursor instead of quitting your draft — see /hotkeys for your exit key
+ Failed: free-search [config: ~/.omp/agent/mcp.json]: Unable to connect. Is the computer able to access the url?; google_workspace [config: ~/.omp/agent/mcp.json]: HTTP 401:
+ [WWW-Authenticate: Bearer [redacted] openid", resource_metadata="htt…; google_workspace_personal [config: ~/.omp/agent/mcp.json]: Unable to connect. Is the computer able to
+ access the url?. Still connecting: local-llm, manifestgraph, slack…
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 18.8.8 is available. Run: omp update
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ watcher: started omp extension arm child 1; future ordinary re-arms are automatic; call fm_watch_arm_omp again only after a later notification says the cycle is missing, failed,
+ or unhealthy
+ : Firstmate operational input waiting: read
+ '/private/var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T/fm-lab.G5Q0Nc/project/state/operational-inbox/1791652387-9bb04a95a883314e.msg' and handle its contents as Firstmate
+ operational input.
+ Captain, demo reported a failure, but the notification gives no error details. Its local record lacks the project, working location, and validation run needed for safe recovery.
+ I left it intact; no restart or cleanup was attempted. Quiet mode remains active.
+ Separately, browser automation requires chrome-devtools-axi:
+ ```sh
+npm install -g chrome-devtools-axi && chrome-devtools-axi setup hooks
+ ```
+ May I install it? Visual reports are also unavailable; plain-text reporting can continue.
+ ⁣FIRSTMATE_OP: v1 watcher: FIRSTMATE WATCHER WAKE: check: rearm-resurface
+ Run bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.
+ Captain, shipshape.
+                                                                                                                                         󰚇 INPUT: Handle Firstmate operational input
+ 󰵗  󰪟 GPT-6-Astra  ⇄ collab:1   fm-lab.G5Q0Nc/project   detached  󰙺 1.12 ───────────────17%───────────────────────────────────────────────────󰕝─────────󰁨─────────────272K─
+╰─
