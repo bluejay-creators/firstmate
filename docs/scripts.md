@@ -131,6 +131,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-busy-event.sh`       | The only writer of a task's semantic busy-state record and native-harness progress marker; arms an incarnation and applies lifecycle events |
 | `fm-tmux-lib.sh`         | Shared tmux pane primitives for composer capture, verified submit, and the submit-time busy check |
 | `fm-peek.sh`             | Print a bounded tail of a crewmate endpoint                                          |
+| `fm-peer-roster.sh`      | Read-only roster of hand-launched Herdr peers from Herdr activity, Beads state, and peer reports ([herdr-backend.md](herdr-backend.md#hand-launched-peer-roster)) |
 | `fm-check-register.sh`   | Bind an intentional custom watcher check to its current bytes                       |
 | `fm-check-unregister.sh` | Retire a custom watcher check and its trust binding by validated task id            |
 | `fm-check-lib.sh`        | Validate custom-check registrations and prepare private execution snapshots          |
