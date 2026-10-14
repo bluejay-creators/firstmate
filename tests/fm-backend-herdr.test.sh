@@ -188,6 +188,8 @@ SH
 make_herdr_statefake() {  # <dir> -> echoes fakebin dir; seeds an empty state file
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
+  # The default seed carries no agent_tasks map; populate it the first time
+  # an agent-task association is installed so pre-fix callers stay valid.
   printf '{"next":1,"workspaces":[],"tabs":[],"agent_status":{}}\n' > "$dir/state.json"
   cat > "$fb/herdr" <<'SH'
 #!/usr/bin/env bash
@@ -257,11 +259,27 @@ case "$cmd $sub" in
   "agent get")
     pane=${3:-}
     status=$(jq_state -r --arg p "$pane" '.agent_status[$p] // empty')
-    if [ -n "$status" ]; then
-      printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "$status"
+    task=$(jq_state -r --arg p "$pane" '.agent_tasks[$p] // empty' 2>/dev/null || printf '')
+    if [ -n "$status" ] || [ -n "$task" ]; then
+      fields=""
+      [ -n "$status" ] && fields="$fields, \"agent_status\": \"$status\""
+      [ -n "$task" ] && fields="$fields, \"task_id\": \"$task\""
+      printf '{"result":{"agent":{"agent":"pi"%s}}}\n' "$fields"
     else
       printf '{"error":{"code":"agent_not_found","message":"agent target %s not found"}}\n' "$pane"
     fi
+    ;;
+  "tab move")
+    tab=${3:-}; target_ws=""
+    move_args=("$@")
+    for ((i=0; i<${#move_args[@]}; i++)); do
+      case "${move_args[$i]}" in
+        --to-workspace) target_ws=${move_args[$((i+1))]:-} ;;
+      esac
+    done
+    [ -n "$tab" ] && [ -n "$target_ws" ] || exit 2
+    jq_state --arg t "$tab" --arg w "$target_ws" \
+      '.tabs |= map(if .tab_id == $t then .workspace_id = $w else . end)' | save
     ;;
   *) : ;;
 esac
@@ -279,6 +297,16 @@ SH
 fake_herdr_set_agent_status() {  # <state-file> <pane_id> <status>
   local state=$1 pane=$2 status=$3 tmp="$1.tmp.$$"
   jq --arg p "$pane" --arg s "$status" '.agent_status[$p] = $s' "$state" > "$tmp" && mv "$tmp" "$state"
+}
+
+# fake_herdr_set_agent_task: preset <pane_id>'s herdr-recorded task identity
+# in the stateful fake's state file, mirroring a task registration the
+# adapter reads as the pane's authoritative identity (NOT set through any
+# CLI, exactly like fake_herdr_set_agent_status above). Used to prove the
+# relocation lookup only accepts a pane whose OWN record names the task.
+fake_herdr_set_agent_task() {  # <state-file> <pane_id> <task-id>
+  local state=$1 pane=$2 task=$3 tmp="$1.tmp.$$"
+  jq --arg p "$pane" --arg t "$task" '.agent_tasks[$p] = $t' "$state" > "$tmp" && mv "$tmp" "$state"
 }
 
 # herdr_case <name> -> sets up FM_HERDR_LOG/FM_HERDR_RESPONSES/fb for one test,
@@ -1167,6 +1195,44 @@ test_workspace_ensure_other_home_ignores_the_launcher_identity() {
   [ "$out" = w1 ] || fail "an other-home container should resolve by this home's own label, got '$out'"
   assert_not_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''get' "an other-home container must not inherit the launcher's workspace"
   pass "fm_backend_herdr_workspace_ensure: a --secondmate container resolves that home's own workspace, not the launcher's"
+}
+
+test_workspace_ensure_worker_workspace_config_overrides_launcher_inheritance() {
+  # config/herdr-worker-workspace names a side workspace for this home's
+  # launches: the launcher's herdr pane must NOT be consulted, no
+  # launcher-workspace inheritance may fire, and the spawn resolves by the
+  # configured label exactly as it would by the home label.
+  local dir log resp fb out config
+  dir="$TMP_ROOT/ensure-worker-cfg"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  config="$dir/config"; mkdir -p "$config"
+  printf 'Workers\n' > "$config/herdr-worker-workspace"
+  # No launcher identity should be consulted at all: the resolve goes
+  # straight to the label path. Only the label match is scripted.
+  printf '{"result":{"workspaces":[{"workspace_id":"w7","label":"Workers"}]}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CONFIG_OVERRIDE="$config" \
+    HERDR_ENV=1 HERDR_PANE_ID=w9:p9 HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /tmp' "$ROOT" )
+  [ "$out" = w7 ] || fail "a configured worker workspace label must resolve to that label's workspace, got '$out'"
+  assert_not_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''get' "a configured worker workspace must never consult the launcher's pane"
+  pass "fm_backend_herdr_workspace_ensure: config/herdr-worker-workspace redirects launcher-home spawns to the named workspace"
+}
+
+test_workspace_ensure_worker_workspace_config_does_not_apply_to_other_home() {
+  # --secondmate launches stand up a DIFFERENT home's workspace by design;
+  # config/herdr-worker-workspace is a home-local preference that must NOT
+  # redirect an other-home spawn's destination either.
+  local dir log resp fb out config
+  dir="$TMP_ROOT/ensure-worker-cfg-other-home"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  config="$dir/config"; mkdir -p "$config"
+  printf 'Workers\n' > "$config/herdr-worker-workspace"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_CONFIG_OVERRIDE="$config" \
+    HERDR_ENV=1 HERDR_PANE_ID=w7:p3 HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /tmp other-home' "$ROOT" )
+  [ "$out" = w1 ] || fail "an other-home spawn resolves the launched home's own label, not the worker-workspace config, got '$out'"
+  pass "fm_backend_herdr_workspace_ensure: config/herdr-worker-workspace is launcher-home only, never --secondmate"
 }
 
 test_container_ensure_refuses_an_ambiguous_home_label() {
@@ -5393,6 +5459,140 @@ EOF
   pass "fm_backend_herdr_create_task: prunes exactly the seeded default tab container_ensure identified, once the first real task tab exists"
 }
 
+# --- pane relocation: resolve the herdr endpoint by the task's stable identity,
+# publish the fresh binding into the task record, never attach to a pane that
+# does not name this task --------------------------------------------------
+
+test_recorded_endpoint_relocate_recovers_a_moved_pane() {
+  # The captain drags a tab whose pane this task's meta pointed at: the stored
+  # session:pane is now unreachable and the tab now lives in a different
+  # workspace under a fresh pane id. Relocate under the exact task label +
+  # an agent get whose own record names this task; the result is bound
+  # exactly to session + new workspace + tab + pane and the meta's routing
+  # fields are atomically republished.
+  local dir log state fb state_dir meta rc verdict relocated_meta_window relocated_meta_ws relocated_meta_tab relocated_meta_pane
+  dir="$TMP_ROOT/relocate-moved"; mkdir -p "$dir/home/state" "$dir/home/config"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  state_dir="$dir/home/state"; meta="$state_dir/platform.meta"
+  fb=$(make_herdr_statefake "$dir")
+  # Stage state directly: the captain's drag has already happened, so the
+  # tab sits in the second workspace under the new pane id, and herdr's own
+  # agent record names platform at the new pane. The stored meta still points
+  # at the OLD (now-unreachable) pane.
+  jq -n --arg p2 "w2:p4" \
+    '{
+       next: 5,
+       workspaces: [
+         {workspace_id: "w1", label: "firstmate"},
+         {workspace_id: "w2", label: "Worker"}
+       ],
+       tabs: [
+         {tab_id: "w1:t1", label: "1", workspace_id: "w1", pane_id: "w1:p1"},
+         {tab_id: "w2:t4", label: "fm-platform", workspace_id: "w2", pane_id: $p2}
+       ],
+       agent_status: {},
+       agent_tasks: {(($p2)): "platform"}
+     }' > "$state"
+  printf 'backend=herdr
+herdr_session=fmtest
+herdr_workspace_id=w1
+herdr_tab_id=w1:t2
+herdr_pane_id=w1:p2
+window=fmtest:w1:p2
+' > "$meta"
+  verdict=$(cd "$ROOT" && PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" HERDR_SESSION=fmtest FM_HOME="$dir/home" HOME=/nonexistent \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_source herdr >/dev/null; . "$0/bin/fm-wake-lib.sh"; . "$0/bin/fm-control-lib.sh"; fm_recorded_herdr_endpoint_relocate "$1" platform "$2"' "$ROOT" "$meta" "$state_dir") \
+    && rc=0 || rc=$?
+  [ "$rc" = 0 ] || fail "relocate should succeed on a moved pane, got rc=$rc verdict='$verdict'"
+  [ "$verdict" = "fmtest:w2:p4" ] || fail "relocate should return the live pane as <session>:<pane>, got '$verdict'"
+  relocated_meta_window=$(grep '^window=' "$meta" | tail -1 | cut -d= -f2-)
+  relocated_meta_ws=$(grep '^herdr_workspace_id=' "$meta" | tail -1 | cut -d= -f2-)
+  relocated_meta_tab=$(grep '^herdr_tab_id=' "$meta" | tail -1 | cut -d= -f2-)
+  relocated_meta_pane=$(grep '^herdr_pane_id=' "$meta" | tail -1 | cut -d= -f2-)
+  [ "$relocated_meta_window" = "fmtest:w2:p4" ] || fail "the meta's window= should be republished to the new pane, got '$relocated_meta_window'"
+  [ "$relocated_meta_ws" = "w2" ] || fail "the meta's herdr_workspace_id= should be republished, got '$relocated_meta_ws'"
+  [ "$relocated_meta_tab" = "w2:t4" ] || fail "the meta's herdr_tab_id= should be republished, got '$relocated_meta_tab'"
+  [ "$relocated_meta_pane" = "w2:p4" ] || fail "the meta's herdr_pane_id= should be republished, got '$relocated_meta_pane'"
+  pass "fm_recorded_herdr_endpoint_relocate: recovers a pane the captain moved; the task record republishes the live binding"
+}
+
+test_recorded_endpoint_relocate_refuses_a_mismatched_pane() {
+  # A pane carries the task's exact tab label but registers ANOTHER task's
+  # identity: a hand-retitled pane, a label reuse, or herdr's record drift.
+  # The relocation must refuse rather than attach: returning nothing is the
+  # contract (rc=1), and the meta's stored binding must NOT be rewritten.
+  local dir log state fb state_dir meta verdict rc old_meta
+  dir="$TMP_ROOT/relocate-mismatch"; mkdir -p "$dir/home/state" "$dir/home/config"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  state_dir="$dir/home/state"; meta="$state_dir/platform.meta"
+  fb=$(make_herdr_statefake "$dir")
+  # Stage state directly: one fm-platform tab exists, but its pane's OWN
+  # herdr registration names a DIFFERENT task. The stored meta's recorded
+  # pane (wStale:pStale) no longer answers.
+  jq -n --arg p1 "w1:p2" \
+    '{
+       next: 3,
+       workspaces: [{workspace_id: "w1", label: "firstmate"}],
+       tabs: [{tab_id: "w1:t2", label: "fm-platform", workspace_id: "w1", pane_id: $p1}],
+       agent_status: {},
+       agent_tasks: {(($p1)): "other-task"}
+     }' > "$state"
+  printf 'backend=herdr
+herdr_session=fmtest
+herdr_workspace_id=w1
+herdr_tab_id=w1:t2
+herdr_pane_id=wStale:pStale
+window=fmtest:wStale:pStale
+' > "$meta"
+  old_meta=$(cat "$meta")
+  verdict=$(cd "$ROOT" && PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" HERDR_SESSION=fmtest FM_HOME="$dir/home" HOME=/nonexistent \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_source herdr >/dev/null; . "$0/bin/fm-wake-lib.sh"; . "$0/bin/fm-control-lib.sh"; fm_recorded_herdr_endpoint_relocate "$1" platform "$2"' "$ROOT" "$meta" "$state_dir") \
+    && rc=0 || rc=$?
+  [ "$rc" != 0 ] || fail "relocation must refuse a pane whose own record names a different task, got rc=0 verdict='$verdict'"
+  [ "$verdict" = "relocated-not-found" ] || fail "the refusal verdict should be relocated-not-found, got '$verdict'"
+  [ "$(cat "$meta")" = "$old_meta" ] || fail "a refused relocation must never rewrite the meta, meta changed: $(cat "$meta")"
+  pass "fm_recorded_herdr_endpoint_relocate: refuses a pane whose own record names another task, leaving the meta untouched"
+}
+
+test_recorded_endpoint_relocate_refuses_an_ambiguous_match() {
+  # Two panes can wear the same fm-<id> tab label and BOTH name the task in
+  # their own herdr registrations (a restored layout, a hand-cloned tab). A
+  # bi-modal match is never a relocation; refusing avoids steering one pane
+  # while the other is the one the captain is watching.
+  local dir log state fb state_dir meta verdict rc
+  dir="$TMP_ROOT/relocate-ambiguous"; mkdir -p "$dir/home/state" "$dir/home/config"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  state_dir="$dir/home/state"; meta="$state_dir/platform.meta"
+  fb=$(make_herdr_statefake "$dir")
+  # Stage the state directly: two workspaces each carry an fm-platform tab
+  # whose pane registers platform as its task in herdr's own record.
+  jq -n --arg p1 "w1:p2" --arg p2 "w2:p4" \
+    '{
+       next: 5,
+       workspaces: [
+         {workspace_id: "w1", label: "firstmate"},
+         {workspace_id: "w2", label: "Other"}
+       ],
+       tabs: [
+         {tab_id: "w1:t2", label: "fm-platform", workspace_id: "w1", pane_id: $p1},
+         {tab_id: "w2:t4", label: "fm-platform", workspace_id: "w2", pane_id: $p2}
+       ],
+       agent_status: {},
+       agent_tasks: {(($p1)): "platform", (($p2)): "platform"}
+     }' > "$state"
+  printf 'backend=herdr
+herdr_session=fmtest
+herdr_workspace_id=w1
+herdr_tab_id=w1:t2
+herdr_pane_id=wStale:pStale
+window=fmtest:wStale:pStale
+' > "$meta"
+  verdict=$(cd "$ROOT" && PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" HERDR_SESSION=fmtest FM_HOME="$dir/home" HOME=/nonexistent \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_source herdr >/dev/null; . "$0/bin/fm-wake-lib.sh"; . "$0/bin/fm-control-lib.sh"; fm_recorded_herdr_endpoint_relocate "$1" platform "$2"' "$ROOT" "$meta" "$state_dir") \
+    && rc=0 || rc=$?
+  [ "$rc" != 0 ] || fail "relocation must refuse when >1 pane matches the task identity, got rc=0 verdict='$verdict'"
+  [ "$verdict" = "relocation-ambiguous" ] || fail "the ambiguity verdict should be relocation-ambiguous, got '$verdict'"
+  pass "fm_recorded_herdr_endpoint_relocate: refuses bi-modal relocation and leaves the stored binding untouched"
+}
+
+
 test_repeated_cycles_reuse_one_workspace_no_orphans() {
   local dir log state fb i raw container seeded wsid ids pane first_ws="" wscount total tabcount created
   dir="$TMP_ROOT/cycles"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
@@ -5922,6 +6122,8 @@ test_launcher_identity_refuses_a_workspace_missing_from_the_session
 test_workspace_ensure_prefers_the_launcher_over_the_first_label_match
 test_workspace_ensure_refuses_an_ambiguous_label_with_no_launcher
 test_workspace_ensure_other_home_ignores_the_launcher_identity
+test_workspace_ensure_worker_workspace_config_overrides_launcher_inheritance
+test_workspace_ensure_worker_workspace_config_does_not_apply_to_other_home
 test_container_ensure_refuses_an_ambiguous_home_label
 test_container_ensure_starts_server_and_workspace
 test_server_ensure_scrubs_home_and_harness_identity
@@ -5929,6 +6131,9 @@ test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
 test_container_ensure_uses_secondmate_home_label
 test_workspace_ensure_prunes_default_tab
+test_recorded_endpoint_relocate_recovers_a_moved_pane
+test_recorded_endpoint_relocate_refuses_a_mismatched_pane
+test_recorded_endpoint_relocate_refuses_an_ambiguous_match
 test_repeated_cycles_reuse_one_workspace_no_orphans
 test_adopted_workspace_never_prunes_default_tab
 test_label_collision_startup_workspace_leaves_live_tab_alone

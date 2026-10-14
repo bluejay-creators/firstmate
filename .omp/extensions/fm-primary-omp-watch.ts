@@ -105,13 +105,45 @@ type CloseClassification = {
   message: string;
 };
 
-type PendingActionableClose = {
+export type PendingActionableClose = {
   version: 1;
   token: string;
   message: string;
   predecessorArmPid: string;
+  // Persisted origin: the omp session process and epoch at creation, so a
+  // replacement can expire handoffs from a predecessor that is long gone
+  // instead of replaying them forever (the Oct 10 case replayed 261 stale
+  // wakes across every ordinary restart). Optional identically on write and
+  // in-memory: absence reads as oldest on replay, never as expired.
+  originPid?: string;
+  originAt?: number;
   delivered?: true;
 };
+
+// One sink per module for handoff prune notes ("dropped N stale...", "dropped
+// N over the cap..."): writeReplacementHandoff and the expiry wrapper push
+// here from top level (where no generation exists yet), and the registered
+// default body binds the sink to the CURRENT generation's queue as soon as
+// it creates or activates one, so the note rides that generation's first
+// delivered wake rather than becoming a wake of its own. A production load
+// with no extension registered yet keeps notes here module-locally; a test
+// imports only the primitives, assigns its own sink, and observes directly.
+declare global {
+  // eslint-disable-next-line no-var
+  var __fmOmpWatchStaleNotes: { push(note: string): void; take(): string[] } | undefined;
+}
+function globalStaleNotes(): { push(note: string): void; take(): string[] } {
+  return (globalThis.__fmOmpWatchStaleNotes ??= {
+    push(note: string): void {
+      staleNotesBuffer.push(note);
+    },
+    take(): string[] {
+      return staleNotesBuffer.splice(0);
+    },
+  });
+}
+const staleNotesBuffer: string[] = [];
+export const __tests = { globalStaleNotes };
 
 type ReplacementActionableHandoff = {
   version: 2;
@@ -144,6 +176,12 @@ type SessionGeneration = {
   // still delivering the wake it was started for; its bounded retry runs once
   // that delivery settles instead of being skipped by the single-flight guard.
   deferredClose: { message: string; predecessorArmPid: string } | null;
+  // Coalesce rule (3): per (pane, reason) keys last delivered within
+  // staleWakeupTtlMs. Same pane emitting the identical stale reason within
+  // the window does not re-ping main; a pane whose own state changed is a
+  // fresh key and IS delivered. Never consulted across a fresh session_start
+  // replay: a wake a replacement handed back already earned its delivery.
+  deliveredStaleAt: Map<string, number>;
 };
 
 const extensionFile = fileURLToPath(import.meta.url);
@@ -173,6 +211,14 @@ const hostReadyTimeoutMs = Math.max(armReadyTimeoutMs, 30000);
 const armRetireTimeoutMs = positiveInteger("FM_WATCH_ARM_RETIRE_TIMEOUT_MS", 1000);
 const repairOnlyHint = "call fm_watch_arm_omp again only after a later notification says the cycle is missing, failed, or unhealthy";
 const shuttingDownMessage = "watcher: not armed - omp session is shutting down";
+// A persisted replacement handoff that outlives its predecessor omp session
+// replays stale notifications on every ordinary restart (the Oct 10 case
+// replayed 261 of them, and only a forced kill cleared the file, because a
+// plain restart re-persists whatever replays). Cmp for age only against the
+// origin stamp; a missing stamp reads oldest, so a handoff predating this
+// bound expires as soon as its predecessor process is gone.
+const handoffMaxAgeMs = positiveInteger("FM_OMP_HANDOFF_MAX_AGE_MS", 60 * 60 * 1000);
+const handoffMaxPending = positiveInteger("FM_OMP_HANDOFF_MAX_PENDING", 50);
 
 let nextGenerationId = 0;
 let nextHandoffId = 0;
@@ -339,49 +385,101 @@ function createPendingActionable(message: string, predecessorArmPid: string): Pe
     token: `${process.pid}-${Date.now()}-${++replacementCoordinator.nextTokenId}`,
     message,
     predecessorArmPid,
+    originPid: String(process.pid),
+    originAt: Date.now(),
   };
 }
 
+// The creation origin of a handoff entry: the explicit stamps when present,
+// otherwise derived from the token's own "<pid>-<epoch-ms>-<seq>" head -
+// which means handoffs persisted by builds predating the stamps (the Oct 10
+// file's 261 entries included) still carry their predecessor's pid and age
+// readable at replay time.
+export function handoffEntryOrigin(item: PendingActionableClose): { pid: string; atMs: number } {
+  if (item.originPid !== undefined && item.originPid !== "" && item.originAt !== undefined) {
+    return { pid: item.originPid, atMs: item.originAt };
+  }
+  const match = item.token.match(/^([0-9]+)-([0-9]+)-[0-9]+$/);
+  return match ? { pid: match[1], atMs: Number(match[2]) } : { pid: "", atMs: 0 };
+}
+
+// Whether a persisted handoff entry is expired at <nowMs>: the predecessor
+// omp session that created it is gone AND the entry has passed the age
+// bound. A pid that is alive always keeps the entry - pid recycling keeps
+// an old handoff past expiry, never the reverse, which is exactly "never
+// drop a fresh pending wake from a live predecessor".
+export function handoffEntryExpired(item: PendingActionableClose, nowMs: number): boolean {
+  const origin = handoffEntryOrigin(item);
+  if (origin.pid === "" || pidAlive(origin.pid)) return false;
+  return nowMs - origin.atMs >= handoffMaxAgeMs;
+}
+
+// Whether <item> is a prune casualty when the persisted list exceeds the
+// bound: it falls outside the newest <max> entries by (age, token).
+export function handoffEntryDroppedByCap(item: PendingActionableClose, all: PendingActionableClose[], max: number): boolean {
+  const ordered = [...all].sort((a, b) => {
+    const aAt = handoffEntryOrigin(a).atMs;
+    const bAt = handoffEntryOrigin(b).atMs;
+    return aAt - bAt || a.token.localeCompare(b.token);
+  });
+  return ordered.indexOf(item) < ordered.length - max;
+}
+
 function validatePendingActionable(value: unknown): PendingActionableClose {
+  const item = value as Partial<PendingActionableClose> & { version?: unknown };
   if (
     typeof value !== "object" || value === null ||
-    (value as { version?: unknown }).version !== 1 ||
-    typeof (value as { token?: unknown }).token !== "string" ||
-    !/^[0-9]+-[0-9]+-[0-9]+$/.test((value as { token: string }).token) ||
-    typeof (value as { message?: unknown }).message !== "string" ||
-    (!actionableLine((value as { message: string }).message) &&
-      !/^supervision-host:/m.test((value as { message: string }).message)) ||
-    typeof (value as { predecessorArmPid?: unknown }).predecessorArmPid !== "string" ||
-    !/^[0-9]*$/.test((value as { predecessorArmPid: string }).predecessorArmPid) ||
-    ((value as { delivered?: unknown }).delivered !== undefined &&
-      (value as { delivered?: unknown }).delivered !== true)
+    item.version !== 1 ||
+    typeof item.token !== "string" ||
+    !/^[0-9]+-[0-9]+-[0-9]+$/.test(item.token) ||
+    typeof item.message !== "string" ||
+    (!actionableLine(item.message) &&
+      !/^supervision-host:/m.test(item.message)) ||
+    typeof item.predecessorArmPid !== "string" ||
+    !/^[0-9]*$/.test(item.predecessorArmPid) ||
+    (item.originPid !== undefined && (typeof item.originPid !== "string" || !/^[0-9]+$/.test(item.originPid))) ||
+    (item.originAt !== undefined && (typeof item.originAt !== "number" || !Number.isFinite(item.originAt) || item.originAt <= 0)) ||
+    (item.delivered !== undefined && item.delivered !== true)
   ) {
     throw new Error(`invalid omp replacement actionable handoff at ${actionableHandoff}`);
   }
   return value as PendingActionableClose;
 }
 
-function validateReplacementHandoff(value: unknown): PendingActionableClose[] {
-  if (
-    typeof value !== "object" || value === null ||
-    (value as { version?: unknown }).version !== 2 ||
-    !Array.isArray((value as { pending?: unknown }).pending) ||
-    (value as { pending: unknown[] }).pending.length === 0
-  ) {
+function validateReplacementHandoff(value: unknown): { pending: PendingActionableClose[] } {
+  const raw = value as Partial<ReplacementActionableHandoff>;
+  if (typeof value !== "object" || value === null || raw.version !== 2 || !Array.isArray(raw.pending)) {
     throw new Error(`invalid omp replacement actionable handoff at ${actionableHandoff}`);
   }
-  const pending = (value as { pending: unknown[] }).pending.map(validatePendingActionable);
-  if (new Set(pending.map((item) => item.token)).size !== pending.length) {
-    throw new Error(`invalid omp replacement actionable handoff at ${actionableHandoff}`);
+  const pending = raw.pending.map(validatePendingActionable);
+  const tokens: Record<string, true> = {};
+  for (const item of pending) {
+    if (tokens[item.token]) throw new Error(`invalid omp replacement actionable handoff at ${actionableHandoff}`);
+    tokens[item.token] = true;
   }
-  return pending;
+  return { pending };
 }
 
-function writeReplacementHandoff(pending: PendingActionableClose[]): void {
-  replacementHandoff = [...pending];
+export function writeReplacementHandoff(pending: PendingActionableClose[]): void {
+  // Persist only the newest handoffMaxPending entries (by origin age, then
+  // token); a shutdown pile-up (the Oct 10 case) can never grow the file
+  // unbounded. A fresh pending wake is always newest, so the cap never
+  // drops the wake this shutdown just created.
+  const kept: PendingActionableClose[] = [];
+  let droppedCount = 0;
+  for (const item of pending) {
+    if (handoffEntryDroppedByCap(item, pending, handoffMaxPending)) droppedCount += 1;
+    else kept.push(item);
+  }
+  if (droppedCount > 0) {
+    globalStaleNotes().push(
+      `watcher: dropped ${droppedCount} replacement-session actionable wake(s) over the ${handoffMaxPending}-entry persistence bound; the newest pending wakes were kept`,
+    );
+  }
+  replacementHandoff = [...kept];
   mkdirSync(handoffDir, { recursive: true });
   const temporary = `${actionableHandoff}.tmp-${process.pid}-${++nextHandoffId}`;
-  const handoff: ReplacementActionableHandoff = { version: 2, pending };
+  const handoff: ReplacementActionableHandoff = { version: 2, pending: kept };
   try {
     writeFileSync(temporary, `${JSON.stringify(handoff)}\n`, { mode: 0o600 });
     renameSync(temporary, actionableHandoff);
@@ -394,17 +492,140 @@ function writeReplacementHandoff(pending: PendingActionableClose[]): void {
     throw error;
   }
 }
+// The replay side of writeReplacementHandoff: drop aged-out entries whose
+// predecessor session process is gone, delete or rewrite the persisted file
+// so an ordinary restart no longer re-persists them, then hand the survivors
+// to the ordinary load path. The durable wake queue (bin/fm-wake-drain.sh)
+// already replays every wake idempotently, so an entry is lost only when it
+// never reached ANY session - which this file's own persistence prevents.
+
+export function loadReplacementHandoffWithExpiry(load: () => PendingActionableClose[], note: (text: string) => void): PendingActionableClose[] {
+  let unexpired: PendingActionableClose[] = [];
+  try {
+    unexpired = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8"))).pending;
+  } catch (error) {
+    if (nodeErrorCode(error) === "ENOENT") return load();
+    throw error;
+  }
+  const nowMs = Date.now();
+  const agedOut = unexpired.filter((item) => handoffEntryExpired(item, nowMs));
+  if (agedOut.length === 0) return load();
+  const kept = unexpired.filter((item) => !handoffEntryExpired(item, nowMs));
+  if (kept.length === 0) {
+    replacementHandoff = null;
+    unlinkSync(actionableHandoff);
+  } else {
+    writeReplacementHandoff(kept);
+  }
+  const origin = handoffEntryOrigin(agedOut[0]);
+  note(`watcher: dropped ${agedOut.length} stale replacement-session actionable wake(s) (origin pid ${origin.pid} gone, older than ${Math.round(handoffMaxAgeMs / 60000)}m); the durable wake queue already replays these`);
+  return load();
+}
+
+// Wake-coalescing primitives (one companion commit). Three rules act on a
+// pending actionable close AT DELIVERY TIME so main is never woken for a
+// queue someone else already drained, a busy main is not spammed one
+// follow-up per queued actionable, and a pane whose agent stopped weeks
+// ago retriggers no repeated identical stale ping.
+//
+// (1) wakeQueuePendingCount: the durable wake queue ($FM_WAKE_QUEUE, falling
+// back to $STATE/.wake-queue) is the authority the watcher appended to
+// before it closed. A record whose queue shows 0 valid rows is already
+// drained; the close carries no fresh work for main. Rows are valid TSVs
+// with kind in signal|stale|check|heartbeat.
+export function wakeQueuePendingCount(queuePath: string): number {
+  let text: string;
+  try {
+    text = readFileSync(queuePath, "utf8");
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line) continue;
+    const fields = line.split("\t");
+    if (fields.length < 5) continue;
+    if (["signal", "stale", "check", "heartbeat"].includes(fields[2])) count += 1;
+  }
+  return count;
+}
+
+// Default wake-queue path the extension consults. bin/fm-wake-lib.sh owns
+// the name; a test overrides with FM_WAKE_QUEUE.
+function extensionWakeQueuePath(): string {
+  return process.env.FM_WAKE_QUEUE || `${state}/.wake-queue`;
+}
+
+// (2) A batch is a set of pending actionable closes that settle together:
+// one main follow-up subsumes them all. The batch KEEPS every member (so
+// consumption finishes every token's pending record), but the composite
+// message dedupes repeated identical reason texts inside itself so a pane
+// that emits the same line in several consecutive closes still appears
+// once.
+export type PendingActionableBatch = {
+  items: PendingActionableClose[];
+  message: string;
+};
+export function buildPendingActionableBatch(pending: PendingActionableClose[]): PendingActionableBatch {
+  const items = [...pending];
+  if (items.length === 1) return { items, message: items[0].message };
+  const seen = new Set<string>();
+  let dupes = 0;
+  for (const item of pending) {
+    if (seen.has(item.message)) { dupes += 1; continue; }
+    seen.add(item.message);
+  }
+  const lines = [...seen].map((reason) => `- ${reason}`);
+  const dupeSuffix = dupes > 0 ? ` (${dupes} duplicate reason${dupes === 1 ? "" : "s"} settled by the same delivery)` : "";
+  return {
+    items,
+    message: `${items.length} wakes pending (coalesced)${dupeSuffix}:\n${lines.join("\n")}`,
+  };
+}
+
+// (3) Per-pane temporal dedupe: the key a stale wake is keyed on. A stale
+// wake's reason text begins with "stale: <pane-label> ..." - the pane is
+// the stable identity. Anything else (signal:, check:, heartbeat:) is keyed
+// by the full reason text alone since those reasons carry no pane address.
+export function stalePaneKey(message: string): string {
+  const match = message.match(/^stale:[ \t]+(\S+)/);
+  return match ? `pane:${match[1]}` : `other:${message}`;
+}
+
+// Whether this item is suppressed under the temporal map: an identical
+// (pane, reason) pair was already delivered within <ttlMs> and the pane has
+// not changed state since. Returns false when the entry is expired or
+// absent, true when it must not re-fire. Never suppress a fresh pending
+// wake from a live predecessor's session_start replay.
+export function staleWakeSuppressed(
+  deliveredAtMs: Map<string, number>,
+  item: PendingActionableClose,
+  nowMs: number,
+  ttlMs: number,
+): boolean {
+  const key = `${stalePaneKey(item.message)}|${item.message}`;
+  const at = deliveredAtMs.get(key);
+  if (at === undefined) return false;
+  if (nowMs - at > ttlMs) return false;
+  return true;
+}
+export const staleWakeupTtlMs = 10 * 60 * 1000;
 
 function persistReplacementHandoff(pending: PendingActionableClose[]): void {
   if (pending.length === 0) return;
   writeReplacementHandoff(pending);
 }
 
-function loadReplacementHandoff(): PendingActionableClose[] {
+// The replay side of the handoff: the plain flat load, kept as the single
+// call shape the wrapper and every caller share. Expiry and pruning live in
+// loadReplacementHandoffWithExpiry, which activateOwnedWatch drives exactly
+// once per replay; everything else (merge, clear, persist) reads and writes
+// through it WITHOUT re-expiring, so only the owning session_start replays
+// lose entries and a mid-session merge never silently expires anything.
+export function loadReplacementHandoff(): PendingActionableClose[] {
+  let stored: PendingActionableClose[] = [];
   try {
-    const pending = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8")));
-    replacementHandoff = pending;
-    return [...pending];
+    stored = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8"))).pending;
   } catch (error) {
     if (nodeErrorCode(error) === "ENOENT") {
       replacementHandoff = null;
@@ -412,12 +633,14 @@ function loadReplacementHandoff(): PendingActionableClose[] {
     }
     throw error;
   }
+  replacementHandoff = stored;
+  return [...stored];
 }
 
 function mergeReplacementHandoff(pending: PendingActionableClose): void {
   let stored: PendingActionableClose[] = [];
   try {
-    stored = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8")));
+    stored = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8"))).pending;
   } catch (error) {
     if (nodeErrorCode(error) !== "ENOENT") throw error;
   }
@@ -427,7 +650,7 @@ function mergeReplacementHandoff(pending: PendingActionableClose): void {
 
 function clearReplacementHandoff(pending: PendingActionableClose): void {
   try {
-    const stored = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8")));
+    const stored = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8"))).pending;
     const remaining = stored.filter((item) => item.token !== pending.token);
     if (remaining.length === stored.length) return;
     if (remaining.length > 0) {
@@ -499,6 +722,7 @@ function createGeneration(): SessionGeneration {
     pendingActionables: [],
     cleanupFailure: "",
     unconsumedWakes: new Map(),
+    deliveredStaleAt: new Map(),
     deferredClose: null,
   };
 }
@@ -579,9 +803,13 @@ export default function (pi: ExtensionAPI) {
     pending?: PendingActionableClose,
   ): Promise<boolean> {
     if (!generationIsLive(owner)) return false;
+    // Prune notes for this session ride its first delivered wake rather than
+    // becoming wakes of their own; up to two from one replay (stale-drop and
+    // cap) fit one line block.
+    const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
     const content = encodeFirstmateOperationalInput(
       "watcher",
-      `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
+      `FIRSTMATE WATCHER WAKE: ${message}${notesSuffix}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
     );
     if (pending) owner.unconsumedWakes.set(pending.token, { content, pending });
     try {
@@ -597,12 +825,48 @@ export default function (pi: ExtensionAPI) {
     return generationIsLive(owner);
   }
 
+  // One follow-up carrying a whole batch of pending actionable closes. The
+  // batch's composite text is sent exactly once, then EACH member is
+  // registered in unconsumedWakes under its own token ALL pointing at the
+  // same composite content, so consumeWake (before_agent_start or the
+  // matching user message_start) settles the whole batch at once.
+  async function sendBatchedWake(
+    owner: SessionGeneration,
+    message: string,
+    items: PendingActionableClose[],
+  ): Promise<boolean> {
+    if (items.length === 0) return false;
+    if (items.length === 1) return sendWake(owner, message, items[0]);
+    if (!generationIsLive(owner)) return false;
+    const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
+    const content = encodeFirstmateOperationalInput(
+      "watcher",
+      `FIRSTMATE WATCHER WAKE: ${message}${notesSuffix}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
+    );
+    for (const item of items) owner.unconsumedWakes.set(item.token, { content, pending: item });
+    try {
+      await pi.sendUserMessage(content, { deliverAs: "followUp" });
+    } catch (error) {
+      for (const item of items) owner.unconsumedWakes.delete(item.token);
+      throw error;
+    }
+    return generationIsLive(owner);
+  }
+
   // omp consumed a main follow-up: an idle main at before_agent_start, a
   // streaming main at the user message_start that joins the running run.
+  // Coalesce rule (2) settles a whole batch here: every entry whose
+  // recorded content matches the consumed text is finished at once (a
+  // batched delivery registered one unconsumedWakes entry per batch member
+  // all under the same composite text).
   function consumeWake(owner: SessionGeneration, text: string): void {
-    for (const [token, wake] of owner.unconsumedWakes) {
+    const matched: UnconsumedWake[] = [];
+    for (const [, wake] of owner.unconsumedWakes) {
       if (wake.content !== text) continue;
-      owner.unconsumedWakes.delete(token);
+      matched.push(wake);
+    }
+    for (const wake of matched) {
+      owner.unconsumedWakes.delete(wake.pending.token);
       wake.pending.delivered = true;
       try {
         finishPendingActionable(owner, wake.pending);
@@ -610,7 +874,12 @@ export default function (pi: ExtensionAPI) {
         surfaceCleanupFailure(owner, error);
         schedulePendingCleanup(owner);
       }
-      return;
+      // Coalesce rule (3) bookkeeping: rules that fired this delivery are
+      // recorded, so a pane's identical stale repeat inside the TTL quiets.
+      if (/^stale:/.test(wake.pending.message)) {
+        const key = `${stalePaneKey(wake.pending.message)}|${wake.pending.message}`;
+        owner.deliveredStaleAt.set(key, Date.now());
+      }
     }
   }
 
@@ -749,12 +1018,42 @@ export default function (pi: ExtensionAPI) {
             surfaceCleanupFailure(owner, error);
           }
         }
-        // A record omp has accepted but not consumed is neither redelivered
-        // nor finished here: consumption finishes it, replacement replays it.
-        const pending = owner.pendingActionables.find(
+        // Coalesce rule (1): a close whose durable-wake-queue row is already
+        // drained carries no work for main - mark it delivered and let the
+        // cleanup path at the head of the next iteration clear it.
+        const queueCount = wakeQueuePendingCount(extensionWakeQueuePath());
+        for (const candidate of owner.pendingActionables.filter(
+          (item) => !item.delivered && !owner.unconsumedWakes.has(item.token),
+        )) {
+          if (queueCount === 0) {
+            candidate.delivered = true;
+            continue;
+          }
+          // Coalesce rule (3): a pane whose stale reason we ALREADY delivered
+          // inside the TTL quiets a repeat of the identical reason; only a
+          // pane whose stale state changed (a fresh reason text) re-pings.
+          if (/^stale:/.test(candidate.message) &&
+              staleWakeSuppressed(owner.deliveredStaleAt, candidate, Date.now(), staleWakeupTtlMs)) {
+            candidate.delivered = true;
+          }
+        }
+        for (const dropped of owner.pendingActionables.filter((item) => item.delivered && !attemptedCleanup.has(item.token))) {
+          attemptedCleanup.add(dropped.token);
+          try {
+            finishPendingActionable(owner, dropped);
+          } catch (error) {
+            surfaceCleanupFailure(owner, error);
+          }
+        }
+        // Coalesce rule (2): every still-eligible close settles in ONE main
+        // follow-up. The batch dedupes repeated reason texts inside itself;
+        // a fresh session_start replay of ONE wake never coalesces.
+        const eligible = owner.pendingActionables.filter(
           (item) => !item.delivered && !owner.unconsumedWakes.has(item.token),
         );
-        if (!pending) break;
+        if (eligible.length === 0) break;
+        const batch = buildPendingActionableBatch(eligible.slice(0, 8));
+        const pending = batch.items[0];
         const existingClaim = replacementCoordinator.deliveries.get(pending.token);
         if (existingClaim && existingClaim.owner !== owner) {
           const settlement = await existingClaim.settlement;
@@ -788,12 +1087,20 @@ export default function (pi: ExtensionAPI) {
             releaseClaim();
             return;
           }
-          const message = restoration.failure ? `${pending.message}\n\n${restoration.failure}` : pending.message;
-          const delivered = await deliverActionableWake(owner, message, pending, restoration.recovery);
+          const message = restoration.failure ? `${batch.message}\n\n${restoration.failure}` : batch.message;
+          const delivered = await sendBatchedWake(owner, message, batch.items);
           if (!delivered) {
             settleClaim("failed");
             releaseClaim();
             return;
+          }
+          // Coalesce rule (3) bookkeeping: recording here right at delivery
+          // (not only at consumption) means even an unconsumed repeat of
+          // the identical stale reason inside the TTL does not re-ping.
+          for (const item of batch.items) {
+            if (!/^stale:/.test(item.message)) continue;
+            const key = `${stalePaneKey(item.message)}|${item.message}`;
+            owner.deliveredStaleAt.set(key, Date.now());
           }
           const awaitingConsumption = owner.unconsumedWakes.has(pending.token);
           if (awaitingConsumption && !generationIsLive(owner)) {
@@ -807,11 +1114,13 @@ export default function (pi: ExtensionAPI) {
           settleClaim("delivered");
           if (!awaitingConsumption) {
             // omp consumed it before this ran.
-            pending.delivered = true;
-            try {
-              finishPendingActionable(owner, pending);
-            } catch (error) {
-              surfaceCleanupFailure(owner, error);
+            for (const item of batch.items) {
+              item.delivered = true;
+              try {
+                finishPendingActionable(owner, item);
+              } catch (error) {
+                surfaceCleanupFailure(owner, error);
+              }
             }
           }
           releaseClaim();
@@ -1088,7 +1397,7 @@ export default function (pi: ExtensionAPI) {
     let pending: PendingActionableClose[] = [];
     let loadFailure = "";
     try {
-      pending = loadReplacementHandoff();
+      pending = loadReplacementHandoffWithExpiry(loadReplacementHandoff, (note) => globalStaleNotes().push(note));
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       loadFailure = `watcher: FAILED - omp extension could not load a replacement-session actionable wake\n${detail}`;
