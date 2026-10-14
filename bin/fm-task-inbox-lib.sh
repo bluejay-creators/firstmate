@@ -100,6 +100,8 @@ _FM_TASK_INBOX_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_FM_TASK_INBOX_LIB_DIR/fm-wake-lib.sh"
 # shellcheck source=/dev/null
 . "$_FM_TASK_INBOX_LIB_DIR/fm-backend.sh"
+# shellcheck source=/dev/null
+. "$_FM_TASK_INBOX_LIB_DIR/fm-task-inbox-listener-lib.sh"
 
 FM_TASK_INBOX_SCHEMA='fm-task-inbox.v1'
 FM_TASK_INBOX_GRACE_DEFAULT=90
@@ -355,6 +357,13 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # a lost first Enter gets one confirmed retry.
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict
+  # A live in-session listener delivers every new record through the session's
+  # own message API (freshness and pid proof owned by the listener library),
+  # so no doorbell is typed into its pane. Checked first: typing is the harm
+  # to avoid even when the endpoint is also unreadable.
+  if fm_task_inbox_listener_live "$rec"; then
+    return 4
+  fi
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
   esac
@@ -444,10 +453,18 @@ fm_task_inbox_clear_retry() {  # <state-dir> <task-id> <record-path>
   rm -f "$dir/.retry-ring" 2>/dev/null
 }
 
-# The re-ring ladder decision for one task. Prints exactly one of:
+# The re-ring ladder decision for one task. The listener vote comes before
+# both inbox branches so an empty and a non-empty inbox answer the same way,
+# and so a live listener spends a pending retry mark instead of letting the
+# ordinary ladder ring later. Prints exactly one of:
 #   quiet                     nothing due (healthy, within grace or spacing,
 #                             or already escalated for the current oldest)
 #   ring <record-path>        one doorbell re-ring is due
+#   listener <record-path>         no doorbell: the inbox has a live in-session
+#                                  listener, so no attempt is typed and no
+#                                  budget is consumed; the vote degrades back
+#                                  to the ordinary contract the moment the
+#                                  heartbeat goes stale
 #   escalate <record-path> <count>   attempt budget spent; surface as stale
 #   retry <record-path>       a fire-and-forget record's one retry ring is due
 # An empty inbox also resets the ladder bookkeeping so the next message starts
@@ -455,6 +472,17 @@ fm_task_inbox_clear_retry() {  # <state-dir> <task-id> <record-path>
 fm_task_inbox_due_action() {  # <state-dir> <task-id>
   local dir oldest base now grace max ladder rec_base count last
   dir=$(fm_task_inbox_dir "$1" "$2")
+  # A live in-session listener replaces the doorbell entirely: no ring, no
+  # retry, no escalation; the worker receives the record through the session.
+  if fm_task_inbox_listener_live "$dir"; then
+    rm -f "$dir/.retry-ring" "$dir/.busy-state" 2>/dev/null || true
+    if oldest=$(fm_task_inbox_oldest_unhandled "$1" "$2"); then
+      printf 'listener %s' "$oldest"
+    else
+      printf 'quiet'
+    fi
+    return 0
+  fi
   if ! oldest=$(fm_task_inbox_oldest_unhandled "$1" "$2"); then
     rm -f "$dir/.ring-state" "$dir/.escalated" "$dir/.busy-state" 2>/dev/null || true
     # The one retry ring exists only while config/wait-no-turns is present.

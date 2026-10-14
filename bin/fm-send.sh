@@ -49,7 +49,10 @@
 # "was the message acted on" is, and that is answered asynchronously for an
 # ordinary record by the worker's acknowledgement move into handled/.
 # bin/fm-task-inbox-lib.sh owns the record format, doorbell line, and retry and
-# escalation policy for ordinary and fire-and-forget records.
+# escalation policy for ordinary and fire-and-forget records. When the task's
+# inbox has a live in-session omp listener (bin/fm-task-inbox-listener-lib.sh's
+# verdict; .omp/extensions/fm-inbox-listener.ts), the ring returns 4 and this
+# script types nothing: the record alone delivers through the session.
 # The composer pre-check before the ring is ADVISORY only: when
 # the composer visibly holds pending text the ring is skipped with a notice and
 # the watcher re-rings an ordinary record later; no composer verdict is
@@ -1096,6 +1099,7 @@ else
       esac
     fi
     case "$ring_rc" in
+    4) echo "fm-send: no doorbell typed: $T runs a live in-session inbox listener; the steer is durably recorded at $INBOX_RECORD and is delivered through the session" >&2 ;;
     1) echo "fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
     2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
     3) echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2 ;;

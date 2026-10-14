@@ -239,13 +239,16 @@
 #   only when that provider appears in the listing; a provider absent from the
 #   listing (an extension-registered provider such as claude-bridge, which omp
 #   never lists) passes through unvalidated with a stderr notice, and a bare
-#   fuzzy pattern is left to omp's own matcher. A crewmate or scout loads its
-#   per-task busy-state extension with -e from state/ (outside the worktree, so
-#   auto-discovery cannot load it a second time); a secondmate names only that
-#   state/<id>.omp-ext.ts busy extension with -e and relies on omp
-#   auto-discovering the home's tracked .omp/extensions/ for the rest
-#   (verified, omp 18.1.11: a file named both ways loads twice, and discovery is
-#   cwd-only with no trust dialog).
+#   fuzzy pattern is left to omp's own matcher. A crewmate or scout loads two
+#   extensions with -e: its per-task busy-state extension from state/ (outside
+#   the worktree, so auto-discovery cannot load it a second time) and the
+#   tracked inbox-listener .omp/extensions/fm-inbox-listener.ts, which the
+#   worktree's cwd-only discovery never sees. A secondmate names the same two
+#   -e files and relies on omp auto-discovering its home's tracked
+#   .omp/extensions/ for the rest (verified, omp 18.1.11: a file named both
+#   ways loads twice, and discovery is cwd-only with no trust dialog; the
+#   listener's double load is harmless because both bindings resolve the same
+#   $FM_TASK_INBOX heartbeat and dedupe on the handled/ ack).
 #   config/secondmate-harness may also carry an optional model and effort as extra
 #   whitespace-separated tokens ("<harness> [<model>] [<effort>]"). For a
 #   --secondmate spawn, those tokens apply only when this spawn also resolves its
@@ -410,6 +413,10 @@
 #                  written by this script; outside the worktree so omp's cwd-only
 #                  auto-discovery cannot load it a second time; a secondmate names
 #                  this -e and still does not name its auto-discovered primary extensions)
+#     __OMPLISTENER__ absolute path to the tracked .omp/extensions/fm-inbox-listener.ts
+#                  (omp in-session steering-inbox listener; named by every omp
+#                  launch so steering records arrive in-session instead of as a
+#                  typed doorbell)
 #     __OMPWORKERCFG__ absolute path to the tracked .omp/fm-worker-overlay.yml posture overlay
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
 #     __BRIEFDOORBELL__ quoted printable doorbell naming the launch-brief record this
@@ -2185,7 +2192,15 @@ launch_template() {
   # session_stop continuation. The busy extension is the exception: it lives
   # outside the home, so discovery never sees it, and -e is the only load.
   omp)
-    printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS FM_OMP_HARNESS=omp OMP_SKIP_SETUP=1 __OMPBIN__ --config __OMPWORKERCFG__ --auto-approve --cwd __WORKTREE__ __MODELFLAG____EFFORTFLAG__-e __OMPEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+    # The inbox listener is the one tracked extension every omp launch names
+    # explicitly next to the per-task busy extension: workers sit in a project
+    # worktree whose .omp/ holds no Firstmate files, so auto-discovery never
+    # loads it there; a secondmate names it too, and though its home's
+    # auto-discovered copy then loads as well, both bindings resolve the same
+    # $FM_TASK_INBOX heartbeat and inbox, so the extra poll is a harmless
+    # duplicate rather than doubled delivery (the ack move into handled/
+    # dedupes them).
+    printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS FM_OMP_HARNESS=omp OMP_SKIP_SETUP=1 __OMPBIN__ --config __OMPWORKERCFG__ --auto-approve --cwd __WORKTREE__ __MODELFLAG____EFFORTFLAG__-e __OMPEXT__ -e __OMPLISTENER__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     ;;
   # agy (Antigravity CLI): --prompt-interactive "<brief>" starts the supervised
   # interactive session and auto-submits it, so the brief rides the launch
@@ -2471,6 +2486,11 @@ omp)
   OMP_WORKER_CFG="$FM_ROOT/.omp/fm-worker-overlay.yml"
   [ -f "$OMP_WORKER_CFG" ] || {
     echo "error: omp worker posture overlay missing at $OMP_WORKER_CFG; a worker launched without it can park on the captain's own approval or plan-mode settings" >&2
+    exit 1
+  }
+  OMP_LISTENER="$FM_ROOT/.omp/extensions/fm-inbox-listener.ts"
+  [ -f "$OMP_LISTENER" ] || {
+    echo "error: omp inbox listener extension missing at $OMP_LISTENER; an omp worker without it falls back to the typed doorbell, which the launch must not silently lose" >&2
     exit 1
   }
   ;;
@@ -5341,6 +5361,7 @@ sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_ompext=$(shell_quote "$STATE/$ID.omp-ext.ts")
+sq_omplistener=$(shell_quote "$FM_ROOT/.omp/extensions/fm-inbox-listener.ts")
 sq_ompcfg=$(shell_quote "${OMP_WORKER_CFG:-$FM_ROOT/.omp/fm-worker-overlay.yml}")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
@@ -5387,6 +5408,7 @@ LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OMPEXT__/$sq_ompext}
+LAUNCH=${LAUNCH//__OMPLISTENER__/$sq_omplistener}
 LAUNCH=${LAUNCH//__OMPWORKERCFG__/$sq_ompcfg}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in

@@ -526,6 +526,9 @@ inbox_steer_check() {  # <window> <task>
   action=$(fm_task_inbox_due_action "$STATE" "$task") || return 0
   verb=${action%% *}
   [ "$verb" != quiet ] || return 0
+  # A live in-session listener owns delivery: no re-ring, no busy bookkeeping,
+  # no escalation - and never a typed doorbell. The library's own vote said so.
+  [ "$verb" != listener ] || return 0
   if [ "$verb" = retry ] && [ -n "$(status_own_open_decisions "$STATE/$task.status")" ]; then
     return 0
   fi
@@ -570,6 +573,11 @@ inbox_steer_check() {  # <window> <task>
     ring)
       ring_rc=0
       fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
+      if [ "$ring_rc" -eq 4 ]; then
+        # Live-listener verdicts arrive through the library ring path when the
+        # pane is known listener-owned; the ladder stays out of its way.
+        return 0
+      fi
       if [ "$ring_rc" -eq 3 ]; then
         inbox_steer_escalate_unavailable "$w" "$task" "$rec"
         return 0
@@ -590,6 +598,11 @@ inbox_steer_check() {  # <window> <task>
     retry)
       ring_rc=0
       fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
+      if [ "$ring_rc" -eq 4 ]; then
+        # Live-listener retry: no ring is owed; spend the mark quietly.
+        fm_task_inbox_clear_retry "$STATE" "$task" "$rec" || true
+        return 0
+      fi
       if ! fm_task_inbox_clear_retry "$STATE" "$task" "$rec" && [ -f "$rec" ]; then
         reason="stale: $w (steering-inbox retry mark unremovable: ${rec%/*}/.retry-ring cannot be removed, so $rec would ring on every poll - inspect the inbox directory)"
         fm_wake_append stale "$w" "$reason" || exit 1
