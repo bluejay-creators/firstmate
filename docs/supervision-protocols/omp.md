@@ -19,6 +19,9 @@ When this session owns supervision and away mode is not active:
    A redundant call while the extension owns an arm child or scheduled retry is an ownership-based `watcher: unchanged` no-op, not an independent health claim.
 11. Never use shell `&` for watcher supervision.
    The arm mechanism above is extension-owned, not a model tool call, but a manual recovery probe that backgrounds, pipes, or bundles the arm is denied automatically by the pre-tool seatbelt (`bin/fm-arm-pretool-check.sh`, wired into the turn-end guard extension at `__FM_OMP_TURNEND_EXT__`).
+12. An in-process subagent (task tool, /tan clone) is not a session replacement: it rebinds the extension factories with `ctx.agent.kind === "sub"`, so the watcher and turn-end extensions stand down entirely and the child never claims, consumes, retires, or re-arms the supervising generation or its handoff.
+   Bounded read-only or short investigative work should run as such a subagent from this session rather than an `fm-spawn` worker pane; [`.agents/skills/harness-adapters/references/harness/omp.md`](../../.agents/skills/harness-adapters/references/harness/omp.md) owns the dispatch-size rule and `docs/verification/omp.md` owns the safety evidence.
+
 
 The turn-end guard on omp is structural, not advisory: `__FM_OMP_TURNEND_EXT__` answers omp's blocking `session_stop` hook, and when `bin/fm-turnend-guard.sh` returns 2 it forces one continuation carrying the guard text, bounded to one per turn by the `stop_hook_active` flag omp sets on the continuation's own stop.
 An interrupted turn never raises `session_stop`, so a supervisor-initiated interrupt is not guarded; `bin/fm-control.sh` owns that postcondition.

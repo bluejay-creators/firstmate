@@ -861,6 +861,128 @@ EOF
   pass ".omp watch extension: a host close split across stream chunks reaches main as one whole follow-up"
 }
 
+# A subagent (task tool, /tan clone) re-binds the watch extension against
+# shared module state with ctx.agent.kind === "sub". Its start, shutdown, and
+# its own session_start must leave the primary's arm child alone, its own
+# events must not consume the primary's pending wake, and its arming tool must
+# answer with a stand-down instead of touching the arm.
+test_watch_extension_subagent_session_never_touches_the_arm() {
+  local repo home out status
+  repo="$TMP_ROOT/watch-sub/repo"; home="$TMP_ROOT/watch-sub/home"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=gen-1\n' "$$"
+sleep 30
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_OMP_ARM_READY_TIMEOUT_MS=3000 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { writeFileSync, existsSync } from "node:fs";
+import { spawnSync, execFileSync } from "node:child_process";
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const handlers = new Map(); let tool = null; let command = null; const sent = [];
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand(n, o) { if (n === "fm-watch-arm-omp") command = o.handler; },
+  registerTool(t) { tool = t; },
+  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+};
+const mod = await import(pathToFileURL(process.env.EXT).href);
+mod.default(pi);
+// The primary session arms the watcher.
+await handlers.get("session_start")({ type: "session_start" }, {});
+const armResult = await tool.execute();
+if (!/^watcher: (?:started omp extension arm child 1|unchanged - omp extension already owns an arm child)/.test(armResult.content[0].text)) throw new Error(`primary arm failed: ${armResult.content[0].text}`);
+const markerPid = Number(execFileSync("bash", ["-c", `pgrep -f "fm-watch-arm.sh" | head -1`], { encoding: "utf8" }).trim());
+if (!markerPid) throw new Error("the primary arm child was not running");
+const subCtx = { agent: { kind: "sub", id: "task-1", name: "explore", depth: 1, parentId: "main" } };
+// A subagent session start must not arm, re-arm, or replace anything.
+await handlers.get("session_start")({ type: "session_start" }, subCtx);
+// Its arming tool stands down and leaves the primary arm untouched.
+const subTool = await tool.execute(undefined, undefined, undefined, undefined, subCtx);
+if (!/subagent session/.test(subTool.content[0].text)) throw new Error(`subagent tool call did not stand down: ${subTool.content[0].text}`);
+if (subTool.details?.ok !== true) throw new Error("the subagent stand-down must read as non-error so the subagent model stays calm");
+// Subagent agent events must not consume the pending wake owned by the primary.
+await handlers.get("before_agent_start")({ type: "before_agent_start", prompt: "subagent prompt" }, subCtx);
+// A subagent shutdown must not retire the primary arm or persist a handoff.
+await handlers.get("session_shutdown")({}, subCtx);
+const stillAlive = spawnSync("bash", ["-c", `kill -0 ${markerPid} 2>/dev/null && echo alive || echo dead`], { encoding: "utf8" }).stdout.trim();
+if (stillAlive !== "alive") throw new Error(`the subagent shutdown killed the primary arm child (pid ${markerPid})`);
+if (existsSync(`${process.env.FM_HOME}/state/extensions/omp-primary-watch/session-replacement-actionable.json`)) {
+  throw new Error("the subagent shutdown persisted a replacement handoff");
+}
+if (sent.length !== 0) throw new Error(`the subagent session received or triggered a wake: ${JSON.stringify(sent)}`);
+// The primary session still owns the arm: a later lock-owning start is a
+// replacement no-op, and the arm tool reports the existing child.
+const again = await tool.execute();
+if (!/^watcher: unchanged - omp extension already owns an arm child/.test(again.content[0].text)) {
+  throw new Error(`the primary arm was not left owned after the subagent session: ${again.content[0].text}`);
+}
+const doubleCheck = spawnSync("bash", ["-c", `kill -0 ${markerPid} 2>/dev/null && echo alive || echo dead`], { encoding: "utf8" }).stdout.trim();
+if (doubleCheck !== "alive") throw new Error(`the primary arm child died across the subagent lifecycle (pid ${markerPid})`);
+await handlers.get("session_shutdown")({}, {});
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp watch extension subagent stand-down: $out"
+  [ -z "$out" ] || fail "omp watch extension subagent test printed output: $out"
+  pass ".omp watch extension: a subagent session never arms, consumes, retires, or hands off - the primary keeps its arm"
+}
+
+# The turn-end guard's session lifecycle and tool_call handlers must also stand
+# down under a subagent context: its sessionstart generation belongs to the
+# primary and a subagent's shutdown must not retire it, and the primary-home
+# bash seatbelt does not govern a bounded in-process assistant.
+test_turnend_guard_subagent_session_stands_down() {
+  local repo home out status
+  repo="$TMP_ROOT/guard-sub/repo"; home="$TMP_ROOT/guard-sub/home"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-turnend-guard.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-arm-pretool-check.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-cd-pretool-check.sh"
+  printf '#!/usr/bin/env bash\nprintf "OMP DIGEST source=%%s\\n" "$2"\n' > "$repo/bin/fm-sessionstart-run.sh"
+  chmod +x "$repo/bin/"*.sh
+  out=$(FM_HOME="$home" EXT="$repo/.omp/extensions/fm-primary-turnend-guard.ts" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+const handlers = new Map();
+const pi = { on(e, h) { handlers.set(e, h); }, sendMessage() {} };
+const mod = await import(pathToFileURL(process.env.EXT).href);
+mod.default(pi);
+const mainCtx = { sessionManager: { getSessionId: () => "main-session" } };
+handlers.get("session_start")({ type: "session_start" }, mainCtx);
+const first = await handlers.get("before_agent_start")({ type: "before_agent_start", prompt: "hi" }, mainCtx);
+if (!first?.message?.content?.includes("OMP DIGEST source=startup")) throw new Error(`primary digest missing: ${JSON.stringify(first)}`);
+const subCtx = { agent: { kind: "sub", id: "task-1", name: "explore", depth: 1, parentId: "main" } };
+// A subagent start must not create, replace, or count a sessionstart
+// generation: the primary generation stays the active one.
+handlers.get("session_start")({ type: "session_start" }, subCtx);
+// A subagent compaction must not spawn a generation either.
+await handlers.get("session_compact")({ type: "session_compact" }, subCtx);
+// A subagent bash call bypasses the primary-home seatbelt.
+const allowed = await handlers.get("tool_call")({ type: "tool_call", toolName: "bash", input: { command: "bin/fm-watch-arm.sh &" } }, subCtx);
+if (allowed.block) throw new Error("the subagent bash call was blocked by the primary seatbelt");
+// A subagent session start must not inflate the primary start count, and a
+// subagent shutdown must not retire the primary session machinery.
+await handlers.get("session_shutdown")({}, subCtx);
+handlers.get("session_start")({ type: "session_start" }, mainCtx);
+const clear = await handlers.get("before_agent_start")({ type: "before_agent_start", prompt: "hi again" }, mainCtx);
+if (!clear?.message?.content?.includes("source=clear")) throw new Error(`the subagent lifecycle corrupted the primary start count: ${JSON.stringify(clear)}`);
+await handlers.get("session_shutdown")({}, mainCtx);
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp turn-end guard subagent stand-down: $out"
+  [ -z "$out" ] || fail "omp turn-end guard subagent test printed output: $out"
+  pass ".omp turn-end guard: a subagent session leaves the primary sessionstart generation and seatbelt untouched"
+}
+test_watch_extension_subagent_session_never_touches_the_arm
+test_turnend_guard_subagent_session_stands_down
 test_detection_anchored_name_and_marker_precedence
 test_lock_identity_and_liveness_classification
 test_spawn_launch_line_and_worker_wiring

@@ -101,6 +101,21 @@ type SessionStartContext = {
   };
 };
 
+// omp re-binds this factory for a subagent (task tool, /tan clone); that
+// session's handlers carry ctx.agent.kind === "sub" (omp's extension
+// documentation is the signal owner). The guard then stands down entirely:
+// session_stop already never fires for a subagent, while session_start,
+// session_compact, and a subagent session_shutdown must not create or tear
+// down sessionstart generations shared with the primary, and the tool_call
+// seatbelt stays out of a bounded in-process assistant's bash policy. Absent
+// or "main" kind reads as the primary session, as on omp 18.1.x.
+function subagentContext(ctx: unknown): boolean {
+  if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return false;
+  const agent = ctx.agent;
+  if (!agent || typeof agent !== "object" || !("kind" in agent)) return false;
+  return agent.kind === "sub";
+}
+
 // The launch line is the only resume evidence omp offers an extension: its
 // session_start payload has no reason and no header timestamp is guaranteed.
 function launchResumeSource(): "resume" | undefined {
@@ -538,6 +553,7 @@ export default function (pi: ExtensionAPI) {
   registerSessionstartExitListener();
 
   pi.on?.("session_start", (_event, ctx) => {
+    if (subagentContext(ctx)) return;
     sessionStarts += 1;
     const source: SessionstartSource = sessionStarts === 1
       ? (launchResumeSource() ?? "startup")
@@ -548,6 +564,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on?.("before_agent_start", async (_event, ctx) => {
+    if (subagentContext(ctx)) return undefined;
     const generation = sessionstartGeneration;
     if (!generation) return undefined;
     const message = await claimSessionstartMessage(generation, ctx);
@@ -558,6 +575,7 @@ export default function (pi: ExtensionAPI) {
   // is idle and auto-compaction may retry without another before_agent_start,
   // so the message is sent directly while sharing generation ownership.
   pi.on?.("session_compact", async (_event, ctx) => {
+    if (subagentContext(ctx)) return;
     registerSessionstartExitListener();
     const generation = createSessionstartGeneration("compact", sessionIdFromContext(ctx));
     sessionstartGeneration = generation;
@@ -570,7 +588,8 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on?.("session_shutdown", async () => {
+  pi.on?.("session_shutdown", async (_event, ctx) => {
+    if (subagentContext(ctx)) return;
     const generation = sessionstartGeneration;
     try {
       if (generation) await stopSessionstartGeneration(generation);
@@ -580,7 +599,8 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on?.("tool_call", async (event) => {
+  pi.on?.("tool_call", async (event, ctx) => {
+    if (subagentContext(ctx)) return {};
     if (!event || event.type !== "tool_call" || event.toolName !== "bash") return {};
     const command = String((event.input as { command?: unknown })?.command ?? "");
     if (!command) return {};

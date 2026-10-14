@@ -55,3 +55,13 @@ The Pi supervision branch does not run on omp; without the supervision host ever
 Launch a primary with plain `omp` inside the home (`FM_OMP_HARNESS=omp omp` when starting from a Claude pane); `../../../bin/fm-session-start.sh` prints `OMP_WATCH_EXTENSION: not loaded` when the running session has not loaded both tracked extensions.
 `FM_OMP_LIVE_E2E=1 ../../../tests/fm-omp-primary-live-e2e.test.sh` is the opt-in live guard; `../../../tests/fm-omp-harness.test.sh` is the portable regression.
 A secondmate registered with `remote=1` in `data/secondmates.md`, spawned through the ordinary `../../../bin/fm-spawn.sh <id> <home> --secondmate` path, is refused on omp until a remote host verifies it, as is `../../../bin/fm-remote-secondmate-control.sh launch`; there is no `--remote` flag.
+
+## In-process subagents on the omp primary
+
+The omp primary prefers an in-process subagent (the task tool) for bounded read-only or short investigative work: log attribution, key-holder or setting lookup, code reading, report drafting, and similar bounded probes that fit one child turn and return inline to the same conversation.
+It carries no pane, no worktree, no backlog item, and no fleet record, and bounded truth-seeking that stays inside the supervisor's own session supervision is exactly the shape built-in subagents exist for.
+`bin/fm-spawn.sh` remains the dispatch for anything that changes a project, needs an isolated worktree, branch, or PR, must outlive the supervisor's turn, or runs long, and secondmate routing stays a home-scope decision, not a dispatch-size one.
+The tracked `.omp/extensions` extensions stand down under omp's `ctx.agent.kind === "sub"` discriminator: a subagent session never claims, consumes, or retires the supervisor's watcher arm, never persists the replacement handoff, and its shutdown leaves the primary generation live.
+`tests/fm-omp-harness.test.sh` owns the portable regression; `FM_OMP_SUBAGENT_SMOKE=1 tests/fm-omp-subagent-smoke-e2e.test.sh` is the live-e2e guard (verifies the watcher remains armed through a subagent lifecycle and the actionable signal close records cleanly); `docs/verification/omp.md` records the dated result.
+The 2026-10-08 and 2026-10-13 incidents before this contract are recorded in `data/learnings.md` of the captain's home.
+

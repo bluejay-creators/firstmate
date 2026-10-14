@@ -501,6 +501,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/omp.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/process-event-sources.md",
       "audience": "maintainer-verification"
     },

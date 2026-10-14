@@ -47,6 +47,19 @@
 // durable state lives at state/extensions/omp-primary-watch/session-replacement-actionable.json.
 // Stale callbacks from a prior generation are no-ops against the active replacement.
 //
+// Subagent session safety (stated once here):
+// omp re-binds this factory for a subagent session (task tool, /tan clone),
+// whose events carry ctx.agent.kind === "sub" while module state stays shared
+// with the primary. That session never claims, consumes, or retires the
+// owner's arm, never persists the replacement handoff, and its shutdown
+// leaves the primary generation live: every lifecycle handler and the arming
+// tool one-shot stand down on that context. omp's extension documentation is
+// the signal owner. The 2026-10-08 and 2026-10-13 incidents were the inverse
+// of this contract: a subagent session's shutdown ran stopSessionGeneration
+// against the shared generation, retiring the primary's arm and leaving
+// fm_watch_arm_omp answering "watcher: not armed - omp session is shutting
+// down" until the supervisor restarted.
+//
 // Delivery versus consumption (stated once here):
 // A main follow-up is delivered once omp accepts it (sendUserMessage returns).
 // The successor pipeline never waits for the model to read it: a follow-up
@@ -1098,23 +1111,44 @@ export default function (pi: ExtensionAPI) {
     return result;
   }
 
-  pi.on?.("before_agent_start", (event) => {
+// omp re-binds extension factories per subagent (task tool, /tan clone); those
+// events carry ctx.agent.kind === "sub" and share this module state with the
+// primary. A subagent generation must never claim, consume, or retire the
+// owning session's arm, and its shutdown must not persist the replacement
+// handoff or mark the primary generation stopping. Only the main session
+// (kind absent, as on omp 18.1.x, or "main") participates; the documented
+// signal is ctx.agent.kind, verified against omp's extensions doc. Unknown
+// other kinds read as main so a future omp variant degrades to supervision.
+function subagentContext(ctx: unknown): boolean {
+  if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return false;
+  const agent = ctx.agent;
+  if (!agent || typeof agent !== "object" || !("kind" in agent)) return false;
+  return agent.kind === "sub";
+}
+const subagentArmStatus =
+  "watcher: not armed - this is a subagent session; the supervisor's omp primary owns watcher continuity, so no action is needed here";
+
+  pi.on?.("before_agent_start", (event, ctx) => {
+    if (subagentContext(ctx)) return;
     consumeWake(generation, String((event as { prompt?: unknown })?.prompt ?? ""));
   });
-  pi.on?.("message_start", (event) => {
+  pi.on?.("message_start", (event, ctx) => {
+    if (subagentContext(ctx)) return;
     const message = (event as { message?: { role?: unknown; content?: unknown } })?.message;
     if (!message || message.role !== "user") return;
     consumeWake(generation, userMessageText(message.content));
   });
 
-  pi.on?.("session_start", async () => {
+  pi.on?.("session_start", async (_event, ctx) => {
+    if (subagentContext(ctx)) return;
     if (generation.stopping) generation = createGeneration();
     activateGeneration(generation);
     markLoaded();
     if (lockOwnership() !== "owned") return;
     activateOwnedWatch(generation);
   });
-  pi.on?.("session_shutdown", async () => {
+  pi.on?.("session_shutdown", async (_event, ctx) => {
+    if (subagentContext(ctx)) return;
     // omp carries no shutdown reason (verified: `reason` is undefined), so the
     // replacement handoff is always persisted when anything is pending; a
     // terminal quit then merely replays an already-drained wake next start.
@@ -1125,7 +1159,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand?.("fm-watch-arm-omp", {
     description: "Arm firstmate watcher supervision through the omp extension instead of foreground bash.",
     handler: async (_args, ctx) => {
-      const result = activateOwnedWatch(generation);
+      const result = subagentContext(ctx)
+        ? { ok: true, message: subagentArmStatus }
+        : activateOwnedWatch(generation);
       ctx?.ui?.notify?.(result.message, result.ok ? "info" : "warning");
     },
   });
@@ -1139,7 +1175,13 @@ export default function (pi: ExtensionAPI) {
       "Call fm_watch_arm_omp only for the first required cycle or after a notification says the cycle is missing, failed, or unhealthy. Do not call it after ordinary work, turn completion, or ordinary signal, stale, check, or heartbeat handling because the omp extension owns re-arming. Never run bin/fm-watch-arm.sh through bash.",
     ],
     parameters: Type.Object({}),
-    execute: async () => {
+    execute: async (_toolCallId: unknown, _params: unknown, _signal: unknown, _onUpdate: unknown, ctx: unknown) => {
+      if (subagentContext(ctx)) {
+        return {
+          content: [{ type: "text", text: subagentArmStatus }],
+          details: { ok: true, message: subagentArmStatus },
+        };
+      }
       const result = activateOwnedWatch(generation);
       return {
         content: [{ type: "text", text: result.message }],
