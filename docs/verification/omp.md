@@ -47,15 +47,29 @@ replacement handoff, and its shutdown leaves the primary generation live.
 The supervisor's primary omp session delivers actionable watcher wakes to
 its main as a hidden custom message instead of a visible banner:
 `pi.sendMessage({ customType: "fm.wake", content: ..., display: false },
-{ triggerTurn: true, deliverAs: "followUp" })`. Before that call the extension
-runs `bin/fm-wake-drain.sh --brief --ack` to retire the durable row and
-produce the one-line summary the model actually consumes; the matching
-`role:"custom"` `message_start` finishes the pending handoff record so a
-session replacement cannot replay it. A drain failure, missing `sendMessage`,
-or rejected send falls back to today's visible `sendUserMessage` banner.
+{ triggerTurn: true, deliverAs: "followUp" })`; on omp 18.10.4 the host
+call is void (packages/coding-agent/src/modes/runtime-init.ts starts the
+send, catches its own errors, and returns nothing), so acceptance - not a
+resolved promise - confirms delivery, exactly as for `sendUserMessage`.
+Before that call the extension runs `bin/fm-wake-drain.sh --brief --ack`
+to retire the durable row and produce the one-line summary the model
+actually consumes. The drain presents its rows on stdout and the
+`WAKE_ACK_REQUIRED` marker on stderr; the extension parses both channels,
+keeps the ack contract out of the delivered text, and acknowledges exactly
+the presented cutoff in-extension once the send is accepted, so each wake
+carries only not-yet-delivered rows and the queue leaves no residue for a
+later wake to repeat (the 2026-10-14 repetition and visible-render defects,
+when a stdout-only parse never saw the marker and never acked).
+An acknowledgement failure surfaces loudly and keeps the rows queued; the
+matching `role:"custom"` `message_start` finishes the pending handoff
+record so a session replacement cannot replay it. A drain failure, missing
+`sendMessage`, or rejected send falls back to today's visible
+`sendUserMessage` banner, which acknowledges the same presented cutoff.
 Verified under `tests/fm-omp-harness.test.sh`:
-`test_watch_extension_sends_a_hidden_wake_through_sendMessage` and
-`test_watch_extension_falls_back_to_sendUserMessage_when_sendMessage_fails`.
+`test_watch_extension_sends_a_hidden_wake_through_sendMessage`,
+`test_watch_extension_falls_back_to_sendUserMessage_when_sendMessage_fails`,
+`test_watch_extension_acks_each_presented_wake_once_so_it_never_repeats`,
+and `test_wake_drain_brief_ack_places_the_ack_marker_on_stderr`.
 
 ## In-process subagents as supervisor dispatch
 

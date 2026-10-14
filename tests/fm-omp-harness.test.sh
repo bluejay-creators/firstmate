@@ -1373,7 +1373,7 @@ mkdirSync(handoffDir, { recursive: true });
 const now = Date.now();
 const entry = { version: 1, token: `${process.pid}-${now}-1`, message: "signal: omp-e2e hidden wake", predecessorArmPid: "" };
 writeFileSync(`${handoffDir}/session-replacement-actionable.json`, JSON.stringify({ version: 2, pending: [entry] }) + "\n");
-writeFileSync(queue, `1\t1\tsignal\tfm-hidden-test\tsignal: omp-e2e hidden wake\n`);
+writeFileSync(queue, `${Math.floor(now / 1000)}\t1\tsignal\tfm-hidden-test\tsignal: omp-e2e hidden wake\n`);
 const handlers = new Map();
 const sent = [];
 const sentHidden = [];
@@ -1395,6 +1395,12 @@ if (wake.msg.display !== false) throw new Error(`display flag must be false: ${J
 if (!wake.opts || wake.opts.triggerTurn !== true) throw new Error(`triggerTurn must be true: ${JSON.stringify(wake)}`);
 if (wake.opts.deliverAs !== "followUp") throw new Error(`deliverAs must be followUp: ${JSON.stringify(wake)}`);
 if (!wake.msg.content.includes("fm-hidden-test")) throw new Error(`hidden wake must carry the drained row key: ${wake.msg.content}`);
+if (/WAKE_ACK_REQUIRED/.test(wake.msg.content)) throw new Error(`the ack contract stays an extension concern and never rides the wake text: ${wake.msg.content}`);
+// The extension acknowledged exactly the presented row as part of delivery,
+// so the durable queue is already empty - the live 2026-10-14 defect left
+// it queued and re-presented on every later wake.
+const drainedQueue = readFileSync(queue, "utf8").trim();
+if (drainedQueue !== "") throw new Error(`delivering the hidden wake must ack the presented row; queue holds: ${drainedQueue}`);
 // The matching message_start finishes the pending record. Custom messages
 // surface with role "custom" - observed against omp 18.10.4 by direct
 // instrumentation of the runner emit path.
@@ -1444,7 +1450,7 @@ mkdirSync(handoffDir, { recursive: true });
 const now = Date.now();
 const entry = { version: 1, token: `${process.pid}-${now}-1`, message: "signal: omp-e2e fallback wake", predecessorArmPid: "" };
 writeFileSync(`${handoffDir}/session-replacement-actionable.json`, JSON.stringify({ version: 2, pending: [entry] }) + "\n");
-writeFileSync(queue, `1\t1\tsignal\tfm-fallback-test\tsignal: omp-e2e fallback wake\n`);
+writeFileSync(queue, `${Math.floor(now / 1000)}\t1\tsignal\tfm-fallback-test\tsignal: omp-e2e fallback wake\n`);
 const handlers = new Map();
 const sent = [];
 const pi = {
@@ -1460,6 +1466,10 @@ for (let i = 0; i < 60 && sent.length < 1; i += 1) await new Promise((r) => setT
 if (sent.length !== 1) throw new Error(`expected the visible follow-up when sendMessage is missing; saw ${sent.length}`);
 if (!sent[0].m.includes("omp-e2e fallback wake")) throw new Error(`fallback wake text mismatch: ${sent[0].m.slice(0, 240)}`);
 if (sent[0].o?.deliverAs !== "followUp") throw new Error("fallback wake must be delivered as a follow-up");
+{
+  const drainedQueue = readFileSync(queue, "utf8").trim();
+  if (drainedQueue !== "") throw new Error(`the visible fallback must also ack the presented row; queue holds: ${drainedQueue}`);
+}
 await handlers.get("before_agent_start")({ type: "before_agent_start", prompt: sent[0].m }, {});
 await handlers.get("session_shutdown")({}, {});
 if (existsSync(`${handoffDir}/session-replacement-actionable.json`)) {
@@ -1523,6 +1533,141 @@ EOF
   [ -z "$out" ] || fail "omp watch stale TTL test printed output: $out"
   pass ".omp watch extension: an identical stale repeat inside the TTL is suppressed; a pane whose stale state changed re-delivers"
 }
+# The 2026-10-14 live repetition defect, pinned against the PRODUCTION
+# bin/fm-wake-drain.sh: its --brief --ack contract writes the presented rows
+# on stdout and the WAKE_ACK_REQUIRED marker on STDERR. The pre-fix parser
+# read only stdout, never saw the marker, never acked, and the very next
+# drain re-presented the same row beside anything new. Two consecutive
+# hidden wakes must carry once-delivered rows only, and the queue must be
+# empty afterwards.
+test_watch_extension_acks_each_presented_wake_once_so_it_never_repeats() {
+  local repo home log out status queue
+  repo="$TMP_ROOT/wake-repeat/repo"; home="$TMP_ROOT/wake-repeat/home"; log="$TMP_ROOT/wake-repeat/arm.log"
+  queue="$TMP_ROOT/wake-repeat/queue"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state" "$home/config"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+[ "${1:-}" = --handling-delivered ] && exit 0
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=gen-1\n' "$$"
+sleep 30
+SCRIPT
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  # Session 1: the wake drains, delivers hidden, consumes, and - with the
+  # ack fix - leaves the queue empty and no persisted handoff.
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_WAKE_QUEUE="$queue" \
+    FM_WATCH_REARM_RETRY_LIMIT=1 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+const home = process.env.FM_HOME;
+const queue = process.env.FM_WAKE_QUEUE;
+writeFileSync(`${home}/state/.lock`, `${process.pid}\n`);
+const handoffDir = `${home}/state/extensions/omp-primary-watch`;
+mkdirSync(handoffDir, { recursive: true });
+const now = Date.now();
+const entry = { version: 1, token: `${process.pid}-${now}-1`, message: "signal: first actionable", predecessorArmPid: "" };
+writeFileSync(`${handoffDir}/session-replacement-actionable.json`, JSON.stringify({ version: 2, pending: [entry] }) + "\n");
+writeFileSync(queue, `${Math.floor(now / 1000)}\t1\tsignal\tfm-repeat\tsignal: first actionable\n`);
+const handlers = new Map();
+const sent = [];
+const sentHidden = [];
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand() {},
+  registerTool() {},
+  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+  sendMessage(msg, opts) { sentHidden.push({ msg, opts }); return undefined; },
+};
+const mod = await import(pathToFileURL(process.env.EXT).href);
+mod.default(pi);
+await handlers.get("session_start")({ type: "session_start" }, {});
+for (let i = 0; i < 60 && sentHidden.length < 1; i += 1) await new Promise((r) => setTimeout(r, 100));
+if (sentHidden.length !== 1) throw new Error(`first wake must deliver hidden; got ${sentHidden.length} (visible: ${sent.length})`);
+if (!sentHidden[0].msg.content.includes("first actionable")) throw new Error(`first wake lost its row: ${sentHidden[0].msg.content}`);
+await handlers.get("message_start")({ type: "message_start", message: { role: "custom", customType: "fm.wake", content: sentHidden[0].msg.content, attribution: "agent", timestamp: Date.now() } }, {});
+await handlers.get("session_shutdown")({}, {});
+const drained = readFileSync(queue, "utf8").trim();
+if (drained !== "") throw new Error(`the first wake must ack its presented row; queue holds: ${drained}`);
+// A consumed wake leaves no persisted handoff for the replacement to
+// replay; the file either never wrote or holds an empty pending list.
+if (existsSync(`${handoffDir}/session-replacement-actionable.json`)) {
+  const stored = JSON.parse(readFileSync(`${handoffDir}/session-replacement-actionable.json`, "utf8"));
+  if (stored.pending.length !== 0) throw new Error(`the first wake must not survive its consumption in the handoff: ${stored.pending.length}`);
+}
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp watch repetition session 1: $out"
+
+  # Session 2 (the live defect replay): a REPLACEMENT session replays the
+  # arm's later close. With the ack fix its drain sees ONLY the new row; the
+  # pre-fix build left row 1 queued and re-presented it beside row 2.
+  printf '%s\t2\tsignal\tfm-repeat\tsignal: second actionable\n' "$(date +%s)" >> "$queue"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_WAKE_QUEUE="$queue" \
+    FM_WATCH_REARM_RETRY_LIMIT=1 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+const home = process.env.FM_HOME;
+const queue = process.env.FM_WAKE_QUEUE;
+writeFileSync(`${home}/state/.lock`, `${process.pid}\n`);
+const handoffDir = `${home}/state/extensions/omp-primary-watch`;
+mkdirSync(handoffDir, { recursive: true });
+const entry = { version: 1, token: `${process.pid}-${Date.now()}-2`, message: "signal: second actionable", predecessorArmPid: "" };
+writeFileSync(`${handoffDir}/session-replacement-actionable.json`, JSON.stringify({ version: 2, pending: [entry] }) + "\n");
+const handlers = new Map();
+const sent = [];
+const sentHidden = [];
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand() {},
+  registerTool() {},
+  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+  sendMessage(msg, opts) { sentHidden.push({ msg, opts }); return undefined; },
+};
+const mod = await import(pathToFileURL(process.env.EXT).href);
+mod.default(pi);
+await handlers.get("session_start")({ type: "session_start" }, {});
+for (let i = 0; i < 60 && sentHidden.length < 1; i += 1) await new Promise((r) => setTimeout(r, 100));
+if (sentHidden.length !== 1) throw new Error(`the replacement wake must deliver hidden; got ${sentHidden.length} (visible: ${sent.length})`);
+const wakeText = sentHidden[0].msg.content;
+if (!wakeText.includes("second actionable")) throw new Error(`second wake lost its own row: ${wakeText}`);
+if (wakeText.includes("first actionable")) throw new Error(`REPETITION: the replacement wake re-carried the already-delivered row: ${wakeText}`);
+const drained = readFileSync(queue, "utf8").trim();
+if (drained !== "") throw new Error(`the replacement wake must ack its presented row too; queue holds: ${drained}`);
+await handlers.get("message_start")({ type: "message_start", message: { role: "custom", customType: "fm.wake", content: wakeText, attribution: "agent", timestamp: Date.now() } }, {});
+await handlers.get("session_shutdown")({}, {});
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp watch repetition session 2: $out"
+  [ -z "$out" ] || fail "omp watch repetition test printed output: $out"
+  pass ".omp watch extension: consecutive wakes carry only not-yet-delivered rows and the queue leaves no residue"
+}
+test_watch_extension_acks_each_presented_wake_once_so_it_never_repeats
+
+# The production drain contract the extension now parses: --brief --ack
+# presents the rows on STDOUT and the WAKE_ACK_REQUIRED marker on STDERR.
+# Any refactor that moves the marker back to stdout would silently
+# reactivate the historical stdout-only misreading, so pin the channel
+# against the real script through its executable interface.
+test_wake_drain_brief_ack_places_the_ack_marker_on_stderr() {
+  local home drain_out drain_err
+  home="$TMP_ROOT/ack-contract/home"
+  mkdir -p "$home/state" "$home/config"
+  printf '%s\t9\tsignal\tfm-ack\tsignal: ack me once\n' "$(date +%s)" > "$home/state/.wake-queue"
+  drain_out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-wake-drain.sh" --brief --ack 2>/dev/null </dev/null || true)
+  drain_err=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-wake-drain.sh" --brief --ack 2>&1 >/dev/null </dev/null || true)
+  printf '%s' "$drain_out" | grep -q "ack me once" || fail "the drain must present the row on stdout: $drain_out"
+  printf '%s' "$drain_out" | grep -q "WAKE_ACK_REQUIRED" && fail "the ack marker must not ride stdout: $drain_out"
+  printf '%s' "$drain_err" | grep -q "WAKE_ACK_REQUIRED" || fail "the ack marker must ride stderr: $drain_err"
+  pass "fm-wake-drain --brief --ack presents rows on stdout and the ack marker on stderr"
+}
+test_wake_drain_brief_ack_places_the_ack_marker_on_stderr
+
 
 test_detection_anchored_name_and_marker_precedence
 test_lock_identity_and_liveness_classification

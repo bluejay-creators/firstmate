@@ -105,7 +105,11 @@ type ExtensionAPI = {
   sendUserMessage: (content: string, options?: { deliverAs?: string }) => unknown;
   // pi.sendMessage delivers a hidden custom message; observed on omp 18.10.4:
   // customType fm.wake + display:false never renders, and with triggerTurn
-  // and deliverAs 'followUp' the same message opens its own turn.
+  // and deliverAs 'followUp' the same message opens its own turn. omp's host
+  // call is VOID (packages/coding-agent/src/modes/runtime-init.ts): it starts
+  // the send, catches its own errors, and returns nothing, so a failed send
+  // never rejects the caller's await - the extension reports delivery once
+  // the call returns, exactly as it already does for sendUserMessage.
   sendMessage?: (message: { customType: string; content: string; display: boolean }, options?: { triggerTurn?: boolean; deliverAs?: string }) => unknown;
   registerCommand?: (name: string, command: { description: string; handler: (args: string, ctx: unknown) => Promise<void> | void }) => void;
   registerTool?: (tool: Record<string, unknown>) => void;
@@ -956,13 +960,20 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
   return `${absorbed.length} routine absorbed: ${previews}${extra}`;
 }
   // Run bin/fm-wake-drain.sh --brief --ack and return the one-line summary it
-  // prints, or null when the drain fails or the queue is empty. A routine
-  // drain acks itself; an actionable one prints a WAKE_ACK_REQUIRED line the
-  // extension threads into the wake message so the primary knows its ack
-  // path from the banner. The drain owns the queue read; the extension only
-  // ever runs it immediately before sending a wake message, so concurrent
-  // rows are still serialized through the queue lock.
-  function drainWakeQueueBriefAck(owner: SessionGeneration): { text: string; ackPending: boolean } | null {
+  // presents, or null when the drain fails or there is nothing to present.
+  // A routine drain acks itself (its trailing marker is "(acked)"); an
+  // actionable drain prints a WAKE_ACK_REQUIRED line naming the exact
+  // --ack-through cutoff and recovery generation for what it presented.
+  // bin/fm-wake-drain.sh owns the contract and writes that line to STDERR
+  // while the rows ride stdout, so both streams are scanned: a parser that
+  // reads only stdout never sees the marker, delivers the rows without
+  // their ack contract, and leaves them queued to repeat on the next wake
+  // (the 2026-10-14 live defect). The drain owns the queue read; the
+  // extension only ever runs it immediately before sending a wake message,
+  // so concurrent rows are still serialized through the queue lock.
+  function drainWakeQueueBriefAck(
+    owner: SessionGeneration,
+  ): { text: string; ackPending: boolean; ackThrough: string | null; ackGeneration: string | null } | null {
     const drain = spawnSync("bash", [fmWakeDrainScript, "--brief", "--ack"], {
       cwd: fmRoot,
       encoding: "utf8",
@@ -973,22 +984,72 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
       surfaceFailure(owner, `watcher: FAILED - bin/fm-wake-drain.sh --brief --ack exited ${drain.status}\n${wakeTruncate(detail, 200)}`);
       return null;
     }
-    const stdout = (drain.stdout || "").trim();
-    if (!stdout) return null;
-    // The --brief body is one line per queued wake. The trailing marker is
-    // either "(acked)" (routine path, drain already acked) or a
-    // WAKE_ACK_REQUIRED: line the agent uses to ack after it handles. We keep
-    // only the wake rows plus the ack contract in the hidden message.
-    const lines = stdout.split(/\r?\n/);
-    const ackLine = lines.find((line) => line === "(acked)" || line.startsWith("WAKE_ACK_REQUIRED:"));
-    const rows = ackLine ? lines.slice(0, -1) : lines;
-    if (rows.length === 0) return null;
+    // Rows on stdout, ack marker on stderr; empty lines never survive either
+    // trim, and a bounded lock skip ("WAKE DRAIN SKIPPED") just keeps the
+    // queue for the next wake rather than presenting a half-drained set.
+    const combined = `${(drain.stdout || "").trim()}\n${(drain.stderr || "").trim()}`.trim();
+    const lines = combined.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line !== "");
+    const markerIndex = lines.findIndex((line) => line === "(acked)" || line.startsWith("WAKE_ACK_REQUIRED:"));
+    const ackLine = markerIndex >= 0 ? lines[markerIndex] : undefined;
+    const rows = ackLine ? lines.slice(0, markerIndex) : lines;
+    if (rows.length === 0) {
+      if (!ackLine) return null;
+      // A marker with no rows (the empty-queue recovery notice) carries no
+      // wake rows for main; treat it as nothing presented rather than waking
+      // over an empty summary.
+      return null;
+    }
     const summary = rows.join(" · ");
     const ackPending = Boolean(ackLine?.startsWith("WAKE_ACK_REQUIRED:"));
-    const text = ackPending && ackLine
-      ? `${summary}\n${ackLine}`
-      : summary;
-    return { text, ackPending };
+    let ackThrough: string | null = null;
+    let ackGeneration: string | null = null;
+    if (ackPending && ackLine) {
+      const match = /--ack-through\s+(\d+)\s+--recovery-generation\s+(\S+)/.exec(ackLine);
+      if (match) {
+        ackThrough = match[1];
+        ackGeneration = match[2];
+      }
+    }
+    // Only the rows ride the wake text; the ack contract stays an extension
+    // concern, settled in-extension by ackPresentedWake below.
+    return { text: summary, ackPending, ackThrough, ackGeneration };
+  }
+
+  // Acknowledge exactly what a --brief --ack drain presented: run its named
+  // --ack-through cutoff under the queue lock so the presented rows leave
+  // the durable queue and no later drain re-presents them. The cutoff the
+  // drain printed was computed against the rows IT presented, and a row
+  // that arrived after presentation sits above the cutoff and is never
+  // consumed (claim_main_rows_locked claims only unreserved rows at or
+  // below it), so acking here is safe against the interleave where a newer
+  // wake landed between presentation and ack. A failed or absent ack keeps
+  // the rows queued and reported, never silently swallowed; the next wake
+  // then re-presents them, which is the loud failure, not the hidden one.
+  function ackPresentedWake(
+    owner: SessionGeneration,
+    drained: { ackPending: boolean; ackThrough: string | null; ackGeneration: string | null },
+  ): void {
+    if (!drained.ackPending || !drained.ackThrough || !drained.ackGeneration) return;
+    let ack;
+    try {
+      ack = spawnSync(
+        "bash",
+        [fmWakeDrainScript, "--ack-through", drained.ackThrough, "--recovery-generation", drained.ackGeneration],
+        {
+          cwd: fmRoot,
+          encoding: "utf8",
+          env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot, FM_WAKE_QUEUE: extensionWakeQueuePath() },
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      surfaceFailure(owner, `watcher: FAILED - the presented wake could not be acknowledged\n${wakeTruncate(message, 200)}`);
+      return;
+    }
+    if (ack.status !== 0) {
+      const detail = ((ack.stderr || "") + "\n" + (ack.stdout || "")).trim() || "no output";
+      surfaceFailure(owner, `watcher: FAILED - the presented wake could not be acknowledged (exit ${ack.status})\n${wakeTruncate(detail, 200)}`);
+    }
   }
 
   async function sendWake(
@@ -1035,9 +1096,14 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     // Hidden wake path: drain the queue first so the model receives the
     // already-digested one-line summary in a hidden custom message the chat
     // never renders; the turn opens on the custom message itself through
-    // triggerTurn:true. Fall back to today's visible sendUserMessage banner
-    // when the drain fails, the outgoing hidden send is rejected, or the
-    // sendMessage API is missing in this omp build.
+    // triggerTurn:true. The extension acknowledges exactly the presented
+    // rows as part of delivery (ackPresentedWake), so each wake carries
+    // only rows not yet delivered and the durable queue never re-presents
+    // them; an acknowledgement failure keeps the rows queued and surfaces
+    // loudly rather than swallowing them. Fall back to today's visible
+    // sendUserMessage banner when the drain fails, the outgoing hidden send
+    // is rejected before omp accepts it, or the sendMessage API is missing
+    // in this omp build.
     const drained = drainWakeQueueBriefAck(owner);
     if (drained && drained.text && pi.sendMessage) {
       // Re-key each pending record under the drained summary so a matching
@@ -1047,6 +1113,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
       for (const item of items) owner.unconsumedWakes.set(item.token, { content: hiddenContent, pending: item });
       try {
         await pi.sendMessage({ customType: "fm.wake", content: hiddenContent, display: false }, { triggerTurn: true, deliverAs: "followUp" });
+        ackPresentedWake(owner, drained);
         return generationIsLive(owner);
       } catch {
         // Re-key to the composite so a visible-fallback consumption still
@@ -1057,6 +1124,9 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     if (items.length === 1) {
       try {
         await pi.sendUserMessage(content, { deliverAs: "followUp" });
+        // The visible fallback still carries the rows the drain presented,
+        // so acknowledge the same presentation set it delivered.
+        if (drained) ackPresentedWake(owner, drained);
       } catch (error) {
         for (const item of items) owner.unconsumedWakes.delete(item.token);
         throw error;
@@ -1065,6 +1135,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     }
     try {
       await pi.sendUserMessage(content, { deliverAs: "followUp" });
+      if (drained) ackPresentedWake(owner, drained);
     } catch (error) {
       for (const item of items) owner.unconsumedWakes.delete(item.token);
       throw error;
