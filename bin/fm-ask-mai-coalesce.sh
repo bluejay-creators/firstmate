@@ -27,8 +27,11 @@
 # (state/.fm-quietsince-<task>) to its current size, so a second wake never
 # re-reads the same absorbed span.
 #
-# Emits one JSON object to stdout {"deliver":[{kind,key,payload}],
-# "absorbed":[{kind,key,summary}]}; the caller decides fan-out/ack. Never
+# Emits one JSON object to stdout {"deliver":[{kind,key,payload,seq}],
+# "absorbed":[{kind,key,summary,seq}]}; the caller decides fan-out/ack.
+# Absorbed rows carry their queue sequence so the caller can acknowledge
+# them exactly (config/wake-routine-mode silent absorption, documented in
+# docs/configuration.md "Routine wake absorption"). Never
 # echoes parse-by-regex lines, never waits on the caller, and never touches
 # outside state except the bounded triage log (state/triage.log) and the
 # quiet cursor files state/.fm-quietsince-*.
@@ -43,6 +46,9 @@
 # Wake-entry shape: bin/fm-wake-lib.sh. Status-verb semantics:
 # bin/fm-classify-lib.sh. Triage-log naming convention: bin/fm-watch.sh's
 # triage_log.
+# Routine absorption modes (config/wake-routine-mode) and the periodic
+# routine digest (config/wake-routine-digest-mins) are documented in
+# docs/configuration.md "Routine wake absorption".
 set -euo pipefail
 
 home=${1:?"usage: fm-ask-mai-coalesce.sh <home> <queue-file> <count>"}
@@ -200,11 +206,11 @@ while IFS=$'\t' read -r _epoch _seq kind key payload; do
       case "$size" in ''|*[!0-9]*) ;; *) quiet_cursor_write "$task" "$size" ;; esac
     fi
     absorbed_count=$((absorbed_count + 1))
-    jq -nc --arg k "$kind" --arg key "$task" --arg s "$(summary_of "$cause")" \
-      '{kind:$k,key:$key,summary:$s}' >> "$absorbed_tmp"
+    jq -nc --arg k "$kind" --arg key "$task" --arg s "$(summary_of "$cause")" --arg seq "$_seq" \
+      '{kind:$k,key:$key,summary:$s,seq:($seq|tonumber)}' >> "$absorbed_tmp"
   else
-    jq -nc --arg k "$kind" --arg key "$task" --arg p "$cause" \
-      '{kind:$k,key:$key,payload:$p}' >> "$deliver_tmp"
+    jq -nc --arg k "$kind" --arg key "$task" --arg p "$cause" --arg seq "$_seq" \
+      '{kind:$k,key:$key,payload:$p,seq:($seq|tonumber)}' >> "$deliver_tmp"
   fi
 done <<EOF
 $entries

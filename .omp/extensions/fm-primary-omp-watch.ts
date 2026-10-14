@@ -72,7 +72,15 @@
 // replacement handoff.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // typebox resolves inside omp's extension loader (verified, omp 18.1.11); the
@@ -196,6 +204,7 @@ const armScript = `${fmRoot}/bin/fm-watch-arm.sh`;
 const hostScript = `${fmRoot}/bin/fm-supervision-host.sh`;
 const marker = `${state}/.omp-watch-extension-loaded`;
 const fmQuietCoalesceScript = `${fmRoot}/bin/fm-ask-mai-coalesce.sh`;
+const fmWakeDrainScript = `${fmRoot}/bin/fm-wake-drain.sh`;
 const handoffDir = `${state}/extensions/omp-primary-watch`;
 const actionableHandoff = `${handoffDir}/session-replacement-actionable.json`;
 const extensionVersion = `sha256:${createHash("sha256").update(readFileSync(extensionFile)).digest("hex")}`;
@@ -799,6 +808,100 @@ export default function (pi: ExtensionAPI) {
   let generation = createGeneration();
   activateGeneration(generation);
 
+  // Routine absorption mode (docs/configuration.md "Routine wake absorption"
+  // owns the contract). `banner` (the default, and every unrecognized value)
+  // is the #11 behavior: one informational banner for absorbed routine rows.
+  // `silent` absorbs those rows with no message to the primary at all - the
+  // queue rows are deleted under the wake queue lock through
+  // bin/fm-wake-drain.sh --delete-sequences and the only trace is the ledger
+  // and triage log - while `off` disables absorption. Read fresh each
+  // delivery so a config change takes effect on the next wake.
+  type WakeRoutineMode = "banner" | "silent" | "off";
+
+  function wakeRoutineMode(): WakeRoutineMode {
+    let value = "";
+    try {
+      value = readFileSync(`${config}/wake-routine-mode`, "utf8").trim();
+    } catch {
+      return "banner";
+    }
+    if (value === "silent" || value === "off") return value;
+    return "banner";
+  }
+
+  // Periodic visibility for silent absorption (same config owner). Default
+  // 30 minutes; 0 disables the digest. Malformed values fall back to the
+  // default.
+  function wakeRoutineDigestMins(): number {
+    try {
+      const raw = readFileSync(`${config}/wake-routine-digest-mins`, "utf8").trim();
+      if (/^[0-9]+$/.test(raw)) return Number(raw);
+    } catch {
+      // Absent file: default.
+    }
+    return 30;
+  }
+
+  // Epoch the last issued digest covered. In-memory: sessions are long-lived
+  // supervision primaries, and the rate-limit contract is at-most-every-N
+  // (docs/configuration.md), so a restart may issue extra digests (never
+  // swallow more).
+  let lastRoutineDigestAt = 0;
+
+  // Silent-absorption ledger. One tab-separated line per absorbed wake in
+  // state/.fm-routine-absorbed.tsv: epoch, task key, summary. The leading
+  // line's epoch is the digest window's "since". Cleared after each sent
+  // digest, so the file holds exactly the rows the next digest will count.
+  const routineAbsorbedLog = `${state}/.fm-routine-absorbed.tsv`;
+
+  function recordSilentAbsorption(absorbed: WakeCoalesceRow[]): { count: number; sinceEpoch: number; last: string } {
+    let sinceEpoch = 0;
+    let count = 0;
+    try {
+      if (existsSync(routineAbsorbedLog)) {
+        const lines = readFileSync(routineAbsorbedLog, "utf8").split("\n").filter((line) => line !== "");
+        count = lines.length;
+        const firstTab = lines.length > 0 ? lines[0].indexOf("\t") : -1;
+        sinceEpoch = firstTab > 0 ? Number(lines[0].slice(0, firstTab)) : 0;
+      }
+    } catch {
+      count = 0;
+    }
+    let last = "";
+    for (const row of absorbed) {
+      try {
+        const epoch = Math.floor(Date.now() / 1000);
+        appendFileSync(routineAbsorbedLog, `${epoch}\t${row.key}\t${row.summary || row.kind}\n`);
+        if (count === 0) sinceEpoch = epoch;
+        count += 1;
+      } catch {
+        // Losing a ledger line only degrades one digest entry.
+      }
+      last = `${row.key}: ${row.summary || row.kind}`;
+    }
+    return { count, sinceEpoch, last };
+  }
+
+  // Digest line shape:
+  //   ⚓ digest · <N> routine absorbed since HH:MM (task: last status…)
+  function routineDueDigestText(record: { count: number; sinceEpoch: number; last: string }): string {
+    const due = new Date(record.sinceEpoch * 1000).toTimeString().slice(0, 5);
+    const summary = record.last.length > 50 ? `${record.last.slice(0, 50)}…` : record.last;
+    return `⚓ digest · ${record.count} routine absorbed since ${due} (${summary})`;
+  }
+
+
+  // Cleared after a digest is successfully sent so the "since" window and
+  // count restate exactly what the last digest covered.
+  function clearRoutineAbsorbedLog(): void {
+    try {
+      unlinkSync(routineAbsorbedLog);
+    } catch {
+      // A cleared ledger is courtesy; a leftover line only widens the next
+      // window's count.
+    }
+  }
+
 // Wake text contract. A compact one-line banner replaces the historical
 // multi-line "Run bin/fm-wake-drain.sh first and handle the queued wake..."
 // body. The envelope kind stays "watcher" so fm-operational-input.sh
@@ -969,7 +1072,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
   // Routine rows are folded into one informational banner. See
   // bin/fm-ask-mai-coalesce.sh's header for the classification contract;
   // this site owns only the delivery decision.
-  type WakeCoalesceRow = { kind: string; key: string; payload?: string; summary?: string };
+  type WakeCoalesceRow = { kind: string; key: string; payload?: string; summary?: string; seq?: number };
 
   // Delivery triage gate: called inside deliverActionableWake before a wake
   // becomes follow-up text. Fail-open on every error shape; deterministic
@@ -979,6 +1082,9 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     | { action: "deliver"; absorbedNotice?: WakeCoalesceRow[] }
     | { action: "absorbed"; absorbedEntries: WakeCoalesceRow[] };
 
+  // Numeric seq extraction uses Number(...) directly so row filtering stays
+  // readable; a coalesce row carrying a usable numeric seq is acknowledged by
+  // that seq, anything else falls back to a coalesce-only parse.
   function rowsFromCoalesce(value: unknown): WakeCoalesceRow[] {
     if (!Array.isArray(value)) return [];
     return value.filter((entry): entry is WakeCoalesceRow => {
@@ -1026,35 +1132,103 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     return { action: "deliver" };
   }
 
+  // Retire the pending items of an absorbed routine wake without sending a
+  // message - the banner body's finish block and silent mode's no-digest
+  // path do exactly the same work.
+  function finishAbsorbedItems(owner: SessionGeneration, items: PendingActionableClose[]): void {
+    for (const item of items) {
+      item.delivered = true;
+      try {
+        finishPendingActionable(owner, item);
+      } catch (error) {
+        surfaceCleanupFailure(owner, error);
+      }
+    }
+  }
+
+  // The silent queue edit is bin/fm-wake-drain.sh --delete-sequences: only
+  // the queue's owner script deletes rows, under its own lock and row
+  // validation, so a contract change there lands here through the same
+  // tests/fm-quiet-wakes.test.sh and tests/fm-wake-queue.test.sh gates.
+  // Absorb routine queue rows with no message to the primary: each row's
+  // exact queue sequence is deleted under the wake queue lock and every
+  // pending item retires. The ledger record, the rate-limit check, and the
+  // digest send happen only after the rows are absorbed, and the digest's
+  // ledger clear follows its successful send, so a failed delete or a failed
+  // send leaves the window intact rather than swallowing it. Returns true
+  // when the silent absorption (and, where due, the digest send) took over
+  // this turn; false when the caller must deliver instead.
+  async function absorbRoutineSilently(
+    owner: SessionGeneration,
+    items: PendingActionableClose[],
+    absorbedEntries: WakeCoalesceRow[],
+  ): Promise<boolean> {
+    const seqs: number[] = [];
+    for (const row of absorbedEntries) {
+      const seq = row.seq;
+      if (typeof seq !== "number" || !Number.isFinite(seq) || seq <= 0) return false;
+      seqs.push(Math.floor(seq));
+    }
+    if (seqs.length === 0) return false;
+    const del = spawnSync("bash", [fmWakeDrainScript, "--delete-sequences", seqs.join(",")], {
+      cwd: fmRoot,
+      encoding: "utf8",
+      env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot },
+    });
+    if (del.status !== 0) return false;
+    finishAbsorbedItems(owner, items);
+    const record = recordSilentAbsorption(absorbedEntries);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const mins = wakeRoutineDigestMins();
+    if (mins > 0 && record.last !== "" && (lastRoutineDigestAt === 0 || nowSec - lastRoutineDigestAt >= mins * 60)) {
+      try {
+        await sendWake(owner, routineDueDigestText(record), undefined);
+        lastRoutineDigestAt = nowSec;
+        clearRoutineAbsorbedLog();
+      } catch {
+        // The rows are absorbed and ledgered; a lost digest only defers
+        // visibility to the next due window.
+      }
+    }
+    return true;
+  }
+
   async function deliverActionablesWithTriage(
     owner: SessionGeneration,
     message: string,
     items: PendingActionableClose[],
   ): Promise<boolean> {
+    const mode = wakeRoutineMode();
     const decision = deliveryDecision();
     if (decision.action === "absorbed") {
-      // Routine. Finish every pending item so the actionables' episodes
-      // retire, then send ONE informational banner with no pending token -
-      // the agent reads the absorbed count, runs --brief, and carries on.
-      for (const item of items) {
-        item.delivered = true;
-        try {
-          finishPendingActionable(owner, item);
-        } catch (error) {
-          surfaceCleanupFailure(owner, error);
-        }
+      if (mode === "silent" && await absorbRoutineSilently(owner, items, decision.absorbedEntries)) {
+        return true;
       }
+      // Routine banner: finish every pending item so the actionables'
+      // episodes retire, then send ONE informational banner with no pending
+      // token - the agent reads the absorbed count, runs --brief, and
+      // carries on.
+      finishAbsorbedItems(owner, items);
       return await sendWake(owner, formatAbsorbedWakeSummary(decision.absorbedEntries), undefined);
     }
-    // The wake still needs its turn. If a sibling routine row was absorbed
-    // in the same call, attach its one-line banner so the agent has the
-    // full picture.
+    // The wake still needs its turn. In silent mode a sibling routine row
+    // absorbed in the same call adds no one-line banner: its rows delete
+    // silently through the same absorber and the digest may still fire when
+    // due, so only the deliverable wake itself rides the envelope. A failed
+    // silent delete falls through to the banner path so the routine sibling
+    // still surfaces through its one-line banner.
+    if (mode === "silent" && decision.absorbedNotice && decision.absorbedNotice.length > 0) {
+      if (await absorbRoutineSilently(owner, [], decision.absorbedNotice)) {
+        return await sendBatchedWake(owner, message, items);
+      }
+    }
     const suffix = decision.absorbedNotice
       ? `\n\n(${formatAbsorbedWakeSummary(decision.absorbedNotice)})`
       : "";
     // No supervision branch on omp: every actionable wake goes to main.
     return await sendBatchedWake(owner, `${message}${suffix}`, items);
   }
+
 
   function surfaceFailure(owner: SessionGeneration, message: string): void {
     void sendWake(owner, message).catch(() => {

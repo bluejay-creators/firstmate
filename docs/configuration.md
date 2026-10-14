@@ -610,6 +610,19 @@ The bound is required rather than cosmetic because churn and pane staleness read
 The flag is a home-local supervision-noise preference and is not inherited by secondmate homes, which run their own crew mix.
 [`architecture.md`](architecture.md) owns the triage contract and `bin/fm-watch.sh`'s `signal_turnend_panes_churned` owns the exact evidence and fail-closed boundaries.
 
+## Routine wake absorption (config/wake-routine-mode, config/wake-routine-digest-mins)
+
+The omp primary extension classifies queued wake rows as routine through `bin/fm-ask-mai-coalesce.sh` (PR #11's pre-delivery triage: heartbeat wakes, `signal:` rows whose newest trailing status line is a bare `working:` progress note or a bare `paused:` declared wait, and the MAI `absorb` verdicts that classifier takes).
+The optional local, gitignored `config/wake-routine-mode` file chooses what a fully routine wake-worth does next; the extension re-reads both files on every delivery so a change applies to the next wake without a restart.
+An absent, empty, or unrecognized value is `banner`, the current behavior: one informational banner names the absorbed count.
+`silent` absorbs those rows and acknowledges them in the durable wake queue without any message to the primary at all (their only trace is the triage log and the silent-absorption ledger described below); `off` keeps the classification but never absorbs.
+
+The routine set is exactly what the classifier classifies routine; it never silences needs-decision, blocked, failed, done/PR-ready/merged, captain/inbox/credential work, the first stuck-or-dead report of a pane, watcher failures, or any MAI error, timeout, or uncertain answer, all of which stay on the delivery path the classifier already keeps open.
+Silent absorption deletes only the exact queue sequences the classifier emitted, through `bin/fm-wake-drain.sh --delete-sequences`, and falls back to the banner path whenever a row lacks a usable sequence or the delete fails, so silence never swallows a lost row.
+
+Because silence is invisible by design, `config/wake-routine-digest-mins` keeps a periodic one-line record of what was absorbed: at most one `⚓ digest · <N> routine absorbed since HH:MM (<task>: <last status>…)` line per N minutes (default 30 with the file absent or malformed, `0` to disable), counting absorbed rows since the last digest and naming the most recent one.
+The count and window come from the silent-absorption ledger `state/.fm-routine-absorbed.tsv`, which is cleared after each digest and therefore lists exactly the rows the next digest will cover.
+
 ## MAI routing (config/mai-routing)
 
 The optional local, gitignored `config/mai-routing` presence flag opts this home into routing bounded mechanical classifications through self-hosted MAI-Pro on the F2 stage gateway rather than spending the primary thread on them.

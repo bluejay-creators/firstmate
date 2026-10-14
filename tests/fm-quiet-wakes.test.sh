@@ -154,6 +154,132 @@ test_compact_protocol_call_names_brief_mode() {
     "omp protocol must name --brief --ack as the default wake-handling call"
   pass "omp supervision protocol names --brief --ack"
 }
+test_drain_delete_sequences_exact() {
+  local home dir RC
+  dir=$TMP_ROOT/delete-exact; mkdir -p "$dir"
+  home=$(make_home delete-exact)
+  seed_queue_row "$home" 1 heartbeat "" "heartbeat cadence"
+  seed_queue_row "$home" 2 signal task-x.status "signal: task-x.status"
+  seed_queue_row "$home" 3 stale "win1" "stale: win1 idle"
+  FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$DRAIN" --delete-sequences 2 >"$dir/stdout" 2>"$dir/stderr"
+  RC=$?
+  expect_code 0 "$RC" "--delete-sequences must succeed"
+  [ -z "$(cat "$dir/stdout" "$dir/stderr")" ] || fail "exact-delete stays silent: $(cat "$dir/stdout" "$dir/stderr")"
+  if printf '%s' "$(cat "$home/state/.wake-queue")" | grep -q $'\t2\t'; then
+    fail "sequence 2 must be deleted"
+  fi
+  printf '%s' "$(cat "$home/state/.wake-queue")" | grep -q $'\t1\t' || fail "sequence 1 must remain"
+  printf '%s' "$(cat "$home/state/.wake-queue")" | grep -q $'\t3\t' || fail "sequence 3 must remain (only exact seqs delete)"
+  pass "--delete-sequences deletes exactly the named rows under the queue lock"
+}
+
+test_drain_delete_sequences_refuses_malformed() {
+  local home RC
+  home=$(make_home delete-malformed)
+  seed_queue_row "$home" 1 heartbeat "" "heartbeat cadence"
+  printf 'not-a-wake-row\n' >> "$home/state/.wake-queue"
+  FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$DRAIN" --delete-sequences 1 >/dev/null 2>&1
+  RC=$?
+  expect_code 1 "$RC" "a malformed queue fails closed"
+  printf '%s' "$(cat "$home/state/.wake-queue")" | grep -q 'not-a-wake-row' || fail "malformed queue preserved"
+  printf '%s' "$(cat "$home/state/.wake-queue")" | grep -q $'\t1\t' || fail "valid row preserved too"
+  pass "--delete-sequences refuses a structurally broken queue and keeps every row"
+}
+
+test_drain_delete_sequences_rejects_bad_seq() {
+  local home RC
+  home=$(make_home delete-bad-seq)
+  seed_queue_row "$home" 1 heartbeat "" "heartbeat cadence"
+  FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$DRAIN" --delete-sequences nope >/dev/null 2>&1
+  RC=$?
+  expect_code 2 "$RC" "a non-numeric sequence is a usage error"
+  printf '%s' "$(cat "$home/state/.wake-queue")" | grep -q $'\t1\t' || fail "nothing was deleted"
+  pass "--delete-sequences rejects non-numeric sequences as usage"
+}
+
+install_silent_fixture() { # <repo> - production extension + its bin/ tools
+  local repo=$1
+  mkdir -p "$repo"
+  cp -R "$ROOT/bin" "$repo/bin"
+  mkdir -p "$repo/.omp/extensions" "$repo/.pi/extensions/lib" "$repo/node_modules/typebox"
+  cp "$ROOT/.omp/extensions/fm-primary-omp-watch.ts" "$repo/.omp/extensions/"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" "$repo/.pi/extensions/lib/"
+  printf '{"name":"typebox","type":"module","exports":"./index.js"}\n' > "$repo/node_modules/typebox/package.json"
+  printf 'export const Type = { Object(p){return {type:"object",properties:p}} };\n' > "$repo/node_modules/typebox/index.js"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = --handling-delivered ] && exit 0
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=gen-1\n' "$$"
+sleep 30
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+}
+
+# Drive the production extension through a session_start replay carrying one
+# pending heartbeat actionable whose queue row classifies routine. $1 = mode
+# (silent|banner), $2 = expected literal in the ONE sent message.
+run_routine_wake_fixture() { # <name> <mode> <expected-substring>
+  local name=$1 mode=$2 expected=$3 t repo home queue out RC body
+  t=$TMP_ROOT/routine-$name; mkdir -p "$t"
+  home=$t/home; mkdir -p "$home/state" "$home/config"
+  [ "$mode" = banner ] || printf '%s\n' "$mode" > "$home/config/wake-routine-mode"
+  repo=$t/repo
+  install_silent_fixture "$repo"
+  queue=$home/state/.wake-queue
+  printf '%s\t1\theartbeat\theartbeat-key\theartbeat cadence\n' "$(date +%s)" > "$queue"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_STATE_OVERRIDE="$home/state" \
+    FM_WATCH_REARM_RETRY_LIMIT=1 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module <<'NODEJS'
+import { pathToFileURL } from "node:url";
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+const home = process.env.FM_HOME;
+const state = process.env.FM_STATE_OVERRIDE;
+writeFileSync(`${state}/.lock`, `${process.pid}\n`);
+const handoffDir = `${state}/extensions/omp-primary-watch`;
+mkdirSync(handoffDir, { recursive: true });
+const now = Date.now();
+const entry = { version: 1, token: `${process.pid}-${now}-1`, message: "heartbeat: cadence", predecessorArmPid: "", originPid: `${process.pid}`, originAt: now };
+writeFileSync(`${handoffDir}/session-replacement-actionable.json`, JSON.stringify({ version: 2, pending: [entry] }) + "\n");
+const handlers = new Map();
+const sent = [];
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand() {},
+  registerTool() {},
+  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+};
+await import(pathToFileURL(process.env.EXT).href).then((mod) => mod.default(pi));
+await handlers.get("session_start")({ type: "session_start" }, {});
+for (let i = 0; i < 50 && sent.length < 1; i += 1) await new Promise((r) => setTimeout(r, 100));
+const queue = readFileSync(`${state}/.wake-queue`, "utf8");
+console.log(JSON.stringify({ sent: sent.map((s) => s.m), queue }));
+NODEJS
+)
+  RC=$?
+  expect_code 0 "$RC" "routine wake fixture $name must run: $out"
+  body=$(printf '%s' "$out" | head -1)
+  printf '%s' "$body" | grep -q "$expected" || fail "routine wake $name: expected '$expected' in $body"
+  printf '%s' "$body"
+}
+
+test_silent_mode_absorbs_with_one_digest_line() {
+  local body
+  body=$(run_routine_wake_fixture silent silent "⚓ digest")
+  printf '%s' "$body" | grep -q '"queue":""' || fail "silent absorption must delete the queue row: $body"
+  pass "silent mode: one digest line, queue row acked, no routine banner"
+}
+
+test_banner_mode_keeps_current_number_sign11_behavior() {
+  local body
+  body=$(run_routine_wake_fixture banner banner "1 routine absorbed")
+  printf '%s' "$body" | grep -q 'heartbeat-key' || fail "banner keeps the queue row for the --brief drain: $body"
+  printf '%s' "$body" | grep -q '⚓ digest' && fail "banner must not emit a digest: $body"
+  pass "banner mode (default): informational banner, queue rows retained for the agent drain"
+}
+
 
 # runner
 
