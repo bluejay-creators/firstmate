@@ -620,12 +620,20 @@ fm_lock_remove_path() {
   rmdir "$lockdir" 2>/dev/null
 }
 
+# fm_lock_mid_acquire_is_fresh <lockdir> <pid>: true when the lock dir has no
+# pid yet and its mtime is younger than the mid-acquire freshness floor. That
+# floor protects an acquirer that is still publishing its pid file; it defaults
+# to max(2, FM_LOCK_STALE_AFTER) and is overridable with
+# FM_LOCK_MID_ACQUIRE_FRESH_SECS for test fixtures (a floor of 0 restores the
+# bare FM_LOCK_STALE_AFTER window). Production keeps the default.
 fm_lock_mid_acquire_is_fresh() {
-  local lockdir=$1 pid=$2 mid_acquire_stale
+  local lockdir=$1 pid=$2 mid_acquire_stale floor
   case "$pid" in
     ''|*[!0-9]*)
       mid_acquire_stale=$FM_LOCK_STALE_AFTER
-      [ "$mid_acquire_stale" -lt 2 ] && mid_acquire_stale=2
+      floor=${FM_LOCK_MID_ACQUIRE_FRESH_SECS:-2}
+      case "$floor" in ''|*[!0-9]*) floor=2 ;; esac
+      [ "$mid_acquire_stale" -lt "$floor" ] && mid_acquire_stale=$floor
       [ "$(fm_path_age "$lockdir")" -lt "$mid_acquire_stale" ]
       return
       ;;
