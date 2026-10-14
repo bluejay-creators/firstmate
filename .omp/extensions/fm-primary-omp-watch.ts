@@ -49,16 +49,21 @@
 //
 // Subagent session safety (stated once here):
 // omp re-binds this factory for a subagent session (task tool, /tan clone),
-// whose events carry ctx.agent.kind === "sub" while module state stays shared
-// with the primary. That session never claims, consumes, or retires the
-// owner's arm, never persists the replacement handoff, and its shutdown
-// leaves the primary generation live: every lifecycle handler and the arming
-// tool one-shot stand down on that context. omp's extension documentation is
-// the signal owner. The 2026-10-08 and 2026-10-13 incidents were the inverse
-// of this contract: a subagent session's shutdown ran stopSessionGeneration
-// against the shared generation, retiring the primary's arm and leaving
-// fm_watch_arm_omp answering "watcher: not armed - omp session is shutting
-// down" until the supervisor restarted.
+// whose events carry ctx.agent.kind === "sub" and ctx.agent.depth > 0 while
+// module state stays shared with the primary. That session never claims,
+// consumes, or retires the owner's arm, never persists the replacement
+// handoff, and its shutdown leaves the primary generation live: every
+// lifecycle handler and the arming tool one-shot stand down on that context.
+// omp's extension documentation owns the ctx.agent signal shape.
+// The 2026-10-08 and 2026-10-13 incidents were the inverse of this contract:
+// a subagent session's shutdown ran stopSessionGeneration against the shared
+// generation, retiring the primary's arm and leaving fm_watch_arm_omp
+// answering "watcher: not armed - omp session is shutting down" until the
+// supervisor restarted. The 2026-10-14 canary on omp 18.10.4 reproduced the
+// same surface: the subagent's shutdown arrived at this file's handler with
+// a ctx that did not read as a subagent under the kind-only test shipped
+// with PR #9, so the gate below now matches the wider contract (kind, then
+// depth, then the lock-owning fail-safe for ambiguous ctx).
 //
 // Delivery versus consumption (stated once here):
 // A main follow-up is delivered once omp accepts it (sendUserMessage returns).
@@ -96,9 +101,13 @@ import { encodeFirstmateOperationalInput } from "../../.pi/extensions/lib/fm-ope
 // separately installable type package, so the contract is declared locally
 // rather than imported from the Pi package name.
 type ExtensionAPI = {
-  on?: (event: string, handler: (event: any, ctx: any) => unknown) => void;
+  on?: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => void;
   sendUserMessage: (content: string, options?: { deliverAs?: string }) => unknown;
-  registerCommand?: (name: string, command: { description: string; handler: (args: string, ctx: any) => Promise<void> | void }) => void;
+  // pi.sendMessage delivers a hidden custom message; observed on omp 18.10.4:
+  // customType fm.wake + display:false never renders, and with triggerTurn
+  // and deliverAs 'followUp' the same message opens its own turn.
+  sendMessage?: (message: { customType: string; content: string; display: boolean }, options?: { triggerTurn?: boolean; deliverAs?: string }) => unknown;
+  registerCommand?: (name: string, command: { description: string; handler: (args: string, ctx: unknown) => Promise<void> | void }) => void;
   registerTool?: (tool: Record<string, unknown>) => void;
 };
 
@@ -946,6 +955,42 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
   const extra = absorbed.length > 2 ? `, +${absorbed.length - 2}` : "";
   return `${absorbed.length} routine absorbed: ${previews}${extra}`;
 }
+  // Run bin/fm-wake-drain.sh --brief --ack and return the one-line summary it
+  // prints, or null when the drain fails or the queue is empty. A routine
+  // drain acks itself; an actionable one prints a WAKE_ACK_REQUIRED line the
+  // extension threads into the wake message so the primary knows its ack
+  // path from the banner. The drain owns the queue read; the extension only
+  // ever runs it immediately before sending a wake message, so concurrent
+  // rows are still serialized through the queue lock.
+  function drainWakeQueueBriefAck(owner: SessionGeneration): { text: string; ackPending: boolean } | null {
+    const drain = spawnSync("bash", [fmWakeDrainScript, "--brief", "--ack"], {
+      cwd: fmRoot,
+      encoding: "utf8",
+      env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot, FM_WAKE_QUEUE: extensionWakeQueuePath() },
+    });
+    if (drain.status !== 0) {
+      const detail = ((drain.stderr || "") + "\n" + (drain.stdout || "")).trim() || "no output";
+      surfaceFailure(owner, `watcher: FAILED - bin/fm-wake-drain.sh --brief --ack exited ${drain.status}\n${wakeTruncate(detail, 200)}`);
+      return null;
+    }
+    const stdout = (drain.stdout || "").trim();
+    if (!stdout) return null;
+    // The --brief body is one line per queued wake. The trailing marker is
+    // either "(acked)" (routine path, drain already acked) or a
+    // WAKE_ACK_REQUIRED: line the agent uses to ack after it handles. We keep
+    // only the wake rows plus the ack contract in the hidden message.
+    const lines = stdout.split(/\r?\n/);
+    const ackLine = lines.find((line) => line === "(acked)" || line.startsWith("WAKE_ACK_REQUIRED:"));
+    const rows = ackLine ? lines.slice(0, -1) : lines;
+    if (rows.length === 0) return null;
+    const summary = rows.join(" · ");
+    const ackPending = Boolean(ackLine?.startsWith("WAKE_ACK_REQUIRED:"));
+    const text = ackPending && ackLine
+      ? `${summary}\n${ackLine}`
+      : summary;
+    return { text, ackPending };
+  }
+
   async function sendWake(
     owner: SessionGeneration,
     message: string,
@@ -983,11 +1028,41 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     items: PendingActionableClose[],
   ): Promise<boolean> {
     if (items.length === 0) return false;
-    if (items.length === 1) return sendWake(owner, message, items[0]);
     if (!generationIsLive(owner)) return false;
     const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
     const content = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${formatWakeMessage(message)}`);
     for (const item of items) owner.unconsumedWakes.set(item.token, { content, pending: item });
+    // Hidden wake path: drain the queue first so the model receives the
+    // already-digested one-line summary in a hidden custom message the chat
+    // never renders; the turn opens on the custom message itself through
+    // triggerTurn:true. Fall back to today's visible sendUserMessage banner
+    // when the drain fails, the outgoing hidden send is rejected, or the
+    // sendMessage API is missing in this omp build.
+    const drained = drainWakeQueueBriefAck(owner);
+    if (drained && drained.text && pi.sendMessage) {
+      // Re-key each pending record under the drained summary so a matching
+      // role:"custom" message_start (omp 18.10.4) finishes the record; the
+      // composite content keys only the visible fallback's consumption.
+      const hiddenContent = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${drained.text}`);
+      for (const item of items) owner.unconsumedWakes.set(item.token, { content: hiddenContent, pending: item });
+      try {
+        await pi.sendMessage({ customType: "fm.wake", content: hiddenContent, display: false }, { triggerTurn: true, deliverAs: "followUp" });
+        return generationIsLive(owner);
+      } catch {
+        // Re-key to the composite so a visible-fallback consumption still
+        // finishes every member.
+      for (const item of items) owner.unconsumedWakes.set(item.token, { content, pending: item });
+      }
+    }
+    if (items.length === 1) {
+      try {
+        await pi.sendUserMessage(content, { deliverAs: "followUp" });
+      } catch (error) {
+        for (const item of items) owner.unconsumedWakes.delete(item.token);
+        throw error;
+      }
+      return generationIsLive(owner);
+    }
     try {
       await pi.sendUserMessage(content, { deliverAs: "followUp" });
     } catch (error) {
@@ -1708,15 +1783,38 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
 // events carry ctx.agent.kind === "sub" and share this module state with the
 // primary. A subagent generation must never claim, consume, or retire the
 // owning session's arm, and its shutdown must not persist the replacement
-// handoff or mark the primary generation stopping. Only the main session
-// (kind absent, as on omp 18.1.x, or "main") participates; the documented
-// signal is ctx.agent.kind, verified against omp's extensions doc. Unknown
-// other kinds read as main so a future omp variant degrades to supervision.
+// handoff or mark the primary generation stopping.
+//
+// 18.10.4 contract (stated once here): on the supervisor's --resume launch,
+// >1-hop-long parent walks keep lockOwnership() owned for exactly the primary;
+// the primary's ctx.agent.kind is "main" and depth is 0 (verified 18.8.7,
+// 18.10.4). A subagent's own ctx carries kind === "sub" and depth > 0. Two
+// incidents (2026-10-08, 2026-10-13) and the 2026-10-14 canary proved that a
+// subagent shutdown arriving without a reliably-readable kind on 18.10.4
+// stands the session down as if it were the primary and retires the
+// supervisor's arm, after which fm_watch_arm_omp answers "watcher: not armed
+// - omp session is shutting down" until the supervisor restarts. The gate
+// below therefore (a) takes depth > 0 as subagent whether or not kind is
+// readable, and (b) treats any ambiguous ctx (absent agent, absent kind, or
+// an unrecognized kind) as a subagent whenever lockOwnership() proves this
+// process is not the fleet's owning primary; a fleet-owning primary keeps
+// main semantics. subagentShutdownContext additionally recognizes depth > 0
+// for shutdown-only use, where retiring shared primary state from an
+// ambiguous-but-not-lock-owning ctx is the catastrophic path.
 function subagentContext(ctx: unknown): boolean {
   if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return false;
   const agent = ctx.agent;
-  if (!agent || typeof agent !== "object" || !("kind" in agent)) return false;
-  return agent.kind === "sub";
+  if (!agent || typeof agent !== "object") return false;
+  if ("kind" in agent && agent.kind === "sub") return true;
+  if ("depth" in agent && typeof agent.depth === "number" && agent.depth > 0) return true;
+  // Ambiguous: no kind field, or a kind this extension does not recognize.
+  if (!("kind" in agent) || agent.kind !== "main") return lockOwnership() !== "owned";
+  return false;
+}
+function subagentShutdownContext(ctx: unknown): boolean {
+  if (subagentContext(ctx)) return true;
+  if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return lockOwnership() !== "owned";
+  return false;
 }
 const subagentArmStatus =
   "watcher: not armed - this is a subagent session; the supervisor's omp primary owns watcher continuity, so no action is needed here";
@@ -1727,9 +1825,23 @@ const subagentArmStatus =
   });
   pi.on?.("message_start", (event, ctx) => {
     if (subagentContext(ctx)) return;
-    const message = (event as { message?: { role?: unknown; content?: unknown } })?.message;
-    if (!message || message.role !== "user") return;
-    consumeWake(generation, userMessageText(message.content));
+    if (!event || typeof event !== "object" || !("message" in event)) return;
+    const message = event.message;
+    if (!message || typeof message !== "object") return;
+    const role = "role" in message && typeof message.role === "string" ? message.role : "";
+    const customType = "customType" in message && typeof message.customType === "string" ? message.customType : "";
+    const content = "content" in message ? message.content : undefined;
+    // Hidden wake: the extension delivered watcher work through pi.sendMessage
+    // (customType fm.wake). omp never raises before_agent_start for the turn
+    // that custom message triggers, so consumption settles here, keyed on the
+    // exact content the extension sent. A custom message's content is a raw
+    // string (observed against omp 18.10.4).
+    if (role === "custom" && customType === "fm.wake" && typeof content === "string") {
+      consumeWake(generation, content);
+      return;
+    }
+    if (role !== "user") return;
+    consumeWake(generation, userMessageText(content));
   });
 
   pi.on?.("session_start", async (_event, ctx) => {
@@ -1741,7 +1853,7 @@ const subagentArmStatus =
     activateOwnedWatch(generation);
   });
   pi.on?.("session_shutdown", async (_event, ctx) => {
-    if (subagentContext(ctx)) return;
+    if (subagentShutdownContext(ctx)) return;
     // omp carries no shutdown reason (verified: `reason` is undefined), so the
     // replacement handoff is always persisted when anything is pending; a
     // terminal quit then merely replays an already-drained wake next start.

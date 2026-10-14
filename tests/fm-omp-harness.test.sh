@@ -453,7 +453,10 @@ install_omp_extension_fixture() {  # <repo>
   cp "$ROOT/.omp/extensions/fm-primary-turnend-guard.ts" "$ROOT/.omp/extensions/fm-primary-omp-watch.ts" "$repo/.omp/extensions/"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" "$repo/.pi/extensions/lib/"
   cp "$ROOT/bin/fm-operational-input.sh" "$ROOT/bin/fm-supervision-engine-lib.sh" "$repo/bin/"
-  chmod +x "$repo/bin/fm-operational-input.sh"
+  cp "$ROOT/bin/fm-wake-drain.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-classify-lib.sh" \
+    "$ROOT/bin/fm-line-cap-lib.sh" "$ROOT/bin/fm-timeout-lib.sh" "$ROOT/bin/fm-lease-lib.sh" \
+    "$ROOT/bin/fm-afk-contract.sh" "$repo/bin/"
+  chmod +x "$repo/bin/fm-operational-input.sh" "$repo/bin/fm-wake-drain.sh"
   printf '{"name":"typebox","type":"module","exports":"./index.js"}\n' > "$repo/node_modules/typebox/package.json"
   printf 'export const Type = { Object(p) { return { type: "object", properties: p }; } };\n' > "$repo/node_modules/typebox/index.js"
 }
@@ -1042,6 +1045,131 @@ EOF
   [ -z "$out" ] || fail "omp watch extension subagent test printed output: $out"
   pass ".omp watch extension: a subagent session never arms, consumes, retires, or hands off - the primary keeps its arm"
 }
+# omp 18.10.4 can still deliver a subagent's events with a ctx whose
+# agent.kind does not read as "sub" under the kind-only test shipped with
+# #9 (the 2026-10-14 canary). The gate now also accepts ctx.agent.depth > 0
+# and, when even the agent field is absent, treats the event as a subagent
+# unless lockOwnership() proves this process owns the fleet lock. This test
+# drives each of those surfaces and asserts the primary arm survives, and
+# back-checks that an ambiguous ctx under a lock-owning primary still reads
+# as the primary (supervision persists).
+test_watch_extension_subagent_gate_recognizes_1810_shapes() {
+  local repo home out status
+  repo="$TMP_ROOT/watch-sub-1810/repo"; home="$TMP_ROOT/watch-sub-1810/home"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=gen-1\n' "$$"
+sleep 30
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_OMP_ARM_READY_TIMEOUT_MS=3000 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { writeFileSync, existsSync, rmSync } from "node:fs";
+import { spawnSync, execFileSync } from "node:child_process";
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const handlers = new Map(); let tool = null; const sent = [];
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand() {},
+  registerTool(t) { tool = t; },
+  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+};
+const mod = await import(pathToFileURL(process.env.EXT).href);
+mod.default(pi);
+// The lock-owning primary arms the watcher.
+await handlers.get("session_start")({ type: "session_start" }, {});
+await tool.execute();
+const markerPid = Number(execFileSync("bash", ["-c", `pgrep -f "fm-watch-arm.sh" | head -1`], { encoding: "utf8" }).trim());
+if (!markerPid) throw new Error("the primary arm child was not running");
+const alive = () => spawnSync("bash", ["-c", `kill -0 ${markerPid} 2>/dev/null && echo alive || echo dead`], { encoding: "utf8" }).stdout.trim();
+if (alive() !== "alive") throw new Error("arm child not alive at start");
+// (a) depth-only subagent ctx: kind is absent, depth > 0 -> shared generation must stand down.
+await handlers.get("session_start")({ type: "session_start" }, { agent: { id: "s-depth", name: "sonic", depth: 1, parentId: "main" } });
+await handlers.get("before_agent_start")({ type: "before_agent_start", prompt: "depth-only" }, { agent: { id: "s-depth", name: "sonic", depth: 1, parentId: "main" } });
+await handlers.get("session_shutdown")({}, { agent: { id: "s-depth", name: "sonic", depth: 1, parentId: "main" } });
+if (alive() !== "alive") throw new Error("depth-only subagent shutdown retired the primary arm");
+// (b) unknown-kind subagent ctx under the lock-owning primary: the documented
+// fail-safe keeps supervision alive, so the arm child must still be there.
+await handlers.get("session_start")({ type: "session_start" }, { agent: { kind: "experimental", id: "s-x", name: "x", depth: 0 } });
+await handlers.get("session_shutdown")({}, { agent: { kind: "experimental", id: "s-x", name: "x", depth: 0 } });
+if (alive() !== "alive") throw new Error("ambiguous-kind primary-adjacent ctx retired the primary arm");
+// (c) no-agent ctx in a NON-lock-owning process: stand down. Simulate by
+// removing the fleet lock; the primary arm child must still survive its own
+// session_shutdown because the gate reads as a subagent and returns.
+rmSync(`${process.env.FM_HOME}/state/.lock`, { force: true });
+await handlers.get("session_shutdown")({}, {});
+if (alive() !== "alive") throw new Error("lock-absent ambiguous shutdown retired the shared arm");
+if (existsSync(`${process.env.FM_HOME}/state/extensions/omp-primary-watch/session-replacement-actionable.json`)) {
+  throw new Error("lock-absent ambiguous shutdown persisted a replacement handoff");
+}
+if (sent.some((s) => /watcher: FAILED/.test(s.m))) throw new Error(`unexpected failure delivered: ${JSON.stringify(sent)}`);
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp watch extension 18.10 subagent shapes: $out"
+  [ -z "$out" ] || fail "omp watch extension 18.10 subagent test printed output: $out"
+  pass ".omp watch extension: depth-only, ambiguous-kind, and lock-absent shutdowns leave the primary arm alone"
+}
+
+# The same 18.10.4 shapes must not corrupt the turn-end guard's primary
+# sessionstart generation: a depth-only subagent start and shutdown leave the
+# running generation alone, and a lock-absent ambiguous shutdown stands down
+# rather than retiring the shared generation.
+test_turnend_guard_subagent_gate_recognizes_1810_shapes() {
+  local repo home out status
+  repo="$TMP_ROOT/guard-sub-1810/repo"; home="$TMP_ROOT/guard-sub-1810/home"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-turnend-guard.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-arm-pretool-check.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-cd-pretool-check.sh"
+  printf '#!/usr/bin/env bash\nprintf "OMP DIGEST source=%%s\\n" "$2"\n' > "$repo/bin/fm-sessionstart-run.sh"
+  chmod +x "$repo/bin/"*.sh
+  out=$(FM_HOME="$home" EXT="$repo/.omp/extensions/fm-primary-turnend-guard.ts" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { writeFileSync, rmSync } from "node:fs";
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const handlers = new Map();
+const pi = { on(e, h) { handlers.set(e, h); }, sendMessage() {} };
+const mod = await import(pathToFileURL(process.env.EXT).href);
+mod.default(pi);
+const mainCtx = { sessionManager: { getSessionId: () => "main-session" } };
+handlers.get("session_start")({ type: "session_start" }, mainCtx);
+const first = await handlers.get("before_agent_start")({ type: "before_agent_start", prompt: "hi" }, mainCtx);
+if (!first?.message?.content?.includes("OMP DIGEST source=startup")) throw new Error(`primary digest missing: ${JSON.stringify(first)}`);
+// Depth-only subagent: no kind. Its start must not create a generation and
+// its shutdown must not retire the primary generation - proof: the next
+// primary session_start counts as a "clear" (third) start, not a corrupted
+// repeat, and reaches the model through before_agent_start.
+const depthOnlyCtx = { agent: { id: "s-depth", name: "sonic", depth: 1, parentId: "main" } };
+handlers.get("session_start")({ type: "session_start" }, depthOnlyCtx);
+await handlers.get("session_shutdown")({}, depthOnlyCtx);
+handlers.get("session_start")({ type: "session_start" }, mainCtx);
+const clear = await handlers.get("before_agent_start")({ type: "before_agent_start", prompt: "hi again" }, mainCtx);
+if (!clear?.message?.content?.includes("source=clear")) throw new Error(`depth-only subagent corrupted the primary start count: ${JSON.stringify(clear)}`);
+// Lock-absent ambiguous shutdown: the gate stands down rather than retiring
+// the shared generation, so the next primary start still reads as a clear.
+rmSync(`${process.env.FM_HOME}/state/.lock`, { force: true });
+await handlers.get("session_shutdown")({}, {});
+handlers.get("session_start")({ type: "session_start" }, mainCtx);
+const secondClear = await handlers.get("before_agent_start")({ type: "before_agent_start", prompt: "hi once more" }, mainCtx);
+if (!secondClear?.message?.content?.includes("source=clear")) throw new Error(`lock-absent ambiguous shutdown retired the primary generation: ${JSON.stringify(secondClear)}`);
+await handlers.get("session_shutdown")({}, mainCtx);
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp turn-end guard 18.10 subagent shapes: $out"
+  [ -z "$out" ] || fail "omp turn-end guard 18.10 subagent test printed output: $out"
+  pass ".omp turn-end guard: depth-only and lock-absent subagent shutdowns leave the primary generation alone"
+}
+test_watch_extension_subagent_gate_recognizes_1810_shapes
+test_turnend_guard_subagent_gate_recognizes_1810_shapes
+
 
 # The turn-end guard's session lifecycle and tool_call handlers must also stand
 # down under a subagent context: its sessionstart generation belongs to the
@@ -1210,6 +1338,143 @@ EOF
   [ -z "$out" ] || fail "omp watch batch test printed output: $out"
   pass ".omp watch extension: a busy pending pile settles in ONE batched follow-up whose message dedupes repeated reasons; one consumption finishes every batch member"
 }
+
+# The 2026-10-14 hidden-delivery contract: with a queued actionable row and
+# pi.sendMessage available (omp 18.10.4), sendBatchedWake drains the queue
+# itself with bin/fm-wake-drain.sh --brief --ack and delivers the one-line
+# summary as a hidden custom message (customType fm.wake, display:false,
+# triggerTurn:true, deliverAs followUp). The primary's chat never renders
+# the wake text, and the matching role:"custom" message_start finishes the
+# pending record. A drain failure or a missing sendMessage API falls back
+# to today's visible sendUserMessage banner.
+test_watch_extension_sends_a_hidden_wake_through_sendMessage() {
+  local repo home log out status queue
+  repo="$TMP_ROOT/wake-hidden/repo"; home="$TMP_ROOT/wake-hidden/home"; log="$TMP_ROOT/wake-hidden/arm.log"
+  queue="$TMP_ROOT/wake-hidden/queue"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state" "$home/config"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+[ "${1:-}" = --handling-delivered ] && exit 0
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=gen-1\n' "$$"
+sleep 30
+SCRIPT
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_WAKE_QUEUE="$queue" \
+    FM_WATCH_REARM_RETRY_LIMIT=1 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+const home = process.env.FM_HOME;
+const queue = process.env.FM_WAKE_QUEUE;
+writeFileSync(`${home}/state/.lock`, `${process.pid}\n`);
+const handoffDir = `${home}/state/extensions/omp-primary-watch`;
+mkdirSync(handoffDir, { recursive: true });
+const now = Date.now();
+const entry = { version: 1, token: `${process.pid}-${now}-1`, message: "signal: omp-e2e hidden wake", predecessorArmPid: "" };
+writeFileSync(`${handoffDir}/session-replacement-actionable.json`, JSON.stringify({ version: 2, pending: [entry] }) + "\n");
+writeFileSync(queue, `1\t1\tsignal\tfm-hidden-test\tsignal: omp-e2e hidden wake\n`);
+const handlers = new Map();
+const sent = [];
+const sentHidden = [];
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand() {},
+  registerTool() {},
+  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+  sendMessage(msg, opts) { sentHidden.push({ msg, opts }); return undefined; },
+};
+await import(pathToFileURL(process.env.EXT).href).then((mod) => mod.default(pi));
+await handlers.get("session_start")({ type: "session_start" }, {});
+for (let i = 0; i < 60 && sentHidden.length < 1; i += 1) await new Promise((r) => setTimeout(r, 100));
+if (sent.length !== 0) throw new Error(`the visible banner must not fire when hidden delivery works; saw ${JSON.stringify(sent)}`);
+if (sentHidden.length !== 1) throw new Error(`expected exactly ONE hidden message; saw ${sentHidden.length}`);
+const wake = sentHidden[0];
+if (wake.msg.customType !== "fm.wake") throw new Error(`custom type mismatch: ${JSON.stringify(wake.msg)}`);
+if (wake.msg.display !== false) throw new Error(`display flag must be false: ${JSON.stringify(wake.msg)}`);
+if (!wake.opts || wake.opts.triggerTurn !== true) throw new Error(`triggerTurn must be true: ${JSON.stringify(wake)}`);
+if (wake.opts.deliverAs !== "followUp") throw new Error(`deliverAs must be followUp: ${JSON.stringify(wake)}`);
+if (!wake.msg.content.includes("fm-hidden-test")) throw new Error(`hidden wake must carry the drained row key: ${wake.msg.content}`);
+// The matching message_start finishes the pending record. Custom messages
+// surface with role "custom" - observed against omp 18.10.4 by direct
+// instrumentation of the runner emit path.
+await handlers.get("message_start")({ type: "message_start", message: { role: "custom", customType: "fm.wake", content: wake.msg.content, attribution: "agent", timestamp: Date.now() } }, {});
+await handlers.get("session_shutdown")({}, {});
+if (existsSync(`${handoffDir}/session-replacement-actionable.json`)) {
+  const stored = JSON.parse(readFileSync(`${handoffDir}/session-replacement-actionable.json`, "utf8"));
+  if (stored.pending.length !== 0) throw new Error(`a consumed hidden wake must finish the pending record, saw ${stored.pending.length}`);
+}
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp watch hidden wake: $out"
+  [ -z "$out" ] || fail "omp watch hidden wake test printed output: $out"
+  pass ".omp watch extension: a drained actionable wake reaches the model as a hidden fm.wake custom message and its message_start finishes the pending record"
+}
+test_watch_extension_sends_a_hidden_wake_through_sendMessage
+
+# When sendMessage is absent or rejected, the extension falls back to the
+# visible sendUserMessage follow-up so the wake still reaches main. The
+# pre-existing sendBatchedWake contract - one message per batch; matching
+# user-role message_start finishes the record - is unchanged.
+test_watch_extension_falls_back_to_sendUserMessage_when_sendMessage_fails() {
+  local repo home log out status queue
+  repo="$TMP_ROOT/wake-fallback/repo"; home="$TMP_ROOT/wake-fallback/home"; log="$TMP_ROOT/wake-fallback/arm.log"
+  queue="$TMP_ROOT/wake-fallback/queue"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state" "$home/config"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+[ "${1:-}" = --handling-delivered ] && exit 0
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=gen-1\n' "$$"
+sleep 30
+SCRIPT
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_WAKE_QUEUE="$queue" \
+    FM_WATCH_REARM_RETRY_LIMIT=1 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+const home = process.env.FM_HOME;
+const queue = process.env.FM_WAKE_QUEUE;
+writeFileSync(`${home}/state/.lock`, `${process.pid}\n`);
+const handoffDir = `${home}/state/extensions/omp-primary-watch`;
+mkdirSync(handoffDir, { recursive: true });
+const now = Date.now();
+const entry = { version: 1, token: `${process.pid}-${now}-1`, message: "signal: omp-e2e fallback wake", predecessorArmPid: "" };
+writeFileSync(`${handoffDir}/session-replacement-actionable.json`, JSON.stringify({ version: 2, pending: [entry] }) + "\n");
+writeFileSync(queue, `1\t1\tsignal\tfm-fallback-test\tsignal: omp-e2e fallback wake\n`);
+const handlers = new Map();
+const sent = [];
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand() {},
+  registerTool() {},
+  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+  // sendMessage intentionally absent: the extension must fall back.
+};
+await import(pathToFileURL(process.env.EXT).href).then((mod) => mod.default(pi));
+await handlers.get("session_start")({ type: "session_start" }, {});
+for (let i = 0; i < 60 && sent.length < 1; i += 1) await new Promise((r) => setTimeout(r, 100));
+if (sent.length !== 1) throw new Error(`expected the visible follow-up when sendMessage is missing; saw ${sent.length}`);
+if (!sent[0].m.includes("omp-e2e fallback wake")) throw new Error(`fallback wake text mismatch: ${sent[0].m.slice(0, 240)}`);
+if (sent[0].o?.deliverAs !== "followUp") throw new Error("fallback wake must be delivered as a follow-up");
+await handlers.get("before_agent_start")({ type: "before_agent_start", prompt: sent[0].m }, {});
+await handlers.get("session_shutdown")({}, {});
+if (existsSync(`${handoffDir}/session-replacement-actionable.json`)) {
+  const stored = JSON.parse(readFileSync(`${handoffDir}/session-replacement-actionable.json`, "utf8"));
+  if (stored.pending.length !== 0) throw new Error("the fallback follow-up must finish the pending record");
+}
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp watch fallback wake: $out"
+  [ -z "$out" ] || fail "omp watch fallback wake test printed output: $out"
+  pass ".omp watch extension: an absent sendMessage API still delivers the actionable wake through the visible follow-up"
+}
+test_watch_extension_falls_back_to_sendUserMessage_when_sendMessage_fails
 
 test_watch_extension_suppresses_a_repeat_stale_reason_within_the_ttl() {
   local repo home out status queue

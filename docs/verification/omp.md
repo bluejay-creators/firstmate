@@ -17,29 +17,45 @@ Its header owns the lab mechanism.
 ## Subagent session safety
 
 omp re-binds extension factories per subagent session (task tool, `/tan`
-clones) with fresh APIs but shared module state, and the handler context
-carries `ctx.agent.kind === "sub"` for those sessions (omp's
-`docs/extensions.md`, 18.8.x).
-The Firstmate tracked extensions stand down on that discriminator, so a
-subagent session never claims, consumes, retires, or re-arms the supervisor's
-watcher, never persists the replacement handoff, and its shutdown leaves the
-primary generation live.
+clones) with fresh APIs but shared module state. On 18.8.x the handler ctx
+carried `ctx.agent.kind === "sub"` for those sessions; on 18.10.x kind is not
+reliably readable on shutdown, so the Firstmate tracked extensions also take
+`ctx.agent.depth > 0` as a subagent, and treat any ambiguous ctx (absent
+agent, absent kind, or an unrecognized kind) as a subagent whenever
+`lockOwnership()` says this process is not the fleet's owning primary - a
+fleet-owning primary keeps main semantics. A subagent session never claims,
+consumes, retires, or re-arms the supervisor's watcher, never persists the
+replacement handoff, and its shutdown leaves the primary generation live.
 
 - Portable regression: `tests/fm-omp-harness.test.sh`
-  `test_watch_extension_subagent_session_never_touches_the_arm` and
-  `test_turnend_guard_subagent_session_stands_down`, driven over a fake omp
-  API with a `ctx.agent.kind === "sub"` context.
+  `test_watch_extension_subagent_session_never_touches_the_arm`,
+  `test_turnend_guard_subagent_session_stands_down`,
+  `test_watch_extension_subagent_gate_recognizes_1810_shapes`, and
+  `test_turnend_guard_subagent_gate_recognizes_1810_shapes`, driven over a
+  fake omp API against the 18.8 and 18.10 ctx shapes alike.
 - Live guard: `FM_OMP_SUBAGENT_SMOKE=1 tests/fm-omp-subagent-smoke-e2e.test.sh`
   arms the watcher in a real `omp --mode rpc` session, runs one task-tool
   subagent that must answer `SUBAGENT_RAN`, asserts the same watcher pid is
   alive afterwards, then writes the `.meta` plus `.status` pair every e2e uses
   and asserts the watcher ledger records `reason=actionable-signal` - the
   observable proof the subagent lifecycle did not wed the cycle.
-  Follow-up wake delivery against that close is owned by
-  `tests/fm-omp-primary-live-e2e.test.sh` and is not re-verified here.
-  Latest run: 2026-10-14, omp 18.8.7, model `openai-codex/gpt-6-astra`; raw
-  output under the task's `data/fm-subagent-safe/smoke.out`.
+  Latest run: 2026-10-14, omp 18.10.4, model `openai-codex/gpt-6-astra`;
+  raw output under the task's `data/fm-subagent-1810/smoke.out`.
 
+## Hidden wake delivery (2026-10-14)
+
+The supervisor's primary omp session delivers actionable watcher wakes to
+its main as a hidden custom message instead of a visible banner:
+`pi.sendMessage({ customType: "fm.wake", content: ..., display: false },
+{ triggerTurn: true, deliverAs: "followUp" })`. Before that call the extension
+runs `bin/fm-wake-drain.sh --brief --ack` to retire the durable row and
+produce the one-line summary the model actually consumes; the matching
+`role:"custom"` `message_start` finishes the pending handoff record so a
+session replacement cannot replay it. A drain failure, missing `sendMessage`,
+or rejected send falls back to today's visible `sendUserMessage` banner.
+Verified under `tests/fm-omp-harness.test.sh`:
+`test_watch_extension_sends_a_hidden_wake_through_sendMessage` and
+`test_watch_extension_falls_back_to_sendUserMessage_when_sendMessage_fails`.
 
 ## In-process subagents as supervisor dispatch
 

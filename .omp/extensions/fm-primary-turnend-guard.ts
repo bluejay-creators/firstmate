@@ -102,18 +102,32 @@ type SessionStartContext = {
 };
 
 // omp re-binds this factory for a subagent (task tool, /tan clone); that
-// session's handlers carry ctx.agent.kind === "sub" (omp's extension
-// documentation is the signal owner). The guard then stands down entirely:
-// session_stop already never fires for a subagent, while session_start,
-// session_compact, and a subagent session_shutdown must not create or tear
-// down sessionstart generations shared with the primary, and the tool_call
-// seatbelt stays out of a bounded in-process assistant's bash policy. Absent
-// or "main" kind reads as the primary session, as on omp 18.1.x.
+// session's handlers carry ctx.agent.kind === "sub" and ctx.agent.depth > 0
+// (omp's extension documentation owns the signal shape). The guard then
+// stands down entirely: session_stop already never fires for a subagent,
+// while session_start, session_compact, and a subagent session_shutdown must
+// not create or tear down sessionstart generations shared with the primary,
+// and the tool_call seatbelt stays out of a bounded in-process assistant's
+// bash policy. Absent or "main" kind reads as the primary session, as on omp
+// 18.1.x. omp 18.10.4's dispatch can present a subagent's events with a ctx
+// that the kind-only test missed (the 2026-10-14 canary; see the shared
+// contract in fm-primary-omp-watch.ts), so this gate accepts the same wider
+// shape: depth > 0 means subagent, and an ambiguous ctx (no agent, no kind,
+// or an unrecognized kind) reads as subagent unless lockOwnership() proves
+// this process is the fleet's owning primary.
 function subagentContext(ctx: unknown): boolean {
   if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return false;
   const agent = ctx.agent;
-  if (!agent || typeof agent !== "object" || !("kind" in agent)) return false;
-  return agent.kind === "sub";
+  if (!agent || typeof agent !== "object") return false;
+  if ("kind" in agent && agent.kind === "sub") return true;
+  if ("depth" in agent && typeof agent.depth === "number" && agent.depth > 0) return true;
+  if (!("kind" in agent) || agent.kind !== "main") return lockOwnership() !== "owned";
+  return false;
+}
+function subagentShutdownContext(ctx: unknown): boolean {
+  if (subagentContext(ctx)) return true;
+  if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return lockOwnership() !== "owned";
+  return false;
 }
 
 // The launch line is the only resume evidence omp offers an extension: its
@@ -589,7 +603,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on?.("session_shutdown", async (_event, ctx) => {
-    if (subagentContext(ctx)) return;
+    if (subagentShutdownContext(ctx)) return;
     const generation = sessionstartGeneration;
     try {
       if (generation) await stopSessionstartGeneration(generation);
