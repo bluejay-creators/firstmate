@@ -401,6 +401,12 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-bead-board-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-bead-board-lib.sh"
+# shellcheck source=bin/fm-bead-eta-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-bead-eta-lib.sh"
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
   echo "error: invalid teardown request" >&2
   exit 2
@@ -1193,6 +1199,9 @@ fi
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
 BASE_BRANCH=$(grep '^base_branch=' "$META" | cut -d= -f2- || true)
+# The bead linkage recorded at spawn (bin/fm-bead-eta-lib.sh) owns whether
+# a landed completion closes the bead on this home's shared board.
+TEARDOWN_BEAD=$(grep '^bead=' "$META" | tail -1 | cut -d= -f2- || true)
 
 # A record accepted as a legacy incarnation (no spawn_gen, and either
 # --legacy-record given or the record is windowless) may be torn down only
@@ -3917,6 +3926,17 @@ else
 fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
+# Landed completion closes the task's linked bead (bin/fm-bead-eta-lib.sh):
+# best-effort, after the backlog transition committed this task's terminal
+# state, and never a failure that keeps teardown from reporting success. Only
+# a ship teardown closes the bead; a scout's report does not finish one.
+if [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = close ] \
+   && [ "$KIND" != scout ] && [ -n "$TEARDOWN_BEAD" ]; then
+  case "$MODE" in
+    local-only) fm_bead_close_landed "$TEARDOWN_BEAD" "local main ($ID)" ;;
+    *) fm_bead_close_landed "$TEARDOWN_BEAD" "${PR_URL:-completed} ($ID)" ;;
+  esac
+fi
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

@@ -358,6 +358,19 @@ With the config in place, [`bin/fm-captain-hold.sh`](../bin/fm-captain-hold.sh) 
 [`bin/fm-captain-beads-check.sh`](../bin/fm-captain-beads-check.sh) delivers each closed captain bead's close reason to the requester it names (`requester:<name>` label or the `fm-requester:` body line the mirroring writes), deduped once per bead; its `install` subcommand hash-binds it as this home's watcher check.
 Bead mirroring never gates the hold or the answer: a broken board surfaces one explicit warning while the backlog record stands.
 
+### Bead time expectations and overdue wakes (config/bead-eta-defaults)
+
+Every bead on the joined board carries an expected duration, resolved by [`bin/fm-bead-eta-lib.sh`](../bin/fm-bead-eta-lib.sh): a carryable `eta:<N>m` or `eta:<N>h` label wins; otherwise the home's `config/bead-eta-defaults` lines (`key=minutes`, `#` comments allowed) match the bead's non-eta labels in board order, then its `issue_type`; unmatched beads fall back to 120 minutes.
+An absent table means every non-labeled bead takes the fallback; the fallback example profile is `deploy=45`, `ship=60`, `scout=120`, `captain=240`.
+
+[`bin/fm-bead-overdue-check.sh`](../bin/fm-bead-overdue-check.sh) (its `install` subcommand hash-binds it as a watcher check) polls open `in_progress` beads, aging them from the start mark [`bin/fm-spawn.sh`](../bin/fm-spawn.sh) stamps, and open `captain` beads, aging them from creation.
+It prints one wake line per threshold crossing per bead, deduped in `state/.bead-overdue-seen/`: `overdue: <bead-id> <title> (<age>m/<eta>m), owner <assignee>` at 1x the expectation and `escalate: ...` at 2x, with `, blocked by <blocker-id> (owner <owner>)` appended when a still-open blocker belongs to a different assignee; quiet otherwise.
+Re-marking the bead's start re-arms the thresholds.
+An unjoined home (no `config/beads-board`) exits 0 with no `bd` call.
+
+Lifecycle marking is automatic: `bin/fm-spawn.sh --bead <bead-id>` (or a `bead: <bead-id>` line in the backlog item's note, read when the automatic transition gate applies) records the linkage on the task record, marks the bead `in_progress`, and stamps its start at dispatch; [`bin/fm-teardown.sh`](../bin/fm-teardown.sh) and [`bin/fm-pr-merge.sh`](../bin/fm-pr-merge.sh) close the bead on landed completion.
+All board mutations are best-effort and never gate the launch, cleanup, or merge.
+
 ### Automatic dispatch and completion
 
 When the automatic transition gate applies, dispatch and completion each move the work item in the same run that creates or removes its task record.

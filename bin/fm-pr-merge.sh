@@ -193,6 +193,12 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-merge-authority-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-bead-board-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-bead-board-lib.sh"
+# shellcheck source=bin/fm-bead-eta-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-bead-eta-lib.sh"
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -1798,3 +1804,10 @@ case "$outcome_rc" in
     printf 'actionable: merged %s but could not record the outcome for supervision\n' "$URL" >&2
     ;;
 esac
+
+# A confirmed merge also lands this task's linked bead (bin/fm-bead-eta-lib.sh):
+# best-effort, after the forge confirmed the merge landed, and never part of
+# the merge verdict. A task with no bead= record makes no board call, and a
+# duplicate close on an already-closed bead is a quiet bd no-op.
+merge_bead=$(grep '^bead=' "$META" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+[ -z "$merge_bead" ] || fm_bead_close_landed "$merge_bead" "$URL ($ID)"

@@ -48,6 +48,14 @@
 #   base_branch= in state/<id>.meta, which a relaunch reuses and later review and
 #   cleanup read; it is refused on secondmates and relaunches, and without it
 #   nothing changes.
+#   --bead <bead-id> links this spawn to one shared-board bead: the spawn
+#   records it as bead= in state/<id>.meta and, when this home joined the
+#   beads board (config/beads-board), marks the bead in_progress and stamps
+#   its start time (bin/fm-bead-eta-lib.sh owns the marking contract; teardown
+#   and fm-pr-merge close it on landed completion). Without the flag the
+#   spawn extracts a `bead: <bead-id>` line from the backlog item's note when
+#   the backlog gate applies; absent both, the spawn makes no board call.
+#   --bead is refused on relaunches, which reuse the recorded linkage.
 #   Ship/scout launches always put fm-dod-lib.sh's current worker role scope
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
@@ -565,6 +573,12 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+# shellcheck source=bin/fm-bead-board-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-bead-board-lib.sh"
+# shellcheck source=bin/fm-bead-eta-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-bead-eta-lib.sh"
 
 resolve_directory_input() {
   local name=$1 path=$2 resolved raw_bytes
@@ -735,6 +749,9 @@ BRANCH_PREFIX_SET=0
 BASE_BRANCH=
 BASE_BRANCH_SET=0
 TRACEPARENT_SET=0
+BEAD_ARG=
+BEAD_SET=0
+BEAD_RESOLVED=
 RELAUNCH=0
 # Opt-in only: exact-resume presentation-order lock waits instead of refusing.
 # Absent/unset keeps upstream refuse-on-contention. See header.
@@ -785,6 +802,10 @@ for a in "$@"; do
     traceparent)
       TRACEPARENT_ARG=$a
       TRACEPARENT_SET=1
+      ;;
+    bead)
+      BEAD_ARG=$a
+      BEAD_SET=1
       ;;
     *)
       echo "error: internal parser state for --$want_value" >&2
@@ -850,6 +871,11 @@ for a in "$@"; do
     TRACEPARENT_ARG=${a#--traceparent=}
     TRACEPARENT_SET=1
     ;;
+  --bead) want_value=bead ;;
+  --bead=*)
+    BEAD_ARG=${a#--bead=}
+    BEAD_SET=1
+    ;;
   *) POS+=("$a") ;;
   esac
 done
@@ -883,6 +909,10 @@ done
 }
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || {
   echo "error: --traceparent requires a non-empty value" >&2
+  exit 1
+}
+[ "$BEAD_SET" -eq 0 ] || [ -n "$BEAD_ARG" ] || {
+  echo "error: --bead requires a non-empty value" >&2
   exit 1
 }
 # A parent-delivered carrier replaces this home's own resolution, so it is
@@ -935,7 +965,18 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch reuses the task's recorded base branch; --base-branch cannot override it" >&2
     exit 1
   }
+  [ "$BEAD_SET" -eq 0 ] || {
+    echo "error: --relaunch reuses the task's recorded bead linkage; --bead cannot override it" >&2
+    exit 1
+  }
+  # The launch-record read further down re-derives the bead from the reused
+  # task record; preserve_relaunch_meta carries unknown key=value lines such
+  # as bead= into the replacement record unchanged.
 else
+  [ "$KIND" != secondmate ] || [ "$BEAD_SET" -eq 0 ] || {
+    echo "error: --bead applies only to crewmate and scout spawns; a secondmate is a persistent agent, never a backlog-linked bead carrier" >&2
+    exit 1
+  }
   # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
   # firstmate's per-task decision, so they are required and closed-set validated
   # here rather than resolved from the project registry. Scouts deliver a report
@@ -3710,6 +3751,37 @@ else
   fi
 fi
 
+# Bead linkage resolution. The explicit --bead wins; otherwise, when the
+# backlog gate applies, a `bead: <bead-id>` line in the item's body (the
+# "note", visible through `tasks-axi show --full`) supplies the linkage
+# (fm-bead-eta-lib.sh owns the board contract). The id is restricted to one
+# tame word (letters, digits, dots, dashes, underscores) because the task
+# record is one key=value line per field: any other value is refused rather
+# than half-parsed into a record field. A joined home whose board is
+# unavailable refuses the spawn before any endpoint exists, so a linked bead
+# never runs unmeasured; an unjoined home records the linkage and makes no
+# board call.
+BEAD_RESOLVED=$BEAD_ARG
+if [ -z "$BEAD_RESOLVED" ] && [ "$BACKLOG_TRANSITION" = 1 ] && [ "$RELAUNCH" -eq 0 ]; then
+  spawn_bead_note_out=$(fm_backlog_row_show "$DATA" "$ID" --full 2>/dev/null) && \
+    BEAD_RESOLVED=$(printf '%s\n' "$spawn_bead_note_out" | sed -n 's/^  body: ".*[^A-Za-z0-9._-]bead: \([A-Za-z0-9._-][A-Za-z0-9._-]*\).*/\1/p; s/^  body: "bead: \([A-Za-z0-9._-][A-Za-z0-9._-]*\).*/\1/p' | head -1)
+fi
+case "$BEAD_RESOLVED" in
+  '') ;;
+  *[!A-Za-z0-9._-]*)
+    echo "error: --bead must be one word of letters, digits, dots, dashes, or underscores (got '$BEAD_RESOLVED')" >&2
+    exit 1
+    ;;
+  *)
+    bead_lookup_status=0
+    fm_bead_board_ready || bead_lookup_status=$?
+    if [ "$bead_lookup_status" -eq 2 ]; then
+      echo "error: this home joined the beads board (config/beads-board) but the board is unavailable, so task $ID cannot mark bead $BEAD_RESOLVED in_progress; refusing before creating its endpoint" >&2
+      exit 1
+    fi
+    ;;
+esac
+
 if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
   SPAWN_META_LOCK=$(fm_meta_lock_path "$STATE/$ID.meta") || exit 1
   fm_lock_acquire_wait "$SPAWN_META_LOCK"
@@ -5224,6 +5296,7 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   [ -z "$BASE_BRANCH" ] || echo "base_branch=$BASE_BRANCH"
   echo "model=${MODEL:-default}"
+  [ -z "$BEAD_RESOLVED" ] || echo "bead=$BEAD_RESOLVED"
   echo "effort=${EFFORT:-default}"
   # The worker account pin, only when this home declares one, so an unpinned
   # task record stays byte-identical.
@@ -5833,6 +5906,11 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
 fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
+
+# The linked board bead (bin/fm-bead-eta-lib.sh): best-effort, after the In
+# flight commit succeeded, so a board outage never blocks a launch and the
+# bead's start stamp follows the task's own committed state.
+[ -z "$BEAD_RESOLVED" ] || fm_bead_mark_in_progress "$BEAD_RESOLVED" "$ID"
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
