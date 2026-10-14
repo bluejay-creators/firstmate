@@ -16,6 +16,14 @@
 # locked drain rotates such leftovers away before doing anything else.
 # FM_STATUS_PRESENTATION_LOCK_TIMEOUT sets the positive whole-second wait for
 # presentation-path locks (default 10); queue mutation locks remain blocking.
+#
+# Compact handling: `--brief` replaces the raw row dump and the annotated
+# status sections with one line per queued wake (kind · key · first ~100 chars
+# of the payload); `--ack` follows the drain with the ack call when every
+# presented row absorbed as routine (deterministic heartbeat / bare working /
+# bare paused signal per bin/fm-ask-mai-coalesce.sh), or prints the exact
+# ack command otherwise. `--brief --ack` is the quiet-wake handling call the
+# omp supervision protocol names as default.
 set -u
 
 SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
@@ -33,6 +41,9 @@ SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+
+BRIEF=0
+AUTO_ACK=0
 
 DRAIN_TMP=
 DRAIN_VIEW_TMP=
@@ -217,6 +228,15 @@ presented_max_row() { # <rows-file>
   fi
 }
 
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --brief) BRIEF=1; shift ;;
+    --ack)   AUTO_ACK=1; shift ;;
+    --)      shift; break ;;
+    *) break ;;
+  esac
+done
+
 case "${1:-}" in
   '') ;;
   --ack-through)
@@ -228,8 +248,9 @@ case "${1:-}" in
     case "$ACK_GENERATION" in ''|*[!A-Za-z0-9._-]*) echo "wake drain: invalid recovery generation" >&2; exit 2 ;; esac
     [ "$#" -eq 4 ] || { echo "wake drain: unexpected acknowledgement arguments" >&2; exit 2; }
     ;;
-  *) echo "usage: fm-wake-drain.sh [--ack-through SEQUENCE --recovery-generation GENERATION]" >&2; exit 2 ;;
+  *) echo "usage: fm-wake-drain.sh [--brief] [--ack] [--ack-through SEQUENCE --recovery-generation GENERATION]" >&2; exit 2 ;;
 esac
+
 
 [ "$ACTOR" != branch ] || require_branch_eligible_rows || exit 1
 
@@ -1058,6 +1079,81 @@ case "${FM_WAKE_DRAIN_TEST_DELAY_BEFORE_COMMIT:-0}" in
   ''|*[!0-9]*) ;;
   *) sleep "$FM_WAKE_DRAIN_TEST_DELAY_BEFORE_COMMIT" ;;
 esac
+if [ "$BRIEF" -eq 1 ]; then
+  # Compact presentation: one line per row (kind · key · first ~100 chars of
+  # the payload), no annotated sections, no branch-outcome prose. When --ack
+  # is set, the classification below decides whether the drain acks itself.
+  ROUTINE=1
+  while IFS=$'\t' read -r _epoch _seq _kind _key _payload; do
+    case "$_kind" in
+      heartbeat) ;;
+      signal)
+        _status="$STATE/$_key"
+        _quiet_since=0
+        if [ -r "$STATE/.fm-quietsince-${_key}" ]; then
+          _quiet_since=$(cat -- "$STATE/.fm-quietsince-${_key}" 2>/dev/null)
+          case "$_quiet_since" in ''|*[!0-9]*) _quiet_since=0 ;; esac
+        fi
+        _verb=
+        if [ -f "$_status" ]; then
+          _tail=$(tail -c +$((_quiet_since + 1)) -- "$_status" 2>/dev/null || cat -- "$_status" 2>/dev/null || true)
+          while IFS= read -r _ln || [ -n "$_ln" ]; do
+            case "$_ln" in ''|[[:space:]]*) continue ;; esac
+            case "${_ln%%[[:space:]:]*}" in
+              working|paused|done|blocked|failed|needs-decision|awaiting-decision|needs-credential|resolved|note|watcher)
+                _verb=${_ln%%[[:space:]:]*} ;;
+            esac
+          done <<EOF2
+$_tail
+EOF2
+        fi
+        case "$_verb" in
+          working|paused) ;;
+          *) ROUTINE=0 ;;
+        esac
+        ;;
+      *) ROUTINE=0 ;;
+    esac
+    _line="$_kind · ${_key:-*} · ${_payload%%$'\n'*}"
+    _line="${_line:0:200}"
+    printf '%s\n' "$_line"
+  done <<EOF
+$RAW_ROWS
+EOF
+  fm_recovery_marker_snapshot "$RECOVERY_MARKER" || exit 1
+  RECOVERY_MARKER_TOKEN=$FM_RECOVERY_MARKER_TOKEN
+  case "$RECOVERY_MARKER_TOKEN" in
+    pending:*|announced:*|acked:*) ;;
+    *) echo "wake drain: durable wakes have no recovery generation" >&2; exit 1 ;;
+  esac
+  if [ "$AUTO_ACK" -eq 1 ] && [ "$ROUTINE" -eq 1 ]; then
+    # Inline the unreserved-row deletion the dedicated ack path would do; we
+    # already own the queue lock, so a recursive script call would deadlock
+    # waiting for its own lock.
+    DRAIN_TMP=$(mktemp "$STATE/.wake-queue.ack.XXXXXX") || exit 1
+    chmod 0600 "$DRAIN_TMP" || exit 1
+    awk -F '\t' -v cutoff="$ACK_THROUGH" '!($2 ~ /^[0-9]+$/ && $2 <= cutoff)' "$FM_WAKE_QUEUE" > "$DRAIN_TMP" || exit 1
+    if _fm_atomic_replace "$DRAIN_TMP" "$FM_WAKE_QUEUE"; then
+      DRAIN_TMP=
+      fm_recovery_marker_begin_handling "$RECOVERY_MARKER" || {
+        echo "wake drain: quiet ack could not reset the recovery episode" >&2
+        exit 1
+      }
+      printf '(acked)\n'
+    else
+      echo "wake drain: quiet ack could not write the queue" >&2
+      exit 1
+    fi
+  else
+    printf 'WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through %s --recovery-generation %s\n' \
+      "$ACK_THROUGH" "${RECOVERY_MARKER_TOKEN##*:}" >&2
+  fi
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  DRAIN_LOCK_HELD=false
+  assert_watcher_liveness
+  exit 0
+fi
+
 if [ -n "$RAW_ROWS" ]; then
   printf '%s\n' "$RAW_ROWS" || exit "$?"
 fi

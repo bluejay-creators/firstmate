@@ -83,6 +83,7 @@ import { Type } from "typebox";
 // the same repository root this file lives in.
 import { encodeFirstmateOperationalInput } from "../../.pi/extensions/lib/fm-operational-input.ts";
 
+
 // The omp extension API surface this file uses. omp is a Pi fork and ships no
 // separately installable type package, so the contract is declared locally
 // rather than imported from the Pi package name.
@@ -194,6 +195,7 @@ const config = process.env.FM_CONFIG_OVERRIDE || `${fmHome}/config`;
 const armScript = `${fmRoot}/bin/fm-watch-arm.sh`;
 const hostScript = `${fmRoot}/bin/fm-supervision-host.sh`;
 const marker = `${state}/.omp-watch-extension-loaded`;
+const fmQuietCoalesceScript = `${fmRoot}/bin/fm-ask-mai-coalesce.sh`;
 const handoffDir = `${state}/extensions/omp-primary-watch`;
 const actionableHandoff = `${handoffDir}/session-replacement-actionable.json`;
 const extensionVersion = `sha256:${createHash("sha256").update(readFileSync(extensionFile)).digest("hex")}`;
@@ -797,6 +799,50 @@ export default function (pi: ExtensionAPI) {
   let generation = createGeneration();
   activateGeneration(generation);
 
+// Wake text contract. A compact one-line banner replaces the historical
+// multi-line "Run bin/fm-wake-drain.sh first and handle the queued wake..."
+// body. The envelope kind stays "watcher" so fm-operational-input.sh
+// classification, the turn-end guard, and firstmate's supervision protocol
+// are unchanged. The agent learns the new call shape from
+// docs/supervision-protocols/omp.md and the bin/fm-wake-drain.sh header.
+const FM_WAKE_BANNER = "⚓ wake";
+const FM_WAKE_DELIVERY_RULE = "handled by bin/fm-wake-drain.sh --brief";
+
+function wakeTruncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max)}…`;
+}
+
+// Decompose a wake message into its kind and a short continuation (no
+// duplicate "kind:" prefix, no newlines, no absolute path stretch).
+function wakeDecompose(message: string): { kind: string; rest: string } {
+  const trimmed = message.split(/\r?\n/, 1)[0].trim();
+  const m = /^(signal|stale|check|heartbeat|watcher|procevent)(?::\s*|\s+|$)(.*)$/.exec(trimmed);
+  if (m) {
+    const rest = m[2].replace(/^\s+/, "");
+    return { kind: m[1], rest: rest.length > 0 ? rest : "" };
+  }
+  return { kind: "wake", rest: trimmed };
+}
+
+// One-line wake banner. The trailing rule names the only handling command
+// the agent needs so the supervision protocol stays the contract's owner.
+function formatWakeMessage(message: string): string {
+  const { kind, rest } = wakeDecompose(message);
+  const body = rest ? ` ${wakeTruncate(rest, 80)}` : "";
+  return `${FM_WAKE_BANNER} · ${kind}:${body} — ${FM_WAKE_DELIVERY_RULE}`;
+}
+
+// One line covering one or more absorbed routine rows. The agent always
+// sees the absorption count (never a silent swallow).
+function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summary?: string }[]): string {
+  const previews = absorbed
+    .slice(0, 2)
+    .map((row) => `${row.key} (${wakeTruncate(row.summary || row.kind, 60)})`)
+    .join(", ");
+  const extra = absorbed.length > 2 ? `, +${absorbed.length - 2}` : "";
+  return `${absorbed.length} routine absorbed: ${previews}${extra}`;
+}
   async function sendWake(
     owner: SessionGeneration,
     message: string,
@@ -805,12 +851,10 @@ export default function (pi: ExtensionAPI) {
     if (!generationIsLive(owner)) return false;
     // Prune notes for this session ride its first delivered wake rather than
     // becoming wakes of their own; up to two from one replay (stale-drop and
-    // cap) fit one line block.
+    // cap) fit one line block. They ride BEFORE the compact banner so they
+    // never get swallowed by the row-kind prefix.
     const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
-    const content = encodeFirstmateOperationalInput(
-      "watcher",
-      `FIRSTMATE WATCHER WAKE: ${message}${notesSuffix}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
-    );
+    const content = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${formatWakeMessage(message)}`);
     if (pending) owner.unconsumedWakes.set(pending.token, { content, pending });
     try {
       await pi.sendUserMessage(content, { deliverAs: "followUp" });
@@ -839,10 +883,7 @@ export default function (pi: ExtensionAPI) {
     if (items.length === 1) return sendWake(owner, message, items[0]);
     if (!generationIsLive(owner)) return false;
     const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
-    const content = encodeFirstmateOperationalInput(
-      "watcher",
-      `FIRSTMATE WATCHER WAKE: ${message}${notesSuffix}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
-    );
+    const content = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${formatWakeMessage(message)}`);
     for (const item of items) owner.unconsumedWakes.set(item.token, { content, pending: item });
     try {
       await pi.sendUserMessage(content, { deliverAs: "followUp" });
@@ -925,25 +966,94 @@ export default function (pi: ExtensionAPI) {
     return confirmHandlingDelivery(snapshot());
   }
 
-  async function deliverActionableWake(
+  // Routine rows are folded into one informational banner. See
+  // bin/fm-ask-mai-coalesce.sh's header for the classification contract;
+  // this site owns only the delivery decision.
+  type WakeCoalesceRow = { kind: string; key: string; payload?: string; summary?: string };
+
+  // Delivery triage gate: called inside deliverActionableWake before a wake
+  // becomes follow-up text. Fail-open on every error shape; deterministic
+  // heartbeats and bare working/paused signals also strip with no MAI call
+  // (bin/fm-ask-mai-coalesce.sh owns that shell).
+  type WakeDeliveryDecision =
+    | { action: "deliver"; absorbedNotice?: WakeCoalesceRow[] }
+    | { action: "absorbed"; absorbedEntries: WakeCoalesceRow[] };
+
+  function rowsFromCoalesce(value: unknown): WakeCoalesceRow[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry): entry is WakeCoalesceRow => {
+      if (!entry || typeof entry !== "object") return false;
+      if (!("kind" in entry) || !("key" in entry)) return false;
+      return typeof (entry as { kind: unknown }).kind === "string"
+        && typeof (entry as { key: unknown }).key === "string";
+    });
+  }
+
+  function deliveryDecision(): WakeDeliveryDecision {
+    let stdout: string;
+    try {
+      const result = spawnSync(
+        "bash",
+        [fmQuietCoalesceScript, fmHome, `${state}/.wake-queue`, "1"],
+        {
+          cwd: fmRoot,
+          encoding: "utf8",
+          env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot },
+        },
+      );
+      if (result.status !== 0) return { action: "deliver" };
+      stdout = String(result.stdout || "").trim();
+    } catch {
+      return { action: "deliver" };
+    }
+    if (!stdout) return { action: "deliver" };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      return { action: "deliver" };
+    }
+    if (!parsed || typeof parsed !== "object") return { action: "deliver" };
+    if (!("deliver" in parsed) || !("absorbed" in parsed)) return { action: "deliver" };
+    const deliver = rowsFromCoalesce((parsed as Record<string, unknown>).deliver);
+    const absorbed = rowsFromCoalesce((parsed as Record<string, unknown>).absorbed);
+    if (deliver.length > 0) {
+      return absorbed.length > 0
+        ? { action: "deliver", absorbedNotice: absorbed }
+        : { action: "deliver" };
+    }
+    if (absorbed.length > 0) return { action: "absorbed", absorbedEntries: absorbed };
+    return { action: "deliver" };
+  }
+
+  async function deliverActionablesWithTriage(
     owner: SessionGeneration,
     message: string,
-    pending: PendingActionableClose,
-    recovery?: { generation: string; watcherPid: string },
+    items: PendingActionableClose[],
   ): Promise<boolean> {
-    if (!generationIsLive(owner)) return false;
-    if (recovery) {
-      const confirmed = confirmHandlingDeliveryWithRetry(owner, recovery);
-      if (!confirmed.ok) {
-        const watcherPid = recovery.watcherPid;
-        if (!pidAlive(watcherPid)) {
-          await retireArm(owner.child);
+    const decision = deliveryDecision();
+    if (decision.action === "absorbed") {
+      // Routine. Finish every pending item so the actionables' episodes
+      // retire, then send ONE informational banner with no pending token -
+      // the agent reads the absorbed count, runs --brief, and carries on.
+      for (const item of items) {
+        item.delivered = true;
+        try {
+          finishPendingActionable(owner, item);
+        } catch (error) {
+          surfaceCleanupFailure(owner, error);
         }
-        return await sendWake(owner, `${message}\n\n${confirmed.detail}`, pending);
       }
+      return await sendWake(owner, formatAbsorbedWakeSummary(decision.absorbedEntries), undefined);
     }
+    // The wake still needs its turn. If a sibling routine row was absorbed
+    // in the same call, attach its one-line banner so the agent has the
+    // full picture.
+    const suffix = decision.absorbedNotice
+      ? `\n\n(${formatAbsorbedWakeSummary(decision.absorbedNotice)})`
+      : "";
     // No supervision branch on omp: every actionable wake goes to main.
-    return await sendWake(owner, message, pending);
+    return await sendBatchedWake(owner, `${message}${suffix}`, items);
   }
 
   function surfaceFailure(owner: SessionGeneration, message: string): void {
@@ -1088,7 +1198,7 @@ export default function (pi: ExtensionAPI) {
             return;
           }
           const message = restoration.failure ? `${batch.message}\n\n${restoration.failure}` : batch.message;
-          const delivered = await sendBatchedWake(owner, message, batch.items);
+          const delivered = await deliverActionablesWithTriage(owner, message, batch.items);
           if (!delivered) {
             settleClaim("failed");
             releaseClaim();
