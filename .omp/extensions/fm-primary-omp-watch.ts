@@ -41,29 +41,31 @@
 // omp emits session_shutdown for ordinary same-process replacements (/new,
 // /resume, /fork) as well as terminal quit. This extension binds one generation
 // per session activation. Only the active live generation may start, stop,
-// rearm, or clear the arm child. An owning replacement session_start (or fresh
-// factory bind) arms its new generation without a model turn. A replacement
+// rearm, or clear the arm child. An owning replacement session_start (or the
+// first factory bind, while no live generation exists) arms its new
+// generation without a model turn. A replacement
 // handoff carries actionable closes that were still pending delivery; its
 // durable state lives at state/extensions/omp-primary-watch/session-replacement-actionable.json.
 // Stale callbacks from a prior generation are no-ops against the active replacement.
 //
 // Subagent session safety (stated once here):
-// omp re-binds this factory for a subagent session (task tool, /tan clone),
-// whose events carry ctx.agent.kind === "sub" and ctx.agent.depth > 0 while
-// module state stays shared with the primary. That session never claims,
-// consumes, or retires the owner's arm, never persists the replacement
-// handoff, and its shutdown leaves the primary generation live: every
-// lifecycle handler and the arming tool one-shot stand down on that context.
-// omp's extension documentation owns the ctx.agent signal shape.
-// The 2026-10-08 and 2026-10-13 incidents were the inverse of this contract:
-// a subagent session's shutdown ran stopSessionGeneration against the shared
-// generation, retiring the primary's arm and leaving fm_watch_arm_omp
-// answering "watcher: not armed - omp session is shutting down" until the
-// supervisor restarted. The 2026-10-14 canary on omp 18.10.4 reproduced the
-// same surface: the subagent's shutdown arrived at this file's handler with
-// a ctx that did not read as a subagent under the kind-only test shipped
-// with PR #9, so the gate below now matches the wider contract (kind, then
-// depth, then the lock-owning fail-safe for ambiguous ctx).
+// omp re-binds this factory for a subagent session (task tool, eval agent(),
+// /tan clone) on the same evaluated module, so module state - including the
+// active generation - is shared with the primary. Observed on omp 18.10.4
+// with FM_OMP_EXTENSION_DEBUG_LOG: the rebind runs in the parent process right
+// after before_subagent_spawn, before any subagent event and with no ctx, and
+// the subagent's events then carry ctx.agent.kind === "sub" (depth > 0 for
+// task children); no subagent session_shutdown followed its completion.
+// A factory bind therefore activates its generation only when no live
+// generation exists, so a rebind never displaces the primary's; omp's
+// extension documentation owns the ctx.agent signal shape. A subagent session
+// never claims, consumes, or retires the owner's arm and never persists the
+// replacement handoff: every lifecycle handler and the arming tool stand down
+// on that context. The 2026-10-08, 2026-10-13, and 2026-10-14 incidents were
+// an unconditional activation at bind: the subagent's generation became the
+// active one, the primary's read as not live, its next actionable close was
+// dropped undelivered, and fm_watch_arm_omp answered "watcher: not armed -
+// omp session is shutting down" until the supervisor restarted.
 //
 // Delivery versus consumption (stated once here):
 // A main follow-up is delivered once omp accepts it (sendUserMessage returns).
@@ -95,6 +97,9 @@ import { Type } from "typebox";
 // resolves bin/fm-operational-input.sh relative to its own location, which is
 // the same repository root this file lives in.
 import { encodeFirstmateOperationalInput } from "../../.pi/extensions/lib/fm-operational-input.ts";
+// Opt-in lifecycle debug log (FM_OMP_EXTENSION_DEBUG_LOG); its owner states
+// the contract and is a no-op when the variable is unset.
+import { extensionDebugEnabled, extensionDebugLogger } from "../../.pi/extensions/lib/fm-extension-debug.ts";
 
 
 // The omp extension API surface this file uses. omp is a Pi fork and ships no
@@ -247,6 +252,21 @@ const handoffMaxPending = positiveInteger("FM_OMP_HANDOFF_MAX_PENDING", 50);
 let nextGenerationId = 0;
 let nextHandoffId = 0;
 let activeGeneration: SessionGeneration | null = null;
+const debugLog = extensionDebugLogger("omp-watch");
+// One id per evaluation of this module and one per factory invocation, so the
+// debug log shows whether a rebound session shares this module's state.
+const debugModuleInstance = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+let nextDebugBindingId = 0;
+function generationDebugFields(generation: SessionGeneration): Record<string, unknown> {
+  return {
+    module: debugModuleInstance,
+    generation: generation.id,
+    stopping: generation.stopping,
+    activeGeneration: activeGeneration ? activeGeneration.id : null,
+    live: generationIsLive(generation),
+    lock: lockOwnership(),
+  };
+}
 let replacementHandoff: PendingActionableClose[] | null = null;
 type ReplacementActionableReceiver = (pending: PendingActionableClose) => void;
 type ActionableDeliveryClaim = {
@@ -818,8 +838,18 @@ const cleanupOnProcessExit = () => {
 process.once("exit", cleanupOnProcessExit);
 
 export default function (pi: ExtensionAPI) {
+  const debugBinding = ++nextDebugBindingId;
+  const debugPredecessorGeneration = activeGeneration ? activeGeneration.id : null;
   let generation = createGeneration();
-  activateGeneration(generation);
+  // A rebind for a subagent session must not displace the live primary
+  // generation (see "Subagent session safety" above); the primary's own
+  // session_start still activates its generation unconditionally.
+  const bindActivates = !activeGeneration || activeGeneration.stopping;
+  if (bindActivates) activateGeneration(generation);
+  debugLog(debugBinding, "factory_bind", bindActivates ? "activateGeneration" : "keep-live-generation", undefined, () => ({
+    ...generationDebugFields(generation),
+    predecessorActiveGeneration: debugPredecessorGeneration,
+  }));
 
   // Routine absorption mode (docs/configuration.md "Routine wake absorption"
   // owns the contract). `banner` (the default, and every unrecognized value)
@@ -1783,6 +1813,11 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
       releaseChild();
       const classification = classifyClose(hostMode, stdout, stderr, code, signal);
       const predecessor = String(armChild.pid ?? "");
+      debugLog(debugBinding, "arm_child_close", generationIsLive(owner) ? `${classification.kind}-handled` : `${classification.kind}-dropped-generation-not-live`, undefined, () => ({
+        ...generationDebugFields(owner),
+        armChild: id,
+        armPid: predecessor,
+      }));
       if (classification.kind === "actionable") {
         const pending = armPendingActionable.get(armChild) ?? createPendingActionable(classification.message, predecessor);
         enqueuePendingActionable(owner, pending);
@@ -1850,28 +1885,17 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     return result;
   }
 
-// omp re-binds extension factories per subagent (task tool, /tan clone); those
-// events carry ctx.agent.kind === "sub" and share this module state with the
-// primary. A subagent generation must never claim, consume, or retire the
-// owning session's arm, and its shutdown must not persist the replacement
-// handoff or mark the primary generation stopping.
-//
-// 18.10.4 contract (stated once here): on the supervisor's --resume launch,
-// >1-hop-long parent walks keep lockOwnership() owned for exactly the primary;
-// the primary's ctx.agent.kind is "main" and depth is 0 (verified 18.8.7,
-// 18.10.4). A subagent's own ctx carries kind === "sub" and depth > 0. Two
-// incidents (2026-10-08, 2026-10-13) and the 2026-10-14 canary proved that a
-// subagent shutdown arriving without a reliably-readable kind on 18.10.4
-// stands the session down as if it were the primary and retires the
-// supervisor's arm, after which fm_watch_arm_omp answers "watcher: not armed
-// - omp session is shutting down" until the supervisor restarts. The gate
-// below therefore (a) takes depth > 0 as subagent whether or not kind is
-// readable, and (b) treats any ambiguous ctx (absent agent, absent kind, or
-// an unrecognized kind) as a subagent whenever lockOwnership() proves this
-// process is not the fleet's owning primary; a fleet-owning primary keeps
-// main semantics. subagentShutdownContext additionally recognizes depth > 0
-// for shutdown-only use, where retiring shared primary state from an
-// ambiguous-but-not-lock-owning ctx is the catastrophic path.
+// Subagent context gate ("Subagent session safety" at the top of this file
+// owns the contract). The primary's ctx.agent.kind is "main" with depth 0 and
+// a subagent's is "sub" (verified 18.8.7, 18.10.4; 18.10.4 task children also
+// carry depth > 0). The gate is defensive beyond that observed shape: it takes
+// depth > 0 as subagent whether or not kind is readable, and treats any
+// ambiguous ctx (absent agent, absent kind, or an unrecognized kind) as a
+// subagent whenever lockOwnership() proves this process is not the fleet's
+// owning primary; a fleet-owning primary keeps main semantics.
+// subagentShutdownContext additionally applies that lock test to a shutdown
+// ctx with no agent at all, where retiring shared primary state is the
+// catastrophic path.
 function subagentContext(ctx: unknown): boolean {
   if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return false;
   const agent = ctx.agent;
@@ -1891,7 +1915,11 @@ const subagentArmStatus =
   "watcher: not armed - this is a subagent session; the supervisor's omp primary owns watcher continuity, so no action is needed here";
 
   pi.on?.("before_agent_start", (event, ctx) => {
-    if (subagentContext(ctx)) return;
+    if (subagentContext(ctx)) {
+      debugLog(debugBinding, "before_agent_start", "subagent-skip", ctx, () => generationDebugFields(generation));
+      return;
+    }
+    debugLog(debugBinding, "before_agent_start", "consumeWake", ctx, () => generationDebugFields(generation));
     consumeWake(generation, String((event as { prompt?: unknown })?.prompt ?? ""));
   });
   pi.on?.("message_start", (event, ctx) => {
@@ -1916,28 +1944,52 @@ const subagentArmStatus =
   });
 
   pi.on?.("session_start", async (_event, ctx) => {
-    if (subagentContext(ctx)) return;
+    if (subagentContext(ctx)) {
+      debugLog(debugBinding, "session_start", "subagent-skip", ctx, () => generationDebugFields(generation));
+      return;
+    }
     if (generation.stopping) generation = createGeneration();
     activateGeneration(generation);
     markLoaded();
-    if (lockOwnership() !== "owned") return;
-    activateOwnedWatch(generation);
+    if (lockOwnership() !== "owned") {
+      debugLog(debugBinding, "session_start", "activateGeneration-not-lock-owner", ctx, () => generationDebugFields(generation));
+      return;
+    }
+    const result = activateOwnedWatch(generation);
+    debugLog(debugBinding, "session_start", "activateOwnedWatch", ctx, () => ({ ...generationDebugFields(generation), result }));
   });
   pi.on?.("session_shutdown", async (_event, ctx) => {
-    if (subagentShutdownContext(ctx)) return;
+    if (subagentShutdownContext(ctx)) {
+      debugLog(debugBinding, "session_shutdown", "subagent-skip", ctx, () => generationDebugFields(generation));
+      return;
+    }
+    debugLog(debugBinding, "session_shutdown", "stopSessionGeneration", ctx, () => generationDebugFields(generation));
     // omp carries no shutdown reason (verified: `reason` is undefined), so the
     // replacement handoff is always persisted when anything is pending; a
     // terminal quit then merely replays an already-drained wake next start.
     if (replacementCoordinator.receiver === receiveReplacementActionable) replacementCoordinator.receiver = null;
     await stopSessionGeneration(generation, true);
   });
+  // Debug-only observers: registered only when the debug log is enabled, so
+  // the default extension surface is unchanged.
+  if (extensionDebugEnabled) {
+    pi.on?.("agent_end", (_event, ctx) => {
+      debugLog(debugBinding, "agent_end", "observe", ctx, () => generationDebugFields(generation));
+    });
+    pi.on?.("before_subagent_spawn", (event, ctx) => {
+      const spawned = event && typeof event === "object" && "agent" in event ? event.agent : undefined;
+      debugLog(debugBinding, "before_subagent_spawn", "observe", ctx, () => ({ ...generationDebugFields(generation), spawned }));
+    });
+  }
 
   pi.registerCommand?.("fm-watch-arm-omp", {
     description: "Arm firstmate watcher supervision through the omp extension instead of foreground bash.",
     handler: async (_args, ctx) => {
-      const result = subagentContext(ctx)
+      const subagent = subagentContext(ctx);
+      const result = subagent
         ? { ok: true, message: subagentArmStatus }
         : activateOwnedWatch(generation);
+      debugLog(debugBinding, "fm-watch-arm-omp", subagent ? "subagent-skip" : "activateOwnedWatch", ctx, () => ({ ...generationDebugFields(generation), result }));
       ctx?.ui?.notify?.(result.message, result.ok ? "info" : "warning");
     },
   });
@@ -1953,12 +2005,14 @@ const subagentArmStatus =
     parameters: Type.Object({}),
     execute: async (_toolCallId: unknown, _params: unknown, _signal: unknown, _onUpdate: unknown, ctx: unknown) => {
       if (subagentContext(ctx)) {
+        debugLog(debugBinding, "fm_watch_arm_omp", "subagent-skip", ctx, () => generationDebugFields(generation));
         return {
           content: [{ type: "text", text: subagentArmStatus }],
           details: { ok: true, message: subagentArmStatus },
         };
       }
       const result = activateOwnedWatch(generation);
+      debugLog(debugBinding, "fm_watch_arm_omp", "activateOwnedWatch", ctx, () => ({ ...generationDebugFields(generation), result }));
       return {
         content: [{ type: "text", text: result.message }],
         details: result,

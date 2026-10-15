@@ -451,7 +451,8 @@ install_omp_extension_fixture() {  # <repo>
   local repo=$1
   mkdir -p "$repo/.omp/extensions" "$repo/.pi/extensions/lib" "$repo/bin" "$repo/node_modules/typebox"
   cp "$ROOT/.omp/extensions/fm-primary-turnend-guard.ts" "$ROOT/.omp/extensions/fm-primary-omp-watch.ts" "$repo/.omp/extensions/"
-  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" "$repo/.pi/extensions/lib/"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" \
+    "$ROOT/.pi/extensions/lib/fm-extension-debug.ts" "$repo/.pi/extensions/lib/"
   cp "$ROOT/bin/fm-operational-input.sh" "$ROOT/bin/fm-supervision-engine-lib.sh" "$repo/bin/"
   cp "$ROOT/bin/fm-wake-drain.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-classify-lib.sh" \
     "$ROOT/bin/fm-line-cap-lib.sh" "$ROOT/bin/fm-timeout-lib.sh" "$ROOT/bin/fm-lease-lib.sh" \
@@ -974,11 +975,14 @@ EOF
   pass ".omp watch extension: a host close split across stream chunks reaches main as one whole follow-up"
 }
 
-# A subagent (task tool, /tan clone) re-binds the watch extension against
-# shared module state with ctx.agent.kind === "sub". Its start, shutdown, and
-# its own session_start must leave the primary's arm child alone, its own
-# events must not consume the primary's pending wake, and its arming tool must
-# answer with a stand-down instead of touching the arm.
+# A subagent (task tool, /tan clone) re-binds the watch extension's factory
+# against shared module state, and its events carry ctx.agent.kind === "sub".
+# The rebind itself, its own session_start, and its shutdown must leave the
+# primary's arm child and live generation alone, its own events must not
+# consume the primary's pending wake, and its arming tool must answer with a
+# stand-down instead of touching the arm. Observed on omp 18.10.4: the
+# rebind happens at task spawn, before any subagent event, and no subagent
+# session_shutdown follows.
 test_watch_extension_subagent_session_never_touches_the_arm() {
   local repo home out status
   repo="$TMP_ROOT/watch-sub/repo"; home="$TMP_ROOT/watch-sub/home"
@@ -1012,16 +1016,24 @@ if (!/^watcher: (?:started omp extension arm child 1|unchanged - omp extension a
 const markerPid = Number(execFileSync("bash", ["-c", `pgrep -f "fm-watch-arm.sh" | head -1`], { encoding: "utf8" }).trim());
 if (!markerPid) throw new Error("the primary arm child was not running");
 const subCtx = { agent: { kind: "sub", id: "task-1", name: "explore", depth: 1, parentId: "main" } };
+// omp rebinds the factory for the subagent session on the same module.
+const subHandlers = new Map(); let subToolDef = null;
+mod.default({
+  on(e, h) { subHandlers.set(e, h); },
+  registerCommand() {},
+  registerTool(t) { subToolDef = t; },
+  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+});
 // A subagent session start must not arm, re-arm, or replace anything.
-await handlers.get("session_start")({ type: "session_start" }, subCtx);
+await subHandlers.get("session_start")({ type: "session_start" }, subCtx);
 // Its arming tool stands down and leaves the primary arm untouched.
-const subTool = await tool.execute(undefined, undefined, undefined, undefined, subCtx);
+const subTool = await subToolDef.execute(undefined, undefined, undefined, undefined, subCtx);
 if (!/subagent session/.test(subTool.content[0].text)) throw new Error(`subagent tool call did not stand down: ${subTool.content[0].text}`);
 if (subTool.details?.ok !== true) throw new Error("the subagent stand-down must read as non-error so the subagent model stays calm");
 // Subagent agent events must not consume the pending wake owned by the primary.
-await handlers.get("before_agent_start")({ type: "before_agent_start", prompt: "subagent prompt" }, subCtx);
+await subHandlers.get("before_agent_start")({ type: "before_agent_start", prompt: "subagent prompt" }, subCtx);
 // A subagent shutdown must not retire the primary arm or persist a handoff.
-await handlers.get("session_shutdown")({}, subCtx);
+await subHandlers.get("session_shutdown")({}, subCtx);
 const stillAlive = spawnSync("bash", ["-c", `kill -0 ${markerPid} 2>/dev/null && echo alive || echo dead`], { encoding: "utf8" }).stdout.trim();
 if (stillAlive !== "alive") throw new Error(`the subagent shutdown killed the primary arm child (pid ${markerPid})`);
 if (existsSync(`${process.env.FM_HOME}/state/extensions/omp-primary-watch/session-replacement-actionable.json`)) {
@@ -1127,6 +1139,7 @@ test_turnend_guard_subagent_gate_recognizes_1810_shapes() {
   printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-turnend-guard.sh"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-arm-pretool-check.sh"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-cd-pretool-check.sh"
+  # shellcheck disable=SC2016 # "$2" belongs to the generated fixture script
   printf '#!/usr/bin/env bash\nprintf "OMP DIGEST source=%%s\\n" "$2"\n' > "$repo/bin/fm-sessionstart-run.sh"
   chmod +x "$repo/bin/"*.sh
   out=$(FM_HOME="$home" EXT="$repo/.omp/extensions/fm-primary-turnend-guard.ts" node --input-type=module 2>&1 <<'EOF'
@@ -1183,6 +1196,7 @@ test_turnend_guard_subagent_session_stands_down() {
   printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-turnend-guard.sh"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-arm-pretool-check.sh"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-cd-pretool-check.sh"
+  # shellcheck disable=SC2016 # "$2" belongs to the generated fixture script
   printf '#!/usr/bin/env bash\nprintf "OMP DIGEST source=%%s\\n" "$2"\n' > "$repo/bin/fm-sessionstart-run.sh"
   chmod +x "$repo/bin/"*.sh
   out=$(FM_HOME="$home" EXT="$repo/.omp/extensions/fm-primary-turnend-guard.ts" node --input-type=module 2>&1 <<'EOF'

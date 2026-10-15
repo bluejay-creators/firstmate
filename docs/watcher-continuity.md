@@ -73,7 +73,7 @@ omp's replacement follows its own generation-owner contract in `.omp/extensions/
 
 - It retires the predecessor arm at replacement shutdown instead of retaining it across the handoff.
 - It reports no shutdown reason, so every shutdown with a pending actionable close persists the handoff for the next owning `session_start` to replay.
-- A subagent session (task tool, /tan clone) rebinding the factory with ctx.agent.kind === "sub" is not a replacement: it stands down, and its start, shutdown, and arming calls never touch the supervising session's generation or handoff.
+- A subagent session (task tool, /tan clone) rebinding the factory is not a replacement: the rebind keeps the primary's live generation active, the session's events carry ctx.agent.kind === "sub" and stand down, and its start, shutdown, and arming calls never touch the supervising session's generation or handoff.
   The supervision-host extension follows the same rule, so an in-process subagent is safe for bounded read-only or short investigative work (`.agents/skills/harness-adapters/references/harness/omp.md` owns when a supervisor prefers one).
 
 ### Cursor stop hook

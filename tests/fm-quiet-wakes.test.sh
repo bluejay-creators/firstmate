@@ -206,7 +206,8 @@ install_silent_fixture() { # <repo> - production extension + its bin/ tools
   cp -R "$ROOT/bin" "$repo/bin"
   mkdir -p "$repo/.omp/extensions" "$repo/.pi/extensions/lib" "$repo/node_modules/typebox"
   cp "$ROOT/.omp/extensions/fm-primary-omp-watch.ts" "$repo/.omp/extensions/"
-  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" "$repo/.pi/extensions/lib/"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" \
+    "$ROOT/.pi/extensions/lib/fm-extension-debug.ts" "$repo/.pi/extensions/lib/"
   printf '{"name":"typebox","type":"module","exports":"./index.js"}\n' > "$repo/node_modules/typebox/package.json"
   printf 'export const Type = { Object(p){return {type:"object",properties:p}} };\n' > "$repo/node_modules/typebox/index.js"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'

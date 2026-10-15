@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Opt-in credentialed live regression that pairs with the portable
 # tests/fm-omp-harness.test.sh: a real omp rpc session arms the watcher through
-# the tracked extension, runs one task-tool subagent, then proves the watcher
-# remains armed at the same pid through the subagent lifecycle and its exit
-# ledger records an actionable signal close after a queued meta+status wake.
-# omp 18.8.x re-binds extension factories per subagent session with
-# ctx.agent.kind === "sub"; the extension's subagentContext gate is what must
-# keep the primary arm and replacement handoff untouched. Fires only under
-# FM_OMP_SUBAGENT_SMOKE=1 (live-harness-optin, token-spending) and runs
-# against a scratch FIRSTmate checkout, never the production home.
+# the tracked extension, runs one task-tool subagent whose result carries a
+# token only the child could read, then proves the primary still owns its arm
+# (the arm command answers "unchanged", never "shutting down") and that a
+# queued meta+status wake still reaches the primary's rpc stream.
+# omp re-binds extension factories per subagent session on the same module
+# (observed on 18.10.4: the rebind runs at task spawn with no ctx); the watch
+# extension's bind must not displace the primary's live generation. Fires
+# only under FM_OMP_SUBAGENT_SMOKE=1 (live-harness-optin, token-spending) and
+# runs against a scratch FIRSTmate checkout, never the production home.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -78,6 +79,7 @@ mkdir -p "$PROJECT/state" "$PROJECT/config" "$PROJECT/data"
 rpc_send() { printf '%s\n' "$1" >&3; }
 wait_for_log() { local s=$1 a=${2:-240} i=0; while [ "$i" -lt "$a" ]; do grep -Fq -- "$s" "$RPC_LOG" 2>/dev/null && return 0; sleep 0.5; i=$((i+1)); done; return 1; }
 wait_for_file() { local p=$1 a=${2:-240} i=0; while [ "$i" -lt "$a" ]; do [ -f "$p" ] && return 0; sleep 0.5; i=$((i+1)); done; return 1; }
+pid_live() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
 # Wait until omp reports a settled session after a prompt. A follow-up prompt
 # fired while the previous turn still runs is refused with
 # "Agent is already processing".
@@ -118,79 +120,70 @@ while [ "$i" -lt 120 ]; do
   sleep 0.5
   i=$((i + 1))
 done
-[ -n "$arm_pid" ] && kill -0 "$arm_pid" 2>/dev/null || { echo "no live watcher after arm"; exit 1; }
+pid_live "$arm_pid" || { echo "no live watcher after arm"; exit 1; }
 pass "watcher armed (pid $arm_pid)"
 
-# Run a subagent through the task tool. The subagent must stand down instead of
-# touching watcher supervision. Reply text is enough proof the subagent ran.
-rpc_send '{"id":"p3","type":"prompt","message":"Use your in-process subagent tool (the tool that launches a child agent, commonly named task) exactly once, with a one-line task that runs `printf SUBAGENT_RAN` through bash and nothing else. Wait for the child result, then reply with exactly SUBAGENT_RAN and nothing else. The reply must carry only that token."}'
+# Run a subagent through the task tool. The child reads a token the parent
+# never sees, so the token reaching the rpc stream proves the child ran (a
+# refused task call cannot produce it). The task tool is asynchronous on
+# 18.10.4: the child result auto-delivers after the call returns.
+token="omp-sub-smoke-$$-$(date +%s)"
+printf '%s\n' "$token" > "$PROJECT/omp-sub-smoke-token.txt"
+# shellcheck disable=SC2016 # the backticks are prompt text for the model, not shell
+rpc_send '{"id":"p3","type":"prompt","message":"Call the task tool exactly once with one task. Required parameters: context set to \"Scratch subagent probe; read one file and report its content.\" and a single task item whose assignment is: run `cat omp-sub-smoke-token.txt` with bash and reply with only the file content. Do not read the file yourself. Wait for the child result, then reply with exactly the token the child returned and nothing else."}'
 sleep 1
 grep -q '"id":"p3","type":"response","command":"prompt","success":true' "$RPC_LOG" || { echo "p3 was refused:"; grep '"id":"p3"' "$RPC_LOG" | head -2; exit 1; }
+wait_for_log "$token" 720 || { echo "subagent never returned the child-only token"; tail -5 "$RPC_LOG"; exit 1; }
+wait_for_settle 360 || true
+sub_pid_before=$(cat "$PROJECT/state/.watch.lock/pid" 2>/dev/null || true)
+pid_live "$sub_pid_before" || { echo "watcher died before wake was queued"; exit 1; }
+pass "subagent completed with its child-only token; watcher still running (pid $sub_pid_before)"
+
+# The primary must still own a live generation: the arm command answers that
+# it already owns an arm child, never that the session is shutting down.
+rpc_send '{"id":"p4","type":"prompt","message":"/fm-watch-arm-omp"}'
+wait_for_log 'watcher: unchanged - omp extension already owns an arm child' 60 || {
+  echo "the arm command did not report the primary's existing arm after the subagent:"
+  grep -o '"message":"watcher: [^"]*"' "$RPC_LOG" | tail -2
+  exit 1
+}
+if grep -q 'omp session is shutting down' "$RPC_LOG"; then echo "the primary read as shutting down after the subagent"; exit 1; fi
+pass "after the subagent the arm command reports the primary's existing arm"
+
+# Queue an actionable wake through the same meta+status record every live e2e
+# uses, then assert the wake reaches the primary's rpc stream (as the hidden
+# fm.wake custom message, or the visible follow-up fallback) and the watcher
+# cycle continues. An exit-ledger close alone is not enough: with the primary
+# generation displaced the arm child still closes actionable, but the wake is
+# dropped before delivery and no successor starts.
+: > "$PROJECT/state/omp-sub-smoke.meta"
+printf 'done: omp subagent smoke watcher fire\n' > "$PROJECT/state/omp-sub-smoke.status"
 i=0
-ran=
-while [ "$i" -lt 720 ]; do
-  if python3 -c '
-import json, sys
-lines = open(sys.argv[1]).read().splitlines()
-start = next((i for i, l in enumerate(lines) if "\"id\":\"p3\"" in l and "\"command\":\"prompt\"" in l and "\"success\":true" in l), 0)
-blob = ""
-for line in lines[start:]:
-    try: j = json.loads(line)
-    except Exception:
-        continue
-    t = j.get("type")
-    if t == "message_update":
-        ev = j.get("assistantMessageEvent") or {}
-        if ev.get("type") == "text_delta":
-            blob += ev.get("delta", "")
-        continue
-    if t not in ("message_end", "message", "task_result", "agent_end"):
-        continue
-    stack = [j]
-    while stack:
-        x = stack.pop()
-        if isinstance(x, str):
-            blob += x
-        elif isinstance(x, dict):
-            stack.extend(x.values())
-        elif isinstance(x, list):
-            stack.extend(x)
-sys.exit(0 if "SUBAGENT_RAN" in blob else 1)
-' "$RPC_LOG"; then
-    ran=1; break
+delivered=
+while [ "$i" -lt 240 ]; do
+  if jq -en '[inputs | select(.type == "message_start" and (.message.customType == "fm.wake" or .message.role == "user")) | .message.content | tostring | test("omp-sub-smoke\\.status")] | any' "$RPC_LOG" >/dev/null 2>&1; then
+    delivered=1
+    break
   fi
   sleep 0.5
   i=$((i + 1))
 done
-[ -n "$ran" ] || { echo "subagent did not run"; tail -5 "$RPC_LOG"; exit 1; }
-sub_pid_before=$(cat "$PROJECT/state/.watch.lock/pid" 2>/dev/null || true)
-[ -n "$sub_pid_before" ] && kill -0 "$sub_pid_before" 2>/dev/null || { echo "watcher died before wake was queued"; exit 1; }
-pass "subagent completed; watcher still armed (pid $sub_pid_before)"
-
-# Queue an actionable wake through the same meta+status record every live e2e
-# uses, then assert the watcher exit ledger names the actionable close. The
-# ledger is the wake queue's upstream owner; a queued durable-wake row and a
-# delivered follow-up reach main only through this same close, and both are
-# non-subagent paths this smoke does not re-verify (tests/fm-omp-primary-
-# live-e2e.test.sh owns that full loop).
-: > "$PROJECT/state/omp-sub-smoke.meta"
-printf 'done: omp subagent smoke watcher fire\n' > "$PROJECT/state/omp-sub-smoke.status"
+[ -n "$delivered" ] || { echo "the queued wake never reached the primary after the subagent lifecycle"; tail -3 "$PROJECT/state/.watch-cycle-exits.log" 2>/dev/null; exit 1; }
 i=0
-while [ "$i" -lt 240 ]; do
-  grep -Eq 'reason=actionable-signal' "$PROJECT/state/.watch-cycle-exits.log" 2>/dev/null && break
+post_pid=
+restarted=
+while [ "$i" -lt 60 ]; do
+  post_pid=$(cat "$PROJECT/state/.watch.lock/pid" 2>/dev/null || true)
+  if [ "$post_pid" != "$sub_pid_before" ] && pid_live "$post_pid"; then restarted=1; break; fi
   sleep 0.5
   i=$((i + 1))
 done
-grep -Eq 'reason=actionable-signal' "$PROJECT/state/.watch-cycle-exits.log" 2>/dev/null \
-  || { echo "watcher never recorded an actionable signal close after the subagent lifecycle"; tail -5 "$RPC_ERR" 2>/dev/null; exit 1; }
-post_pid=$(cat "$PROJECT/state/.watch.lock/pid" 2>/dev/null || true)
-[ -n "$post_pid" ] && kill -0 "$post_pid" 2>/dev/null \
-  || { echo "watcher not restarted after its actionable close"; exit 1; }
-pass "actionable close recorded after the subagent; watcher cycle continues (pid $post_pid)"
+[ -n "$restarted" ] || { echo "watcher not restarted after its actionable close"; exit 1; }
+pass "the queued wake reached the primary after the subagent; watcher cycle continues (pid $post_pid)"
 
 # Final: watcher cycle still alive after the actionable close.
 final_pid=$(cat "$PROJECT/state/.watch.lock/pid" 2>/dev/null || true)
-[ -n "$final_pid" ] && kill -0 "$final_pid" 2>/dev/null || { echo "watcher gone after the actionable close"; exit 1; }
+pid_live "$final_pid" || { echo "watcher gone after the actionable close"; exit 1; }
 exec 3>&-
 kill -TERM "$OMP_PID" 2>/dev/null || true
 sleep 2
