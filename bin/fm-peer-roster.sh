@@ -45,7 +45,10 @@
 # > idle so a declared wait always wins over pane motion, an unresolved
 # decision always wins over key noise, and a terminal done/failed verb always
 # outranks an idle pane so a published result surfaces as finished rather than
-# needing the captain. Work-evidence and open-keys never come from scraping
+# needing the captain.
+# Per row a `stale_keys` list mirrors open_keys: a keyed decision older than
+# 60 minutes with no resolution ages out of open_keys into stale_keys and
+# stops forcing the blocked posture. Work-evidence and open-keys never come from scraping
 # free text: only the tag pair [<key=...][at=...]> counts, and nothing else
 # appears in posture.
 #
@@ -80,6 +83,9 @@ import sys
 import time
 
 STALE_AFTER = 3600  # idle beyond 60 minutes of silence is idle-stale
+# A keyed decision older than that with no resolution is stale rather than
+# blocking: its opener is the last activity the key ever saw.
+DECISION_STALE_AFTER = STALE_AFTER
 
 def usage(code):
     print('usage: fm-peer-roster.sh [--json]', file=sys.stderr if code else sys.stdout)
@@ -244,6 +250,8 @@ except (ValueError, TypeError, AttributeError) as exc:
 #                 real timestamp whenever its [at=] tag parses)
 #   open_keys   - keyed blocked/needs-decision entries without a later
 #                 resolved key, regardless of the free text in between
+#   open_ats    - the [at=] stamp of each open key's opener, the only activity
+#                 stamp a durable keyed decision carries
 REPORT_LINE = re.compile(r'^(working|paused|blocked|needs-decision|resolved|done|failed|note)(?:\s|\[|:)')
 
 def report_tag(line, name):
@@ -262,23 +270,30 @@ def report_key(line):
     return slug if slug and '=' not in slug else None
 
 def read_reports(path):
-    """Latest status line and keyed-open decision set. Durable, no free-text scraping."""
+    """Latest status line plus open keyed decisions and their opener stamps."""
     reports = []
     for value in path.read_text(errors='replace').splitlines():
         match = REPORT_LINE.match(value)
         if match:
             reports.append((match.group(1), value))
     latest = reports[-1][1] if reports else None
-    opened = []
+    opened = {}
+    ordered = []
     for verb, value in reports:
         key = report_key(value)
         if key is None:
             continue
+        stamp = report_stamp(value)
         if verb == 'resolved':
-            opened = [item for item in opened if item != key]
-        elif verb in ('blocked', 'needs-decision') and key not in opened:
-            opened.append(key)
-    return latest, opened
+            if key in opened:
+                del opened[key]
+                ordered = [item for item in ordered if item != key]
+        elif verb in ('blocked', 'needs-decision'):
+            # A reopen replaces the open: its stamp is the key's last say.
+            opened[key] = stamp
+            if key not in ordered:
+                ordered.append(key)
+    return latest, opened, ordered
 
 def mtime(path):
     try:
@@ -287,11 +302,11 @@ def mtime(path):
         return None
 
 def report_info(task_id, log_path):
-    """Latest line, its epoch, and the open keyed decisions for one row."""
-    latest_line, stamp, opened = None, None, []
+    """Latest line, its epoch, and open-vs-stale keyed decisions for one row."""
+    latest_line, stamp, opened, ordered = None, None, {}, []
     if log_path.is_file():
         try:
-            latest_line, opened = read_reports(log_path)
+            latest_line, opened, ordered = read_reports(log_path)
             if latest_line is not None:
                 stamp = report_stamp(latest_line)
                 if stamp is None:
@@ -299,7 +314,10 @@ def report_info(task_id, log_path):
         except OSError as exc:
             source_error('peers', f'{task_id} status: {exc}')
     age = (now - stamp) if stamp is not None and now >= stamp else None
-    return latest_line, stamp, age, opened
+    fresh = [key for key in ordered
+             if opened[key] is None or now - opened[key] <= DECISION_STALE_AFTER]
+    stale = [key for key in ordered if key not in fresh]
+    return latest_line, stamp, age, fresh, stale
 
 def latest_line_is_parked(line):
     # Brief contract: parked workers announce the wait as `paused [at=...] [key=...]: ...`
@@ -335,20 +353,24 @@ def posture(activity, report_age, opened, parked, latest_line):
         return 'idle-stale'
     return 'idle'
 
-def row(name, kind, activity, latest_line, stamp, age, opened, beads, beads_state):
+def row(name, kind, activity, latest_line, stamp, age, opened, stale_keys, beads, beads_state):
     ids = [b['id'] for b in beads]
     return dict(name=name, kind=kind, activity=activity or 'unknown',
                 beads=ids, bead_count=len(ids), latest_line=latest_line,
                 latest_at=stamp, latest_age_s=age, open_keys=opened,
+                stale_keys=stale_keys,
                 posture=posture(activity, age, opened, latest_line_is_parked(latest_line),
                                 latest_line),
                 beads_state=beads_state)
 
 # --- current work: the open shared-board beads ------------------------------
-# Join rule: exact assignee match on the agent's registered name, plus the
-# legacy `owner=<name>` label form used before bd grew an assignee field. bd
-# eagerly rewrites `--actor` to created_by, not owner, so the captain's email
-# owner column is not an agent surface and never joins.
+# Join rule: exact assignee match on the agent's registered name, a label
+# exactly equal to that name (or, for a hand-launched peer, its tab label),
+# plus the legacy `owner=<name>` label form used before bd grew an assignee
+# field. Peers record their beads under their domain label (PROTOCOL.md), so
+# a bead recorded as a label must join as deterministically as an assignee.
+# bd eagerly rewrites `--actor` to created_by, not owner, so the captain's
+# email owner column is not an agent surface and never joins.
 # The assignee string uploaded to a bead is whichever of name, tab label, or
 # a title-cased label the uploader picked. The roster joins on all of them
 # so the answer stays deterministic - no fuzzy casing, no substring fold.
@@ -395,16 +417,20 @@ for issue in issues:
     if not isinstance(issue, dict) or not issue.get('id'):
         continue
     labels = issue.get('labels') or []
+    plain = [label for label in labels if isinstance(label, str) and '=' not in label]
     if 'captain' in labels:
         captain_beads.append(dict(id=issue['id'], title=(issue.get('title') or '')[:120]))
     owner_label = next((label[len('owner='):] for label in labels
                         if isinstance(label, str) and label.startswith('owner=')), None)
-    for target in {issue.get('assignee'), owner_label}:
-        for name in targets.get(target, ()):
-            beads_by_name.setdefault(name, []).append(dict(id=issue['id'],
-                                              title=(issue.get('title') or '')[:120],
-                                              status=issue.get('status') or 'unknown',
-                                              assignee=issue.get('assignee')))
+    # A bead joins once per row even when several of its own strings - its
+    # assignee, its plain labels, or one owner= form - all alias that row.
+    joined = {name for target in {issue.get('assignee'), owner_label, *plain}
+              for name in targets.get(target, ())}
+    for name in joined:
+        beads_by_name.setdefault(name, []).append(dict(id=issue['id'],
+                                          title=(issue.get('title') or '')[:120],
+                                          status=issue.get('status') or 'unknown',
+                                          assignee=issue.get('assignee')))
 
 # --- firstmate captain holds: open `(hold-kind: captain)` backlog rows ------
 holds = []
@@ -440,7 +466,7 @@ for worker in workers:
         mate['worker_ref'] = worker
 
 for peer in peers:
-    latest, stamp, age, opened = report_info(peer['name'], state / 'peers' / (peer['name'] + '.log'))
+    latest, stamp, age, opened, stale_keys = report_info(peer['name'], state / 'peers' / (peer['name'] + '.log'))
     # Match the peer's registry label against herdr's tab labels (not the
     # terminal title; the harness can rewrite that). The glyph prefix
     # is part of the tab label, so strip it before comparing.
@@ -450,13 +476,13 @@ for peer in peers:
     ]
     activity = label_matches[0].get('agent_status') if len(label_matches) == 1 else None
     result['agents'].append(row(peer['name'], 'peer', activity,
-                                latest, stamp, age, opened,
+                                latest, stamp, age, opened, stale_keys,
                                 beads_by_name.get(peer['name'], []), beads_state))
 
 for worker in workers:
-    latest, stamp, age, opened = report_info(worker['id'], worker['status_path'])
+    latest, stamp, age, opened, stale_keys = report_info(worker['id'], worker['status_path'])
     result['agents'].append(row(worker['id'], worker['kind'], pane_activity(worker['pane_id']),
-                                latest, stamp, age, opened,
+                                latest, stamp, age, opened, stale_keys,
                                 beads_by_name.get(worker['id'], []), beads_state))
 
 for mate in secondmates:
@@ -467,15 +493,15 @@ for mate in secondmates:
         status_path = Path(mate['home']) / 'state' / (mate['name'] + '.status')
     else:
         status_path = state / (mate['name'] + '.status')
-    latest, stamp, age, opened = report_info(mate['name'], status_path)
+    latest, stamp, age, opened, stale_keys = report_info(mate['name'], status_path)
     result['agents'].append(row(mate['name'], 'secondmate', pane_activity(None),
-                                latest, stamp, age, opened,
+                                latest, stamp, age, opened, stale_keys,
                                 beads_by_name.get(mate['name'], []), beads_state))
 
 for child in children:
-    latest, stamp, age, opened = report_info(child['id'], child['status_path'])
+    latest, stamp, age, opened, stale_keys = report_info(child['id'], child['status_path'])
     result['agents'].append(row(child['id'], 'secondmate-child', pane_activity(child['pane_id']),
-                                latest, stamp, age, opened,
+                                latest, stamp, age, opened, stale_keys,
                                 beads_by_name.get(child['id'], []), beads_state))
 
 result['partial'] = bool(result['errors'])
@@ -494,7 +520,8 @@ else:
               f" activity={agent['activity']}"
               f" beads={len(agent['beads'])} ({','.join(agent['beads']) or '-'})"
               f" latest={stamp} {line}"
-              + (f" open={','.join(agent['open_keys'])}" if agent['open_keys'] else ''))
+              + (f" open={','.join(agent['open_keys'])}" if agent['open_keys'] else '')
+              + (f" stale={','.join(agent['stale_keys'])}" if agent['stale_keys'] else ''))
     on = result['on_captain']
     print(f"On captain: beads={len(on['beads'])} holds={len(on['holds'])}")
     for bead in on['beads']:
