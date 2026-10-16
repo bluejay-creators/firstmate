@@ -1,0 +1,1 @@
+ok - .omp watch extension: a subagent session never disarms the primary, and the primary's /new or /resume replacement still re-arms
