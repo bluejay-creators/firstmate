@@ -881,6 +881,7 @@ test_watch_extension_subagent_session_never_touches_the_arm() {
   mkdir -p "$home/state"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
+printf '%s\n' "$$" > "${FM_HOME:?}/state/watch-arm.pid"
 printf 'watcher: started pid=%s (beacon fresh) recovery-generation=gen-1\n' "$$"
 sleep 30
 SH
@@ -888,8 +889,8 @@ SH
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_OMP_ARM_READY_TIMEOUT_MS=3000 FM_WATCH_ARM_RETIRE_TIMEOUT_MS=3000 \
     EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
-import { writeFileSync, existsSync } from "node:fs";
-import { spawnSync, execFileSync } from "node:child_process";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const handlers = new Map(); let tool = null; const sent = [];
 const pi = {
@@ -904,7 +905,9 @@ mod.default(pi);
 await handlers.get("session_start")({ type: "session_start" }, {});
 const armResult = await tool.execute(undefined, undefined, undefined, undefined, {});
 if (!/^watcher: (?:started omp extension arm child 1|unchanged - omp extension already owns an arm child)/.test(armResult.content[0].text)) throw new Error(`primary arm failed: ${armResult.content[0].text}`);
-const markerPid = Number(execFileSync("bash", ["-c", `pgrep -f "fm-watch-arm.sh" | head -1`], { encoding: "utf8" }).trim());
+const markerPidFile = `${process.env.FM_HOME}/state/watch-arm.pid`;
+for (let i = 0; i < 30 && !existsSync(markerPidFile); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+const markerPid = existsSync(markerPidFile) ? Number(readFileSync(markerPidFile, "utf8").trim()) : 0;
 if (!markerPid) throw new Error("the primary arm child was not running");
 const subCtx = { agent: { kind: "sub", id: "task-1", name: "explore", depth: 1, parentId: "main" } };
 // omp rebinds the factory for the subagent session on the same module.
