@@ -2028,9 +2028,11 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
 check_interval_read() {  # <check-file> - header seconds, or CHECK_INTERVAL
   local line raw secs=
   if line=$(grep -m1 '^# fm-check-interval:' "$1" 2>/dev/null); then
+    # Normal form is `# fm-check-interval: 60`: strip the marker, then any
+    # surrounding whitespace, before the digits guard.
     raw=${line#*# fm-check-interval:}
-    raw=${raw%% *}
-    raw=${raw%%	*}
+    raw=${raw#"${raw%%[![:space:]]*}"}
+    raw=${raw%%[[:space:]]*}
     case "$raw" in ''|*[!0-9]*) ;; *) secs=$((10#$raw)) ;; esac
   fi
   case "$secs" in ''|0) echo "$CHECK_INTERVAL" ;; *) echo "$secs" ;; esac
@@ -2039,14 +2041,14 @@ CHECK_SWEEP_INTERVAL=$CHECK_INTERVAL
 # shellcheck disable=SC2034 # Dynamic CHECKIVL_<id> slots are read back through eval below and in check_interval_for.
 for c in "$STATE"/*.check.sh; do
   [ -f "$c" ] || continue
-  ivl_key=${c##*/}; ivl_key=${ivl_key%.check.sh}
+  ivl_key=${c##*/}; ivl_key=${ivl_key%.check.sh}; ivl_key=${ivl_key//-/_}
   eval "CHECKIVL_${ivl_key}=\"\$(check_interval_read \"\$c\")\""
   ivl_secs=$(eval "echo \"\${CHECKIVL_${ivl_key}}\"")
   [ "$ivl_secs" -lt "$CHECK_SWEEP_INTERVAL" ] && CHECK_SWEEP_INTERVAL=$ivl_secs
 done
 unset ivl_secs ivl_key
 check_interval_for() {  # <check-file> - the precomputed seconds for this check
-  local _k=${1##*/}; _k=${_k%.check.sh}
+  local _k=${1##*/}; _k=${_k%.check.sh}; _k=${_k//-/_}
   eval "echo \"\${CHECKIVL_${_k}:-\$CHECK_INTERVAL}\""
 }
 check_stamp_touch() {  # <stamp-file> - best effort; a state foreign to this check's id is left alone
@@ -2896,10 +2898,12 @@ while :; do
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based so the cadence survives watcher restarts: the shared
-  # .last-check marker keeps the sweep gate, while each check's own stamp in
-  # .last-check/<id> spaces its runs by its resolved interval (header line
-  # `# fm-check-interval: <seconds>`, else CHECK_INTERVAL; CHECK_SWEEP_INTERVAL
-  # is the min over the current set, resolved at watcher start).
+  # .last-check gate spaces sweeps by the min interval in the set
+  # (CHECK_SWEEP_INTERVAL, resolved once at watcher start), while each
+  # check's own stamp in .last-check/<id> spaces its runs by its resolved
+  # interval (header `# fm-check-interval: <seconds>`, optional whitespace
+  # after the colon, else CHECK_INTERVAL). Every due check runs and stamps
+  # before any wake, so a mid-sweep wake cannot starve trailing checks.
   # Evaluated BEFORE the signal scan: wake() exits the cycle, so a check placed
   # after the signal scan would be starved whenever a chatty sibling crewmate
   # keeps producing signals - the slow poll (e.g. merge detection) would then
@@ -2909,6 +2913,7 @@ while :; do
   if [ "$(check_gate_age)" -ge "$CHECK_SWEEP_INTERVAL" ]; then
     rejected_checks=
     contribution_check_output=
+    collected_wakes=
     for c in "$STATE"/*.check.sh; do
       [ -e "$c" ] || continue
       id=$(basename "$c" .check.sh)
@@ -3022,15 +3027,29 @@ EOF
             triage_log "absorbed duplicate merged PR poll result for $id"
             continue
           fi
-          wake "$reason"
+          # A merged poll's wake exits here as before, but queues itself:
+          # the sweep must keep running the remaining due checks so their
+          # per-check stamps advance (a mid-sweep exit starves later checks).
+          collected_wakes=${collected_wakes:+"$collected_wakes"$'\n'}$reason
+          continue
         fi
         pr_poll_control_release || exit 1
         fm_wake_append check "$c" "$reason" || exit 1
         check_gate_touch
-        wake "$reason"
+        # Collect rather than wake: waking mid-sweep exits the watcher before
+        # later checks get their stamps touched, which starves alphabetically-
+        # later checks (fast-lane slack, propel) whenever an earlier check
+        # emits regularly. One combined wake fires after the sweep.
+        collected_wakes=${collected_wakes:+"$collected_wakes"$'\n'}$reason
+        continue
       fi
       pr_poll_control_release || exit 1
     done
+    if [ -n "$collected_wakes" ]; then
+      # One wake carrying every check that fired this sweep; the per-check
+      # wakes were already queued durably above so drain sees each its own row.
+      wake "$collected_wakes"
+    fi
     if [ -n "$rejected_checks" ]; then
       reason="check: rejected unauthenticated state checks:$rejected_checks"
       fm_wake_append check unauthenticated-state-checks "$reason" || exit 1
