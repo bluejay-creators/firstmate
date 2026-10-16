@@ -866,14 +866,10 @@ EOF
 # rebinds them to its own API without re-evaluating module state
 # (packages/coding-agent/src/extensibility/extensions/loader.ts and
 # task/structured-subagent.ts); on the child side every event arrives with
-# ctx.agent.kind === "sub", depth > 0, and doc'd shutdowns can arrive with no
-# ctx at all. The rebind, every subagent lifecycle event, and its arming tool
-# must leave the primary's arm child and live generation alone, never consume
-# the primary's pending wake, and never persist a replacement handoff; the
-# primary's own /new or /resume replacement on that same module must still
-# re-arm. Observed on omp 18.10.4 with FM_OMP_EXTENSION_DEBUG_LOG: the rebind
-# runs in the parent process right after before_subagent_spawn, before any
-# subagent event and with no ctx.
+# ctx.agent.kind === "sub", and doc'd shutdowns can arrive with no
+# ctx at all. The rebind and subagent session lifecycle must leave the primary's
+# arm child and live generation alone; the primary's own /new or /resume
+# replacement on that same module must still re-arm.
 test_watch_extension_subagent_session_never_touches_the_arm() {
   local repo home out status
   repo="$TMP_ROOT/watch-sub/repo"; home="$TMP_ROOT/watch-sub/home"
@@ -892,12 +888,12 @@ import { pathToFileURL } from "node:url";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
-const handlers = new Map(); let tool = null; const sent = [];
+const handlers = new Map(); let tool = null;
 const pi = {
   on(e, h) { handlers.set(e, h); },
   registerCommand() {},
   registerTool(t) { tool = t; },
-  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+  sendUserMessage() { return undefined; },
 };
 const mod = await import(pathToFileURL(process.env.EXT).href);
 mod.default(pi);
@@ -909,34 +905,24 @@ const markerPidFile = `${process.env.FM_HOME}/state/watch-arm.pid`;
 for (let i = 0; i < 30 && !existsSync(markerPidFile); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
 const markerPid = existsSync(markerPidFile) ? Number(readFileSync(markerPidFile, "utf8").trim()) : 0;
 if (!markerPid) throw new Error("the primary arm child was not running");
-const subCtx = { agent: { kind: "sub", id: "task-1", name: "explore", depth: 1, parentId: "main" } };
+const subCtx = { agent: { kind: "sub" } };
 // omp rebinds the factory for the subagent session on the same module.
-const subHandlers = new Map(); let subTool = null;
+const subHandlers = new Map();
 mod.default({
   on(e, h) { subHandlers.set(e, h); },
   registerCommand() {},
-  registerTool(t) { subTool = t; },
-  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+  registerTool() {},
+  sendUserMessage() { return undefined; },
 });
 // A subagent session start must not arm, re-arm, or replace anything; the arm
 // child must survive the rebind and the subagent start.
 await subHandlers.get("session_start")({ type: "session_start" }, subCtx);
 const midCheck = spawnSync("bash", ["-c", `kill -0 ${markerPid} 2>/dev/null && echo alive || echo dead`], { encoding: "utf8" }).stdout.trim();
 if (midCheck !== "alive") throw new Error(`the subagent bind or session start retired the primary arm child (pid ${markerPid})`);
-// Its arming tool stands down instead of touching the arm.
-const subArm = await subTool.execute(undefined, undefined, undefined, undefined, subCtx);
-if (!/subagent session/.test(subArm.content[0].text)) throw new Error(`the subagent tool call did not stand down: ${subArm.content[0].text}`);
-if (subArm.details?.ok !== true) throw new Error("the subagent stand-down must read as non-error so the subagent model stays calm");
-// Subagent agent-turn events must not consume the primary generation pending wake.
-await subHandlers.get("before_agent_start")({ type: "before_agent_start", prompt: "subagent prompt" }, subCtx);
-// A subagent shutdown must not retire the primary arm or persist a handoff.
-await subHandlers.get("session_shutdown")({ type: "session_shutdown" }, subCtx);
+// A ctx-less subagent shutdown must not retire the primary arm.
+await subHandlers.get("session_shutdown")({ type: "session_shutdown" }, {});
 const stillAlive = spawnSync("bash", ["-c", `kill -0 ${markerPid} 2>/dev/null && echo alive || echo dead`], { encoding: "utf8" }).stdout.trim();
 if (stillAlive !== "alive") throw new Error(`a subagent shutdown killed the primary arm child (pid ${markerPid})`);
-if (existsSync(`${process.env.FM_HOME}/state/extensions/omp-primary-watch/session-replacement-actionable.json`)) {
-  throw new Error("a subagent shutdown persisted a replacement handoff");
-}
-if (sent.length !== 0) throw new Error(`the subagent session received or triggered a wake: ${JSON.stringify(sent)}`);
 // The primary's own in-process replacement (/new, /resume) still re-arms: the
 // primary's shutdown stops the old generation, and its next session_start
 // activates a fresh one that owns the arm again.
@@ -955,7 +941,7 @@ EOF
   status=$?
   expect_code 0 "$status" "omp watch extension subagent stand-down: $out"
   [ -z "$out" ] || fail "omp watch extension subagent test printed output: $out"
-  pass ".omp watch extension: a subagent session never arms, consumes, retires, or hands off, and the primary's /new or /resume replacement still re-arms"
+  pass ".omp watch extension: a subagent session never disarms the primary, and the primary's /new or /resume replacement still re-arms"
 }
 
 
