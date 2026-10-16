@@ -923,6 +923,10 @@ if (midCheck !== "alive") throw new Error(`the subagent bind or session start re
 await subHandlers.get("session_shutdown")({ type: "session_shutdown" }, {});
 const stillAlive = spawnSync("bash", ["-c", `kill -0 ${markerPid} 2>/dev/null && echo alive || echo dead`], { encoding: "utf8" }).stdout.trim();
 if (stillAlive !== "alive") throw new Error(`a subagent shutdown killed the primary arm child (pid ${markerPid})`);
+const ownershipResult = await tool.execute(undefined, undefined, undefined, undefined, {});
+if (!/^watcher: unchanged - omp extension already owns an arm child/.test(ownershipResult.content[0].text)) {
+  throw new Error(`the subagent lifecycle displaced primary arm ownership: ${ownershipResult.content[0].text}`);
+}
 // The primary's own in-process replacement (/new, /resume) still re-arms: the
 // primary's shutdown stops the old generation, and its next session_start
 // activates a fresh one that owns the arm again.
