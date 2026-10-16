@@ -2018,6 +2018,43 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
   echo $(( now - m ))
 }
 
+# Per-check cadence: a state/<id>.check.sh may carry the header line
+# `# fm-check-interval: <seconds>` to run on a faster or slower cycle than
+# CHECK_INTERVAL. Per-check stamps live in .last-check/<id> (mtime = last
+# run), so each cadence survives watcher restarts exactly as the shared
+# marker did. Intervals are resolved once at watcher start; a marker added
+# later takes effect on the next watcher start, and a malformed or
+# non-positive value falls back to CHECK_INTERVAL.
+check_interval_read() {  # <check-file> - header seconds, or CHECK_INTERVAL
+  local line raw secs=
+  if line=$(grep -m1 '^# fm-check-interval:' "$1" 2>/dev/null); then
+    raw=${line#*# fm-check-interval:}
+    raw=${raw%% *}
+    raw=${raw%%	*}
+    case "$raw" in ''|*[!0-9]*) ;; *) secs=$((10#$raw)) ;; esac
+  fi
+  case "$secs" in ''|0) echo "$CHECK_INTERVAL" ;; *) echo "$secs" ;; esac
+}
+CHECK_SWEEP_INTERVAL=$CHECK_INTERVAL
+# shellcheck disable=SC2034 # Dynamic CHECKIVL_<id> slots are read back through eval below and in check_interval_for.
+for c in "$STATE"/*.check.sh; do
+  [ -f "$c" ] || continue
+  ivl_key=${c##*/}; ivl_key=${ivl_key%.check.sh}
+  eval "CHECKIVL_${ivl_key}=\"\$(check_interval_read \"\$c\")\""
+  ivl_secs=$(eval "echo \"\${CHECKIVL_${ivl_key}}\"")
+  [ "$ivl_secs" -lt "$CHECK_SWEEP_INTERVAL" ] && CHECK_SWEEP_INTERVAL=$ivl_secs
+done
+unset ivl_secs ivl_key
+check_interval_for() {  # <check-file> - the precomputed seconds for this check
+  local _k=${1##*/}; _k=${_k%.check.sh}
+  eval "echo \"\${CHECKIVL_${_k}:-\$CHECK_INTERVAL}\""
+}
+check_stamp_touch() {  # <stamp-file> - best effort; a state foreign to this check's id is left alone
+  [ ! -L "$1" ] || return 0
+  mkdir -p "$STATE/.last-check" 2>/dev/null || return 0
+  touch "$1" 2>/dev/null || true
+}
+
 # Layer 2 + 3 signal scan: status files and turn-end markers.
 # Each file is compared against its persisted reported signature in .seen-* rather
 # than mtime-vs-a-startup-touch, so signals that land while no watcher is running
@@ -2656,13 +2693,47 @@ printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK/pid-identity" 2>/dev/
 
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
 
+# Per-check stamps live under .last-check/<file> (see the cadence block
+# below). A legacy plain-file marker from an older watcher is renamed into
+# that directory now so the sweep's own first run cannot race the
+# conversion; any other shape (a symlink) is refuse-loud rather than fallen
+# into.
+if [ -L "$STATE/.last-check" ]; then
+  echo "watcher: state/.last-check is a symlink; refusing to supervise" >&2
+  exit 1
+fi
+if [ -e "$STATE/.last-check" ] && [ ! -d "$STATE/.last-check" ]; then
+  # Rename atomically: the directory form appears only after the marker is
+  # gone from its legacy slot.
+  mkdir -p "$STATE/.last-check.dir-tmp" 2>/dev/null || true
+  mv -f "$STATE/.last-check" "$STATE/.last-check.dir-tmp/.gate.stamp" 2>/dev/null \
+    && mv -f "$STATE/.last-check.dir-tmp" "$STATE/.last-check" 2>/dev/null
+  rmdir "$STATE/.last-check.dir-tmp" 2>/dev/null || true
+fi
+if [ -e "$STATE/.last-check" ] && [ ! -d "$STATE/.last-check" ]; then
+  echo "watcher: state/.last-check could not be migrated to the per-check stamp directory; refusing to supervise" >&2
+  exit 1
+fi
+
+check_gate_touch() {  # the sweep's shared marker, carried as a stamp inside the per-check dir
+  touch "$STATE/.last-check/.gate.stamp" 2>/dev/null \
+    || touch "$STATE/.last-check" 2>/dev/null || true
+}
+check_gate_age() {  # seconds since the sweep last ran; due immediately when no marker exists
+  if [ -d "$STATE/.last-check" ]; then
+    age_of "$STATE/.last-check/.gate.stamp"
+  else
+    age_of "$STATE/.last-check"
+  fi
+}
+
 # A merged poll may have queued its terminal wake and then lost the process
 # between receipt publication and fixed-path removal.
 # Finish only identity-bound retirement receipts before any check can run.
 if ! fm_pr_poll_retirement_recover_all "$STATE" "$SCRIPT_DIR/fm-pr-poll.sh"; then
   reason="check: rejected unauthenticated PR poll retirement receipts:$FM_PR_POLL_RETIREMENT_REJECTED"
   fm_wake_append check pr-poll-retirement "$reason" || exit 1
-  touch "$STATE/.last-check"
+  check_gate_touch
   wake "$reason"
 fi
 
@@ -2824,17 +2895,27 @@ while :; do
   fi
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
-  # Time-based via .last-check mtime so the cadence survives watcher restarts.
+  # Time-based so the cadence survives watcher restarts: the shared
+  # .last-check marker keeps the sweep gate, while each check's own stamp in
+  # .last-check/<id> spaces its runs by its resolved interval (header line
+  # `# fm-check-interval: <seconds>`, else CHECK_INTERVAL; CHECK_SWEEP_INTERVAL
+  # is the min over the current set, resolved at watcher start).
   # Evaluated BEFORE the signal scan: wake() exits the cycle, so a check placed
   # after the signal scan would be starved whenever a chatty sibling crewmate
   # keeps producing signals - the slow poll (e.g. merge detection) would then
   # never run until the fleet went quiet. Checks are due only every
-  # CHECK_INTERVAL, so most cycles skip this block and fall straight through.
-  if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
+  # CHECK_SWEEP_INTERVAL or slower, so most cycles skip this block and fall
+  # straight through.
+  if [ "$(check_gate_age)" -ge "$CHECK_SWEEP_INTERVAL" ]; then
     rejected_checks=
     contribution_check_output=
     for c in "$STATE"/*.check.sh; do
       [ -e "$c" ] || continue
+      id=$(basename "$c" .check.sh)
+      check_stamp=$STATE/.last-check/${c##*/}
+      if [ "$(age_of "$check_stamp")" -lt "$(check_interval_for "$c")" ]; then
+        continue
+      fi
       is_pr_poll=0
       if [ "$(basename "$c")" = x-watch.check.sh ]; then
         if fmx_poll_shim_valid "$c" "$FM_HOME" "$FM_ROOT" \
@@ -2843,10 +2924,10 @@ while :; do
           out=$FM_CHECK_RESULT
         else
           rejected_checks="$rejected_checks $c"
+          check_stamp_touch "$check_stamp"
           continue
         fi
       else
-        id=$(basename "$c" .check.sh)
         if fm_pr_poll_snapshot_capture "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
           || { rerecord_device_shifted_pr_poll "$id" \
             && fm_pr_poll_snapshot_capture "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; }; then
@@ -2861,6 +2942,7 @@ while :; do
           if ! fm_pr_poll_snapshot_matches "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; then
             pr_poll_control_release || exit 1
             triage_log "PR poll for $id changed before its validated check; skipping the stale snapshot"
+            check_stamp_touch "$check_stamp"
             continue
           fi
           run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
@@ -2874,9 +2956,11 @@ while :; do
         else
           fm_custom_check_snapshot_cleanup
           rejected_checks="$rejected_checks $c"
+          check_stamp_touch "$check_stamp"
           continue
         fi
       fi
+      check_stamp_touch "$check_stamp"
       if [ -n "$out" ]; then
         if [ "$(basename "$c")" = contributions.check.sh ]; then
           contribution_check_output=
@@ -2894,6 +2978,7 @@ EOF
           if [ -n "$contribution_check_diagnostics" ]; then
             out=${contribution_check_diagnostics%$'\n'}
           elif [ -n "$contribution_check_output" ]; then
+            check_stamp_touch "$check_stamp"
             continue
           fi
         fi
@@ -2906,7 +2991,7 @@ EOF
             # outcome and no wake; bin/fm-pr-check.sh refuses to arm another.
             retire_merged_pr_poll "$id"
             pr_poll_control_release || exit 1
-            touch "$STATE/.last-check"
+            check_gate_touch
             triage_log "retired a merge poll armed on secondmate $id without reporting an outcome"
             continue
           fi
@@ -2932,7 +3017,7 @@ EOF
           fi
           retire_merged_pr_poll "$id"
           pr_poll_control_release || exit 1
-          touch "$STATE/.last-check"
+          check_gate_touch
           if [ "$FM_MERGE_OUTCOME_ALREADY_RECORDED" = true ]; then
             triage_log "absorbed duplicate merged PR poll result for $id"
             continue
@@ -2941,7 +3026,7 @@ EOF
         fi
         pr_poll_control_release || exit 1
         fm_wake_append check "$c" "$reason" || exit 1
-        touch "$STATE/.last-check"
+        check_gate_touch
         wake "$reason"
       fi
       pr_poll_control_release || exit 1
@@ -2949,10 +3034,10 @@ EOF
     if [ -n "$rejected_checks" ]; then
       reason="check: rejected unauthenticated state checks:$rejected_checks"
       fm_wake_append check unauthenticated-state-checks "$reason" || exit 1
-      touch "$STATE/.last-check"
+      check_gate_touch
       wake "$reason"
     fi
-    touch "$STATE/.last-check"
+    check_gate_touch
     if [ -n "$contribution_check_output" ]; then
       wake "$contribution_check_output"
     fi

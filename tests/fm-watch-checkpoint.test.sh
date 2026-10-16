@@ -321,6 +321,46 @@ test_host_checkpoint_needs_the_file_and_honors_off() {
   pass "checkpoint: a Codex home without config/supervision-host, or with an off file, never runs the host"
 }
 
+# A check carrying `# fm-check-interval: <seconds>` runs on its own cadence
+# while checks without the marker keep the FM_CHECK_INTERVAL default: with the
+# default far above either checkpoint bound, only the marked check may fire.
+test_per_check_interval_runs_one_check_faster_than_the_default() {
+  local home fast_status slow_status
+  home=$(make_home per-check-interval)
+  cat > "$home/state/fast.check.sh" <<'SH'
+#!/usr/bin/env bash
+# fm-check-interval: 1
+printf 'fast check fired\n'
+SH
+  cat > "$home/state/slow.check.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'slow check fired\n'
+SH
+  chmod 0700 "$home/state/fast.check.sh" "$home/state/slow.check.sh"
+  FM_HOME="$home" "$ROOT/bin/fm-check-register.sh" fast >/dev/null \
+    || fail "could not register the fast custom check"
+  FM_HOME="$home" "$ROOT/bin/fm-check-register.sh" slow >/dev/null \
+    || fail "could not register the slow custom check"
+  fast_status=0
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    "$CHECKPOINT" --seconds 5 >"$home/fast.out" 2>"$home/fast.err" || fast_status=$?
+  expect_code 0 "$fast_status" "the 1-second marked check did not fire inside a 5-second checkpoint: $(cat "$home/fast.out" "$home/fast.err")"
+  assert_contains "$(cat "$home/fast.out")" "check: $home/state/fast.check.sh: fast check fired" \
+    "the marked check's wake did not reach the checkpoint"
+  [ -e "$home/state/.last-check/fast.check.sh" ] || fail "the fast check left no per-check stamp"
+  [ ! -e "$home/state/.last-check/slow.check.sh" ] || fail "the unmarked check ran before its FM_CHECK_INTERVAL elapsed"
+  slow_status=0
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    "$CHECKPOINT" --seconds 2 >"$home/slow.out" 2>"$home/slow.err" || slow_status=$?
+  case "$slow_status" in
+    0|124) ;;
+    *) fail "second checkpoint exited unexpectedly ($slow_status): $(cat "$home/slow.out" "$home/slow.err")" ;;
+  esac
+  assert_not_contains "$(cat "$home/slow.out")" "slow check fired" "the unmarked check fired ahead of its FM_CHECK_INTERVAL"
+  pass "per-check interval: a marked check runs on its own cadence while unmarked checks keep FM_CHECK_INTERVAL"
+}
+
+
 # The real host under a fake Codex harness that holds the home's session lock.
 # shellcheck disable=SC2016 # the fake harness's script expands in its own shell
 test_real_host_checkpoint_ends_quietly_at_its_bound() {
@@ -355,4 +395,5 @@ test_existing_singleton_watcher_is_not_success
 test_host_checkpoint_bounds_the_park_by_posture
 test_host_checkpoint_passes_a_handback_and_reports_a_stand_down
 test_host_checkpoint_needs_the_file_and_honors_off
+test_per_check_interval_runs_one_check_faster_than_the_default
 test_real_host_checkpoint_ends_quietly_at_its_bound
