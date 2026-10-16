@@ -860,6 +860,101 @@ EOF
   [ -z "$out" ] || fail "omp watch extension split host close test printed output: $out"
   pass ".omp watch extension: a host close split across stream chunks reaches main as one whole follow-up"
 }
+# A subagent (task tool, eval agent(), /tan clone) re-binds the watch
+# extension's factory on the same evaluated module - omp imports a session's
+# extensions once and forwards the prepared factories to each child, which
+# rebinds them to its own API without re-evaluating module state
+# (packages/coding-agent/src/extensibility/extensions/loader.ts and
+# task/structured-subagent.ts); on the child side every event arrives with
+# ctx.agent.kind === "sub", depth > 0, and doc'd shutdowns can arrive with no
+# ctx at all. The rebind, every subagent lifecycle event, and its arming tool
+# must leave the primary's arm child and live generation alone, never consume
+# the primary's pending wake, and never persist a replacement handoff; the
+# primary's own /new or /resume replacement on that same module must still
+# re-arm. Observed on omp 18.10.4 with FM_OMP_EXTENSION_DEBUG_LOG: the rebind
+# runs in the parent process right after before_subagent_spawn, before any
+# subagent event and with no ctx.
+test_watch_extension_subagent_session_never_touches_the_arm() {
+  local repo home out status
+  repo="$TMP_ROOT/watch-sub/repo"; home="$TMP_ROOT/watch-sub/home"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=gen-1\n' "$$"
+sleep 30
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_OMP_ARM_READY_TIMEOUT_MS=3000 FM_WATCH_ARM_RETIRE_TIMEOUT_MS=3000 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { writeFileSync, existsSync } from "node:fs";
+import { spawnSync, execFileSync } from "node:child_process";
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const handlers = new Map(); let tool = null; const sent = [];
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand() {},
+  registerTool(t) { tool = t; },
+  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+};
+const mod = await import(pathToFileURL(process.env.EXT).href);
+mod.default(pi);
+// The primary session arms the watcher.
+await handlers.get("session_start")({ type: "session_start" }, {});
+const armResult = await tool.execute(undefined, undefined, undefined, undefined, {});
+if (!/^watcher: (?:started omp extension arm child 1|unchanged - omp extension already owns an arm child)/.test(armResult.content[0].text)) throw new Error(`primary arm failed: ${armResult.content[0].text}`);
+const markerPid = Number(execFileSync("bash", ["-c", `pgrep -f "fm-watch-arm.sh" | head -1`], { encoding: "utf8" }).trim());
+if (!markerPid) throw new Error("the primary arm child was not running");
+const subCtx = { agent: { kind: "sub", id: "task-1", name: "explore", depth: 1, parentId: "main" } };
+// omp rebinds the factory for the subagent session on the same module.
+const subHandlers = new Map(); let subTool = null;
+mod.default({
+  on(e, h) { subHandlers.set(e, h); },
+  registerCommand() {},
+  registerTool(t) { subTool = t; },
+  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+});
+// A subagent session start must not arm, re-arm, or replace anything; the arm
+// child must survive the rebind and the subagent start.
+await subHandlers.get("session_start")({ type: "session_start" }, subCtx);
+const midCheck = spawnSync("bash", ["-c", `kill -0 ${markerPid} 2>/dev/null && echo alive || echo dead`], { encoding: "utf8" }).stdout.trim();
+if (midCheck !== "alive") throw new Error(`the subagent bind or session start retired the primary arm child (pid ${markerPid})`);
+// Its arming tool stands down instead of touching the arm.
+const subArm = await subTool.execute(undefined, undefined, undefined, undefined, subCtx);
+if (!/subagent session/.test(subArm.content[0].text)) throw new Error(`the subagent tool call did not stand down: ${subArm.content[0].text}`);
+if (subArm.details?.ok !== true) throw new Error("the subagent stand-down must read as non-error so the subagent model stays calm");
+// Subagent agent-turn events must not consume the primary generation pending wake.
+await subHandlers.get("before_agent_start")({ type: "before_agent_start", prompt: "subagent prompt" }, subCtx);
+// A subagent shutdown must not retire the primary arm or persist a handoff.
+await subHandlers.get("session_shutdown")({ type: "session_shutdown" }, subCtx);
+const stillAlive = spawnSync("bash", ["-c", `kill -0 ${markerPid} 2>/dev/null && echo alive || echo dead`], { encoding: "utf8" }).stdout.trim();
+if (stillAlive !== "alive") throw new Error(`a subagent shutdown killed the primary arm child (pid ${markerPid})`);
+if (existsSync(`${process.env.FM_HOME}/state/extensions/omp-primary-watch/session-replacement-actionable.json`)) {
+  throw new Error("a subagent shutdown persisted a replacement handoff");
+}
+if (sent.length !== 0) throw new Error(`the subagent session received or triggered a wake: ${JSON.stringify(sent)}`);
+// The primary's own in-process replacement (/new, /resume) still re-arms: the
+// primary's shutdown stops the old generation, and its next session_start
+// activates a fresh one that owns the arm again.
+await handlers.get("session_shutdown")({ type: "session_shutdown" }, {});
+const afterPrimary = spawnSync("bash", ["-c", `for i in $(seq 1 40); do kill -0 ${markerPid} 2>/dev/null || { echo dead; exit 0; }; sleep 0.1; done; echo alive`], { encoding: "utf8" }).stdout.trim();
+if (afterPrimary !== "dead") throw new Error("the primary's own shutdown must retire its arm child");
+await handlers.get("session_start")({ type: "session_start" }, {});
+const rearmResult = await tool.execute(undefined, undefined, undefined, undefined, {});
+if (!/^watcher: (?:started omp extension arm child|unchanged - omp extension already owns an arm child)/.test(rearmResult.content[0].text)) {
+  throw new Error(`the replacement session did not re-arm: ${rearmResult.content[0].text}`);
+}
+await handlers.get("session_shutdown")({ type: "session_shutdown" }, {});
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp watch extension subagent stand-down: $out"
+  [ -z "$out" ] || fail "omp watch extension subagent test printed output: $out"
+  pass ".omp watch extension: a subagent session never arms, consumes, retires, or hands off, and the primary's /new or /resume replacement still re-arms"
+}
+
 
 test_detection_anchored_name_and_marker_precedence
 test_lock_identity_and_liveness_classification
@@ -877,3 +972,4 @@ test_watch_extension_runs_the_supervision_host quiet
 test_watch_extension_keeps_the_arm_without_the_file_or_with_off
 test_watch_extension_replays_a_host_only_boundary_across_replacement
 test_watch_extension_delivers_a_split_host_close_whole
+test_watch_extension_subagent_session_never_touches_the_arm
