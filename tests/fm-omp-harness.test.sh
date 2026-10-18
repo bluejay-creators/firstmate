@@ -557,6 +557,9 @@ const pi = {
 };
 const mod = await import(pathToFileURL(process.env.EXT).href);
 mod.default(pi);
+// Pin this conversation's send closure as the generation's wake channel.
+// The owning primary session_start is what claims the channel (fm-otu).
+await handlers.get("session_start")({ type: "session_start" }, {});
 if (!tool || tool.name !== "fm_watch_arm_omp") throw new Error("fm_watch_arm_omp was not registered");
 if (!command) throw new Error("/fm-watch-arm-omp was not registered");
 if (tool.parameters?.type !== "object") throw new Error("tool parameters must be an empty object schema");
@@ -1000,12 +1003,13 @@ import { pathToFileURL } from "node:url";
 import { writeFileSync, existsSync } from "node:fs";
 import { spawnSync, execFileSync } from "node:child_process";
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
-const handlers = new Map(); let tool = null; let command = null; const sent = [];
+const handlers = new Map(); let tool = null; let command = null; const primarySent = [];
+const primarySend = (m, o) => { primarySent.push({ m, o }); return undefined; };
 const pi = {
   on(e, h) { handlers.set(e, h); },
   registerCommand(n, o) { if (n === "fm-watch-arm-omp") command = o.handler; },
   registerTool(t) { tool = t; },
-  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
+  sendUserMessage: primarySend,
 };
 const mod = await import(pathToFileURL(process.env.EXT).href);
 mod.default(pi);
@@ -1018,12 +1022,15 @@ if (!markerPid) throw new Error("the primary arm child was not running");
 const subCtx = { agent: { kind: "sub", id: "task-1", name: "explore", depth: 1, parentId: "main" } };
 // omp rebinds the factory for the subagent session on the same module.
 const subHandlers = new Map(); let subToolDef = null;
-mod.default({
+const subSent = [];
+const subSend = (m, o) => { subSent.push({ m, o }); return undefined; };
+const subPi = {
   on(e, h) { subHandlers.set(e, h); },
   registerCommand() {},
   registerTool(t) { subToolDef = t; },
-  sendUserMessage(m, o) { sent.push({ m, o }); return undefined; },
-});
+  sendUserMessage: subSend,
+};
+mod.default(subPi);
 // A subagent session start must not arm, re-arm, or replace anything.
 await subHandlers.get("session_start")({ type: "session_start" }, subCtx);
 // Its arming tool stands down and leaves the primary arm untouched.
@@ -1039,7 +1046,9 @@ if (stillAlive !== "alive") throw new Error(`the subagent shutdown killed the pr
 if (existsSync(`${process.env.FM_HOME}/state/extensions/omp-primary-watch/session-replacement-actionable.json`)) {
   throw new Error("the subagent shutdown persisted a replacement handoff");
 }
-if (sent.length !== 0) throw new Error(`the subagent session received or triggered a wake: ${JSON.stringify(sent)}`);
+if (subPi.sendUserMessage !== subSend) throw new Error("fixture harness mismatch: the rebound pi changed its send closure");
+if (subSent.length !== 0) throw new Error(`the subagent conversation received or triggered a wake: ${JSON.stringify(subSent)}`);
+if (primarySent.length !== 0) throw new Error(`a wake escaped before primary consumption could be observed: ${JSON.stringify(primarySent)}`);
 // The primary session still owns the arm: a later lock-owning start is a
 // replacement no-op, and the arm tool reports the existing child.
 const again = await tool.execute();

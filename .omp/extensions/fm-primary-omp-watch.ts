@@ -48,6 +48,23 @@
 // durable state lives at state/extensions/omp-primary-watch/session-replacement-actionable.json.
 // Stale callbacks from a prior generation are no-ops against the active replacement.
 //
+// Send-channel session ownership (stated once here):
+// A subagent factory rebind flips omp's shared extension runtime so every
+// pi object in the process - including the primary's own factory-level
+// closure - delivers through the subagent's conversation. sendWake therefore
+// never sends through the factory closure: each generation pins the send
+// closure captured at its own owning-ctx session_start in
+// SessionGeneration.sendUserMessageRef, nulls it before a replacement
+// session_start activates the replacement generation and before its own
+// session_shutdown, and sends through that pinned closure. Without the pin
+// a wake delivered between a subagent spawn and the primary's next owning
+// event lands in the subagent's conversation, where the receiving model
+// runs bin/fm-wake-drain.sh and drains firstmate's durable wake queue for
+// itself (fm-otu). A send with no pinned channel yet - the replacement
+// replay inside a generation's own session_start before that handler claims
+// the channel - sends through the factory closure that EMITTED that
+// session_start, whose conversation is by construction the replacement.
+//
 // Subagent session safety (stated once here):
 // omp re-binds this factory for a subagent session (task tool, eval agent(),
 // /tan clone) on the same evaluated module, so module state - including the
@@ -209,6 +226,10 @@ type SessionGeneration = {
   // fresh key and IS delivered. Never consulted across a fresh session_start
   // replay: a wake a replacement handed back already earned its delivery.
   deliveredStaleAt: Map<string, number>;
+  // The send channel pinned to the conversation that owns this generation
+  // ("Send-channel session ownership" at the top of this file owns the
+  // contract).
+  sendUserMessageRef: { send: ((content: string, options?: { deliverAs?: string }) => unknown) | null };
 };
 
 const extensionFile = fileURLToPath(import.meta.url);
@@ -768,10 +789,14 @@ function createGeneration(): SessionGeneration {
     unconsumedWakes: new Map(),
     deliveredStaleAt: new Map(),
     deferredClose: null,
+    sendUserMessageRef: { send: null },
   };
 }
 
 function activateGeneration(generation: SessionGeneration): void {
+  // Free the send channel the generation being displaced claimed, so no wake
+  // ever rides a stale conversation's binding.
+  if (activeGeneration && activeGeneration !== generation) activeGeneration.sendUserMessageRef.send = null;
   activeGeneration = generation;
 }
 
@@ -805,6 +830,9 @@ async function waitForGenerationChildClose(armChild: ChildProcess | null): Promi
 }
 
 async function stopSessionGeneration(generation: SessionGeneration, replacement: boolean): Promise<void> {
+  // Release this conversation's send channel first: its session is shutting
+  // down, so nothing after this point may deliver through it.
+  generation.sendUserMessageRef.send = null;
   generation.replacement = replacement;
   let persistedTokens = "";
   try {
@@ -1082,6 +1110,22 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     }
   }
 
+  // Targeted versus global send path ("Send-channel session ownership" at
+  // the top of this file owns the contract): targeted is the session-pinned
+  // closure; global is this factory's own pi closure, correct only before
+  // the owning session_start pins the channel, and always logged so the
+  // lifecycle debug log distinguishes which path delivered.
+  function sendWakeChannel(
+    owner: SessionGeneration,
+    content: string,
+  ): { path: "targeted" | "global"; send: () => unknown } {
+    if (owner.sendUserMessageRef.send) {
+      const send = owner.sendUserMessageRef.send;
+      return { path: "targeted", send: () => send(content, { deliverAs: "followUp" }) };
+    }
+    return { path: "global", send: () => pi.sendUserMessage(content, { deliverAs: "followUp" }) };
+  }
+
   async function sendWake(
     owner: SessionGeneration,
     message: string,
@@ -1095,8 +1139,10 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
     const content = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${formatWakeMessage(message)}`);
     if (pending) owner.unconsumedWakes.set(pending.token, { content, pending });
+    const channel = sendWakeChannel(owner, content);
+    debugLog(debugBinding, "wake_send", channel.path, undefined, () => generationDebugFields(owner));
     try {
-      await pi.sendUserMessage(content, { deliverAs: "followUp" });
+      await channel.send();
     } catch (error) {
       if (pending) owner.unconsumedWakes.delete(pending.token);
       throw error;
@@ -1151,9 +1197,11 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
       for (const item of items) owner.unconsumedWakes.set(item.token, { content, pending: item });
       }
     }
+    const channel = sendWakeChannel(owner, content);
+    debugLog(debugBinding, "wake_send", channel.path, undefined, () => generationDebugFields(owner));
     if (items.length === 1) {
       try {
-        await pi.sendUserMessage(content, { deliverAs: "followUp" });
+        await channel.send();
         // The visible fallback still carries the rows the drain presented,
         // so acknowledge the same presentation set it delivered.
         if (drained) ackPresentedWake(owner, drained);
@@ -1164,7 +1212,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
       return generationIsLive(owner);
     }
     try {
-      await pi.sendUserMessage(content, { deliverAs: "followUp" });
+      await channel.send();
       if (drained) ackPresentedWake(owner, drained);
     } catch (error) {
       for (const item of items) owner.unconsumedWakes.delete(item.token);
@@ -1950,6 +1998,13 @@ const subagentArmStatus =
     }
     if (generation.stopping) generation = createGeneration();
     activateGeneration(generation);
+    // Pin this conversation's send channel to the generation: the handler
+    // past the subagent gate is the owning session ("Send-channel session
+    // ownership" at the top), and the channel survives replacement replays:
+    // the displacement null in activateGeneration runs before this claim.
+    if (!generation.sendUserMessageRef.send) {
+      generation.sendUserMessageRef.send = (sendContent: string, sendOptions?: { deliverAs?: string }) => pi.sendUserMessage(sendContent, sendOptions);
+    }
     markLoaded();
     if (lockOwnership() !== "owned") {
       debugLog(debugBinding, "session_start", "activateGeneration-not-lock-owner", ctx, () => generationDebugFields(generation));
