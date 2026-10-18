@@ -613,6 +613,8 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # shellcheck source=bin/fm-config-inherit-lib.sh
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
+# shellcheck source=bin/fm-primary-scope-lib.sh
+. "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 # shellcheck source=bin/fm-exclude-tools-lib.sh
 . "$SCRIPT_DIR/fm-exclude-tools-lib.sh"
 if ! LAUNCH_ENV_ENABLED=$(fm_config_source_present "$CONFIG/launch-env-allowlist"); then
@@ -752,6 +754,8 @@ TRACEPARENT_SET=0
 BEAD_ARG=
 BEAD_SET=0
 BEAD_RESOLVED=
+WORKER_REASON=
+WORKER_REASON_SET=0
 RELAUNCH=0
 # Opt-in only: exact-resume presentation-order lock waits instead of refusing.
 # Absent/unset keeps upstream refuse-on-contention. See header.
@@ -806,6 +810,10 @@ for a in "$@"; do
     bead)
       BEAD_ARG=$a
       BEAD_SET=1
+      ;;
+    worker-reason)
+      WORKER_REASON=$a
+      WORKER_REASON_SET=1
       ;;
     *)
       echo "error: internal parser state for --$want_value" >&2
@@ -876,6 +884,11 @@ for a in "$@"; do
     BEAD_ARG=${a#--bead=}
     BEAD_SET=1
     ;;
+  --worker-reason) want_value=worker-reason ;;
+  --worker-reason=*)
+    WORKER_REASON=${a#--worker-reason=}
+    WORKER_REASON_SET=1
+    ;;
   *) POS+=("$a") ;;
   esac
 done
@@ -913,6 +926,10 @@ done
 }
 [ "$BEAD_SET" -eq 0 ] || [ -n "$BEAD_ARG" ] || {
   echo "error: --bead requires a non-empty value" >&2
+  exit 1
+}
+[ "$WORKER_REASON_SET" -eq 0 ] || [ -n "$WORKER_REASON" ] || {
+  echo "error: --worker-reason requires a non-empty value" >&2
   exit 1
 }
 # A parent-delivered carrier replaces this home's own resolution, so it is
@@ -1026,6 +1043,36 @@ else
       exit 1
     }
   fi
+fi
+
+# Worker-reason override (docs/configuration.md "Worker spawn reason"): when
+# this home's own config/worker-spawn-requires-reason opts in AND the spawn
+# is a crewmate or scout launched from a home marked as a seeded secondmate
+# (.fm-secondmate-home, bin/fm-primary-scope-lib.sh), the caller must justify
+# why an in-process subagent could not do the work instead of a pane. The
+# reason is recorded in the task meta, appended to this home's own status
+# ledger, and reported on the parent channel so the primary sees every
+# override. A primary home spawn is never gated and never reasons.
+WORKER_REASON_REQUIRED=0
+if [ "$RELAUNCH" -ne 1 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
+  # The opt-in file pattern matches config/calm's file-exists-on/off contract:
+  # a presence of the file in the EFFECTIVE home turns the requirement on,
+  # and an absence (or a test clearing FM_CONFIG_OVERRIDE) leaves the spawn
+  # exactly as it was before this knob existed.
+  if [ -f "$CONFIG/worker-spawn-requires-reason" ] && fm_root_is_secondmate_home "$FM_HOME"; then
+    WORKER_REASON_REQUIRED=1
+    WORKER_REASON_VALID=$(printf '%s' "$WORKER_REASON" | tr -d '[:space:]')
+    if [ ${#WORKER_REASON_VALID} -lt 20 ]; then
+      echo "error: secondmate homes require --worker-reason \"<why a subagent can't do this>\" (>=20 chars) before spawning a ship/scout worker; give the reason or do the work in-session" >&2
+      exit 1
+    fi
+  elif [ "$WORKER_REASON_SET" -eq 1 ]; then
+    echo "error: --worker-reason applies only to ship and scout spawns from a home with config/worker-spawn-requires-reason" >&2
+    exit 1
+  fi
+elif [ "$WORKER_REASON_SET" -eq 1 ]; then
+  echo "error: --worker-reason applies only to ship and scout spawns, never to --secondmate or --relaunch" >&2
+  exit 1
 fi
 
 spawn_remote_secondmate() {
@@ -5277,7 +5324,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx worker_reason", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -5298,6 +5345,11 @@ preserve_relaunch_meta() {
   echo "model=${MODEL:-default}"
   [ -z "$BEAD_RESOLVED" ] || echo "bead=$BEAD_RESOLVED"
   echo "effort=${EFFORT:-default}"
+  # Recorded only when this spawn passed the worker-reason gate (a gated
+  # secondmate-home ship/scout); the reason the launcher gave for choosing a
+  # pane over an in-process subagent, sanitized to one line.
+  [ -z "$WORKER_REASON" ] || [ "$WORKER_REASON_REQUIRED" -ne 1 ] || \
+    printf 'worker_reason=%s\n' "$(printf '%s' "$WORKER_REASON" | tr '\t\r\n' '   ')"
   # The worker account pin, only when this home declares one, so an unpinned
   # task record stays byte-identical.
   [ -z "$WORKER_ACCOUNT" ] || echo "account=$WORKER_ACCOUNT_DECLARED"
@@ -5919,4 +5971,18 @@ SPAWN_ACCOUNT=
 [ -z "$WORKER_ACCOUNT_PROVIDER" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT account_provider=$WORKER_ACCOUNT_PROVIDER"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
+if [ "$WORKER_REASON_REQUIRED" -eq 1 ]; then
+  # The override is a captain-shaped admission, so it publishes the same way
+  # every other such admission in this home does: a stamped line in this
+  # home's own status ledger, then one parent-channel notice the primary's
+  # watcher will classify. A failed append never undoes an already-live
+  # launch, but it is loud on stderr, exactly like the rest of this script's
+  # post-launch publication failures.
+  printf '%s\n' "$(status_stamp_line "override [key=worker-reason-$ID]: worker spawn $ID gate admits --worker-reason: $(printf '%s' "$WORKER_REASON" | tr '\t\r\n' '   ')")" >>"$STATE/$ID.status"
+  # shellcheck source=bin/fm-parent-channel-lib.sh
+  . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+  fm_parent_channel_report "$FM_HOME" "$STATE" \
+    "override [key=worker-reason-$ID]: ship/scout spawn $ID admitted by config/worker-spawn-requires-reason with reason: $(printf '%s' "$WORKER_REASON" | tr '\t\r\n' '   ')" \
+    || echo "error: spawned $ID but its worker-reason notice did not reach the parent channel" >&2
+fi
 echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT$SPAWN_ACCOUNT"

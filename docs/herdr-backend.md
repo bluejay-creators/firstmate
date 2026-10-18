@@ -145,6 +145,12 @@ That workspace is read live from Herdr rather than from the injected snapshot, s
 Duplicate labels elsewhere in the session are irrelevant, and the globally focused workspace is never the target.
 A `--secondmate` launch is the deliberate exception: it stands up that secondmate home's own workspace instead of joining the launcher's.
 
+A home can instead direct its own ship/scout spawns into a named worker workspace with the local `config/herdr-worker-workspace` file, which the primary propagates to secondmate homes through the inherited local-material contract.
+The file holds exactly one whitespace-free Herdr workspace label in the current named session; a value containing whitespace is refused with a warning and ignored.
+When set, the adapter resolves and creates that workspace by label, never consults the launcher's pane identity for placement, and a worker's observed launch workspace then differs from the launcher's by design.
+When the file is absent or empty, the launcher-workspace inheritance above is unchanged.
+The setting governs only fresh ship/scout placement: a `--secondmate` launch never reads the launching home's file (its own home's copy governs only that home's own future crewmates), and existing task operations use recorded endpoint ids, so a live task is never moved when the label changes or the workspace closes.
+
 ### Unresolvable launcher identity
 
 A claimed parent identity that cannot be resolved exactly stops the spawn before any worker endpoint exists, rather than falling back to a label search.

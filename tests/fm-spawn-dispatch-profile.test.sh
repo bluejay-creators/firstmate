@@ -2156,6 +2156,58 @@ test_claude_worker_launch_covers_task_channel_dirs() {
   pass "claude worker launches cover the task-channel directories in bypass and auto modes"
 }
 
+test_worker_reason_gate_from_secondmate_home() {
+  # A home seeded as a secondmate AND carrying config/worker-spawn-requires-
+  # reason refuses a ship/scout spawn with no reason or a short one, and the
+  # successful path lands worker_reason= in the task meta, a stamped status
+  # line, and one parent-channel notice. A primary home never gates, and a
+  # secondmate home without the config never gates either.
+  local rec id out status sm_home parent_home
+  id="wr-test"
+  rec=$(make_spawn_case "worker-reason" claude "$id")
+  read_case_record "$rec"
+  sm_home="$CASE_DIR/sm-home"
+  parent_home="$CASE_DIR/parent-home"
+  # Seed the launcher home as a secondmate whose parent binding names the
+  # classic local route, so the override can be witnessed end to end by
+  # line in the parent home's status ledger.
+  cp -a "$HOME_DIR/." "$sm_home/"
+  printf '%s\n' platform > "$sm_home/.fm-secondmate-home"
+  mkdir -p "$parent_home/state"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$(cd "$parent_home" && pwd -P)" > "$sm_home/.fm-secondmate-parent"
+  : > "$sm_home/config/worker-spawn-requires-reason"
+  # Inheritable-set proof: the knob is a secondmate-home gate.
+  out=$(fm_test_run_spawn "$sm_home" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a gated secondmate-home ship without --worker-reason must refuse"
+  assert_contains "$out" "worker-reason" "refusal must name the missing flag"
+  # Too-short reasons are refused before any endpoint exists.
+  out=$(fm_test_run_spawn "$sm_home" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --worker-reason "short")
+  status=$?
+  [ "$status" -ne 0 ] || fail "a short --worker-reason must refuse"
+  [ ! -e "$sm_home/state/$id.meta" ] || fail "a refused spawn left a task record behind"
+  # A qualifying reason passes and is recorded in meta, the home status, and
+  # the parent channel.
+  out=$(fm_test_run_spawn "$sm_home" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --worker-reason "subagent cannot run the long-lived kstage tail this needs")
+  status=$?
+  expect_code 0 "$status" "a gated secondmate-home ship WITH a qualifying reason must spawn: $out"
+  assert_contains "$(cat "$sm_home/state/$id.meta")" "worker_reason=subagent cannot run the long-lived kstage tail this needs" "task meta did not record worker_reason"
+  assert_contains "$(cat "$sm_home/state/$id.status")" "worker-reason-$id" "home status ledger did not stamp the override"
+  assert_contains "$(cat "$parent_home/state/platform.status")" "ship/scout spawn $id" "parent channel did not publish the override notice"
+  # A primary home and an unconfigured secondmate home never refuse for
+  # lacking a reason, and a reason flag there is itself refused.
+  rec=$(make_spawn_case "worker-reason-primary" claude "wr-free")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "wr-free" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "primary-home ship spawn without --worker-reason must never gate"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "wr-flag" "$PROJ_DIR" --worker-reason "a reason long enough to matter if it applied")
+  status=$?
+  [ "$status" -ne 0 ] || fail "--worker-reason on a non-gated home must refuse rather than being ignored silently"
+  pass "worker spawn reason gate: gated secondmate homes require --worker-reason; primary homes never do"
+}
+
 test_claude_permission_mode_invalid_refuses_before_endpoint_or_metadata() {
   local rec id out status
   id=permmode-invalid-z22
@@ -2261,5 +2313,6 @@ test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks
 test_keep_ai_trailers_reaches_secondmate_crew_launches
 test_claude_secondmate_launch_carries_the_attribution_policy
 test_active_dispatch_profile_does_not_block_secondmate_launch
+test_worker_reason_gate_from_secondmate_home
 
 echo "# all fm-spawn-dispatch-profile tests passed"
