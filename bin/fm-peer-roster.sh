@@ -28,15 +28,24 @@
 # last-write stamp), and one deterministic posture:
 #   parked        the latest status/peer-log line starts with `paused:` -
 #                 a worker declaring a named external wait
+#   done          the latest status line starts with the terminal `done` verb -
+#                 a worker that declared its result published; a lingered idle
+#                 pane must never read as needing the captain again
+#   failed        the latest status line starts with the terminal `failed`
+#                 verb - distinct from an unanswered open key (blocked):
+#                 the run is over and reported, not waiting on anyone
 #   blocked       an open keyed blocked/needs-decision entry with no later
 #                 resolved key, deterministically
 #   working       live pane activity is `working` (any other live activity is
 #                 shown as activity= but never masks the postures above)
-#   idle-stale    not parked, not blocked, and no report stamp for >60 minutes
+#   idle-stale    not parked, not blocked, not terminal, and no report stamp
+#                 for >60 minutes
 #   idle          none of the above
-# Posture precedence is parked > blocked > working > idle-stale > idle so a
-# declared wait always wins over pane motion and an unresolved decision always
-# wins over key noise. Work-evidence and open-keys never come from scraping
+# Posture precedence is parked > blocked > done/failed > working > idle-stale
+# > idle so a declared wait always wins over pane motion, an unresolved
+# decision always wins over key noise, and a terminal done/failed verb always
+# outranks an idle pane so a published result surfaces as finished rather than
+# needing the captain. Work-evidence and open-keys never come from scraping
 # free text: only the tag pair [<key=...][at=...]> counts, and nothing else
 # appears in posture.
 #
@@ -297,11 +306,29 @@ def latest_line_is_parked(line):
     # or a bare `paused:` prefix. `parked` is the legacy synonym a peer log may use.
     return bool(line) and line.startswith(('paused:', 'paused [', 'parked:', 'parked ['))
 
-def posture(activity, report_age, opened, parked):
+def final_verb(line):
+    # A terminal status verb marks a published or stopped lane. `done` means
+    # the worker declared its result (merged or opened PR); `failed` means the
+    # lane stopped with a failure report. Either beats an idle pane.
+    # A line carrying a [key=...] tag is keyed evidence for the open-key fold,
+    # never a lane terminal verdict: `done [key=prove-x]: <how>` says one gate
+    # closed, not that the whole pane finished.
+    if not line or report_key(line) is not None:
+        return None
+    if line.startswith(('done:', 'done [')):
+        return 'done'
+    if line.startswith(('failed:', 'failed [')):
+        return 'failed'
+    return None
+
+def posture(activity, report_age, opened, parked, latest_line):
     if parked:
         return 'parked'
     if opened:
         return 'blocked'
+    terminal = final_verb(latest_line)
+    if terminal:
+        return terminal
     if activity == 'working':
         return 'working'
     if report_age is None or report_age > STALE_AFTER:
@@ -313,7 +340,8 @@ def row(name, kind, activity, latest_line, stamp, age, opened, beads, beads_stat
     return dict(name=name, kind=kind, activity=activity or 'unknown',
                 beads=ids, bead_count=len(ids), latest_line=latest_line,
                 latest_at=stamp, latest_age_s=age, open_keys=opened,
-                posture=posture(activity, age, opened, latest_line_is_parked(latest_line)),
+                posture=posture(activity, age, opened, latest_line_is_parked(latest_line),
+                                latest_line),
                 beads_state=beads_state)
 
 # --- current work: the open shared-board beads ------------------------------

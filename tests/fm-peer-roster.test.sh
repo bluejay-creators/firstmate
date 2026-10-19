@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Behavioral fixture for the deterministic peer roster (v2): parked workers,
-# stale rows, keyed blocked decisions, secondmate children, the on_captain
-# section, and proof that no free-text fragments survive into posture.
+# stale rows, keyed blocked decisions, terminal done-after-publish posture,
+# secondmate children, the on_captain section, and proof that no free-text
+# fragments survive into posture.
 set -euo pipefail
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -40,6 +41,35 @@ META
 earlier=$((now - 60))
 printf 'blocked [at=%s] [key=gcloud-auth]: waiting on login\nnote [at=%s]: subsequent chatter\n' "$earlier" "$now" > "$FM_HOME/state/blocked-worker.status"
 
+# fm-pbk regression: a worker that declared `done` after publishing its result
+# (PR opened or merged) but whose pane lingers must surface as done, never as
+# idle/idle-stale - and an unresolved open key still outranks a later done.
+cat > "$FM_HOME/state/done-worker.meta" <<'META'
+backend=herdr
+window=default:w1:p20
+endpoint_task_id=done-worker
+kind=ship
+META
+earlier=$((now - 4000))
+printf 'working [at=%s]: implementing\ndone [at=%s]: PR https://example.test/pull/1 merged\n' "$earlier" "$earlier" > "$FM_HOME/state/done-worker.status"
+
+cat > "$FM_HOME/state/done-fresh-worker.meta" <<'META'
+backend=herdr
+window=default:w1:p21
+endpoint_task_id=done-fresh-worker
+kind=ship
+META
+done_fresh=$((now - 120))
+printf 'working [at=%s]: implementing\ndone [at=%s]: PR https://example.test/pull/2\n' "$earlier" "$done_fresh" > "$FM_HOME/state/done-fresh-worker.status"
+
+cat > "$FM_HOME/state/failed-worker.meta" <<'META'
+backend=herdr
+window=default:w1:p22
+endpoint_task_id=failed-worker
+kind=ship
+META
+printf 'working [at=%s]: implementing\nfailed [at=%s]: lint loop never converged\n' "$earlier" "$earlier" > "$FM_HOME/state/failed-worker.status"
+
 # A secondmate home with its own state and a live child.
 mkdir -p "$TMP_ROOT/mate-home/state" "$TMP_ROOT/mate-home/data"
 printf '# Backlog\n\n## Queued\n- [ ] t1 - Sample (kind: ship) (since 2026-10-12) (hold: fm-hold-v1:c2FtcGxl) (hold-kind: captain)\n' > "$TMP_ROOT/mate-home/data/backlog.md"
@@ -63,9 +93,11 @@ earlier=$((now - 7200))
 printf 'note [at=%s]: seven-thousand seconds ago\n' "$earlier" > "$TMP_ROOT/mate-home/state/stale-child.status"
 touch -t "$(date -r "$earlier" '+%Y%m%d%H%M.%S')" "$TMP_ROOT/mate-home/state/stale-child.status"
 
-# Peers: bob's latest report has no timestamp, so the roster must not fabricate
-# one; charlie is unmatched by Herdr so its activity stays unknown; alice is
-# fresh but should not float past her unresolved `build` key.
+# Peers: bob's latest report ends with the terminal `done` verb on a broken
+# stamp ([at=1]), which is exactly the done-after-publish shape: the stamp is
+# still never fabricated, but the posture is done rather than idle-stale.
+# charlie is unmatched by Herdr so its activity stays unknown; alice is fresh
+# but should not float past her unresolved `build` key.
 printf '{"result":{"pane":{"workspace_id":"w1","pane_id":"w1:p0"}}}' > "$FIXTURE/current.json"
 cat > "$FIXTURE/tabs.json" <<'JSON'
 {"result":{"tabs":[
@@ -74,7 +106,10 @@ cat > "$FIXTURE/tabs.json" <<'JSON'
   {"tab_id":"w1:t3","workspace_id":"w1","label":"fm-parked-worker"},
   {"tab_id":"w1:t4","workspace_id":"w1","label":"fm-blocked-worker"},
   {"tab_id":"w1:t5","workspace_id":"w1","label":"fm-child-one"},
-  {"tab_id":"w1:t6","workspace_id":"w1","label":"fm-stale-child"}
+  {"tab_id":"w1:t6","workspace_id":"w1","label":"fm-stale-child"},
+  {"tab_id":"w1:t7","workspace_id":"w1","label":"fm-done-worker"},
+  {"tab_id":"w1:t8","workspace_id":"w1","label":"fm-done-fresh-worker"},
+  {"tab_id":"w1:t9","workspace_id":"w1","label":"fm-failed-worker"}
 ]}}
 JSON
 cat > "$FIXTURE/agents.json" <<'JSON'
@@ -83,7 +118,10 @@ cat > "$FIXTURE/agents.json" <<'JSON'
   {"tab_id":"w1:t2","workspace_id":"w1","pane_id":"w1:p2","agent_status":"done"},
   {"tab_id":"w1:t3","workspace_id":"w1","pane_id":"w1:p9","agent_status":"working"},
   {"tab_id":"w1:t4","workspace_id":"w1","pane_id":"w1:p10","agent_status":"working"},
-  {"tab_id":"w1:t5","workspace_id":"w1","pane_id":"w1:p11","agent_status":"working"}
+  {"tab_id":"w1:t5","workspace_id":"w1","pane_id":"w1:p11","agent_status":"working"},
+  {"tab_id":"w1:t7","workspace_id":"w1","pane_id":"w1:p20","agent_status":"done"},
+  {"tab_id":"w1:t8","workspace_id":"w1","pane_id":"w1:p21","agent_status":"done"},
+  {"tab_id":"w1:t9","workspace_id":"w1","pane_id":"w1:p22","agent_status":"done"}
 ]}}
 JSON
 cat > "$FIXTURE/issues.json" <<'JSON'
@@ -153,31 +191,63 @@ jq -e '
     | .kind == "peer" and .posture == "blocked" and .open_keys == ["build"]
     and (.beads | sort) == ["b1","b2","b5"]) and
   ([.agents[] | select(.name == "bob")][0]
-    | .posture == "idle-stale" and (.latest_age_s | tostring | startswith("1791")))
+    | .posture == "done" and .latest_age_s > 0)
 ' "$FIXTURE/out" >/dev/null || { jq '.agents[] | {name, kind, activity, posture, latest_age_s}' "$FIXTURE/out" >&2; fail 'stale, secondmate-child, or parent rows misclassified'; }
 pass 'secondmate home, stale-child, parent, and exact assignee join land'
 
-# 3. On-captain section: captain-label beads plus the home's captain holds.
+# 3. fm-pbk: done-after-publish workers surface as done. done-worker's latest
+# status is hours old (idle territory pre-fix); done-fresh-worker's is fresh;
+# failed-worker's lane ended with the failed verb. All three panes read herdr
+# `done` (idle) and none owns an open key, so the `done`/`failed` posture must
+# come from the durable status line alone.
+jq -e '
+  ([.agents[] | select(.name == "done-worker")][0]
+    | .kind == "ship" and .posture == "done" and .activity == "done"
+    and .open_keys == [] and (.latest_line | contains("PR https://example.test/pull/1"))) and
+  ([.agents[] | select(.name == "done-fresh-worker")][0]
+    | .posture == "done" and .latest_age_s < 600) and
+  ([.agents[] | select(.name == "failed-worker")][0]
+    | .posture == "failed" and .open_keys == [])
+' "$FIXTURE/out" >/dev/null || fail 'done-after-publish, fresh done, or failed worker misclassified'
+pass 'done-after-publish, fresh done, and failed postures land'
+
+# 3b. fm-pbk: a keyed `done [key=...]:` line is keyed evidence for the open-key
+# fold, not a lane terminal verdict. In fm-2rr's read_reports it stays open and
+# a resolved closes it. Here it must never posture `done` either.
+cat > "$FM_HOME/state/done-keyed-worker.meta" <<'META'
+backend=herdr
+window=default:w1:p23
+endpoint_task_id=done-keyed-worker
+kind=ship
+META
+printf 'working [at=%s]: implementing\ndone [at=%s] [key=prove-x]: proof for one gate\n' "$earlier" "$earlier" > "$FM_HOME/state/done-keyed-worker.status"
+"$ROSTER" --json > "$FIXTURE/out"
+jq -e '([.agents[] | select(.name == "done-keyed-worker")][0]
+    | .posture != "done" and (.latest_line | contains("[key=prove-x]")))' \
+  "$FIXTURE/out" >/dev/null || fail 'keyed done line postured as done'
+pass 'keyed done stays evidence, never a lane terminal'
+
+# 4. On-captain section: captain-label beads plus the home's captain holds.
 jq -e '
   .on_captain.beads == [{"id":"b4","title":"Captain call"}] and
   ([.on_captain.holds[] | select(.task == "t1")] | length == 0)
 ' "$FIXTURE/out" >/dev/null || fail 'captain beads or hold surface missing'
 pass 'on_captain surfaces captain-label beads and reports holds (none in this home)'
 
-# 4. No free-text fragment leaks into open_keys or posture.
+# 5. No free-text fragment leaks into open_keys or posture.
 jq -e '
   ([.agents[] | select(.name == "blockfrag")] | length == 0) and
   ([.agents[] | .open_keys[]?] | map(select(test("^(the|a|for|access|backend|exclusive)$"))) | length == 0)
 ' "$FIXTURE/out" >/dev/null || fail 'free-text fragment leaked into open_keys'
 pass 'no free-text fragments appear as keys'
 
-# 5. An in-progress bead assigned through the title-cased alias joins the row.
+# 6. An in-progress bead assigned through the title-cased alias joins the row.
 jq -e '([.agents[] | select(.name == "alice")][0]
     | .beads | any(. == "b5"))' \
   "$FIXTURE/out" >/dev/null || fail 'title-cased in_progress bead did not join'
 pass 'in_progress beads join via deterministic aliases'
 
-# 6. Keyed blocked survives a later done when the resolved line is missing.
+# 7. Keyed blocked survives a later done when the resolved line is missing.
 printf 'blocked [at=%s] [key=proof]: waiting on proof\ndone [at=%s]: other proof finished\n' "$now" "$now" > "$FM_HOME/state/peers/bob.log"
 "$ROSTER" --json > "$FIXTURE/out"
 jq -e '([.agents[] | select(.name == "bob")][0]
@@ -185,7 +255,7 @@ jq -e '([.agents[] | select(.name == "bob")][0]
   "$FIXTURE/out" >/dev/null || fail 'done without resolved closed the request'
 pass 'open keyed request survives a later done line'
 
-# 7. A malformed peer registry (row with the wrong column count) keeps the
+# 8. A malformed peer registry (row with the wrong column count) keeps the
 # agent's identity unknown - it must not fabricate answers about one peer
 # being vs another.
 mv "$FM_HOME/state/peers/peers.tsv" "$FIXTURE/peers.tsv"
@@ -197,7 +267,7 @@ rm "$FM_HOME/state/peers/peers.tsv"
 mv "$FIXTURE/peers.tsv" "$FM_HOME/state/peers/peers.tsv"
 pass 'malformed registry stays partial'
 
-# 8. A bd failure says so and surfaces partial. Posture stays whatever status
+# 9. A bd failure says so and surfaces partial. Posture stays whatever status
 # files already tell it; it never secretly becomes idle.
 MV_TS="$FM_HOME/state/peers/alice.log"
 printf 'note [at=%s]: fresh without keys\n' "$now" > "$MV_TS"

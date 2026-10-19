@@ -114,7 +114,7 @@ Routine supervision uses `bin/fm-peek.sh <id>` and `FM_HOME=<home> bin/fm-send.s
 ### Hand-launched peer roster
 
 Run `FM_HOME=<active-home> bin/fm-peer-roster.sh` from any directory; `bd` is chdird to the shared board (`FM_BOARD`, the same default bin/fm-propel.sh uses), so a stale cwd cannot redirect the join.
-Use `--json` for the complete structured view; the roster lists peers, firstmate-managed workers, every secondmate home and its live children, and surfaces each row's live activity, deterministic posture (`parked` > `blocked` > `working` > `idle-stale` > `idle`), current open beads, latest status line age, and the trailing `on_captain` section (captain-label beads + open firstmate captain holds).
+Use `--json` for the complete structured view; the roster lists peers, firstmate-managed workers, every secondmate home and its live children, and surfaces each row's live activity, deterministic posture (`parked` > `blocked` > `done`/`failed` > `working` > `idle-stale` > `idle`, where a terminal `done` or `failed` status verb always outranks a lingered idle pane so a published result never reads as needing the captain), current open beads, latest status line age, and the trailing `on_captain` section (captain-label beads + open firstmate captain holds).
 Herdr reads target the `HERDR_SESSION` session (default `default`) and never mutate a pane, board, inbox cursor, or worker.
 Keyed `blocked`/`needs-decision` entries with no later `resolved` key stay overtly blocked regardless of report age or free text in between; only the tag pair (`[key=...][at=...]`) registers, never the body.
 An unavailable Herdr or Beads read yields an explicit partial/unknown result and a nonzero exit status rather than an empty or unblocked roster.
