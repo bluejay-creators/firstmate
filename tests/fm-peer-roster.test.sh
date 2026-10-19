@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Behavioral fixture for the deterministic peer roster (v2): parked workers,
-# stale rows, keyed blocked decisions, terminal done-after-publish posture,
-# secondmate children, the on_captain section, and proof that no free-text
-# fragments survive into posture.
+# stale rows, keyed blocked decisions with their aged-out stale form, terminal
+# done-after-publish posture, secondmate children, the on_captain section, and
+# proof that no free-text fragments survive into posture.
 set -euo pipefail
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -13,12 +13,19 @@ export FM_HOME="$TMP_ROOT/home" FIXTURE="$TMP_ROOT/fixture" HERDR_SESSION=defaul
 mkdir -p "$FM_HOME/state/peers" "$FM_HOME/data" "$FIXTURE"
 # bd is stubbed by PATH below; the fixture must never accidentally reach a
 # real store from this tmp home.
-printf 'alice\tAlice\nbob\tBob\ncharlie\tCharlie\n' > "$FM_HOME/state/peers/peers.tsv"
+printf 'alice\tAlice\nbob\tBob\ncharlie\tCharlie\ndana\tDana\n' > "$FM_HOME/state/peers/peers.tsv"
 now=$(date +%s)
 # An open keyed `blocked` line is what flips alice's posture - `note` never
 # opens a key (the open-key pass only looks at blocked/needs-decision).
 printf 'blocked [at=%s] [key=build]: work underway\n' "$now" > "$FM_HOME/state/peers/alice.log"
 printf 'done [at=1]: old task\n' > "$FM_HOME/state/peers/bob.log"
+
+# Dana's keyed decision and everything after it are two hours old: the open
+# aged past the decision window, so it surfaces as stale instead of blocked
+# and the row follows its latest line back to idle-stale.
+stale=$((now - 7200))
+printf 'blocked [at=%s] [key=aged]: old ask\nnote [at=%s]: chatter aged too\n' "$stale" "$stale" > "$FM_HOME/state/peers/dana.log"
+touch -t "$(date -r "$stale" '+%Y%m%d%H%M.%S')" "$FM_HOME/state/peers/dana.log"
 
 # A worker whose status declares `paused` is parked.
 cat > "$FM_HOME/state/parked-worker.meta" <<'META'
@@ -85,7 +92,7 @@ earlier=$((now - 30))
 printf 'working [at=%s]: on the secondmate lane\n' "$earlier" > "$TMP_ROOT/mate-home/state/child-one.status"
 cat > "$TMP_ROOT/mate-home/state/stale-child.meta" <<'META'
 backend=herdr
-window=default:w1:p12
+window=default:w1:p13
 endpoint_task_id=stale-child
 kind=ship
 META
@@ -130,7 +137,9 @@ cat > "$FIXTURE/issues.json" <<'JSON'
   {"id":"b2","title":"Alice Title-Case Label","status":"open","assignee":"Alice","labels":["agents"]},
   {"id":"b3","title":"Platform work","status":"open","assignee":"Platform","labels":["platform"]},
   {"id":"b4","title":"Captain call","status":"open","assignee":"Jubin John","labels":["captain","decision"]},
-  {"id":"b5","title":"Done work","status":"in_progress","assignee":"alice","labels":["agents"]}
+  {"id":"b5","title":"Done work","status":"in_progress","assignee":"alice","labels":["agents"]},
+  {"id":"b6","title":"Bob label work","status":"open","labels":["Bob","agents"]},
+  {"id":"b7","title":"Missed history","status":"open","labels":["bob"]}
 ]
 JSON
 
@@ -191,9 +200,14 @@ jq -e '
     | .kind == "peer" and .posture == "blocked" and .open_keys == ["build"]
     and (.beads | sort) == ["b1","b2","b5"]) and
   ([.agents[] | select(.name == "bob")][0]
-    | .posture == "done" and .latest_age_s > 0)
-' "$FIXTURE/out" >/dev/null || { jq '.agents[] | {name, kind, activity, posture, latest_age_s}' "$FIXTURE/out" >&2; fail 'stale, secondmate-child, or parent rows misclassified'; }
-pass 'secondmate home, stale-child, parent, and exact assignee join land'
+    | .posture == "done" and .latest_age_s > 0
+    and .open_keys == [] and .stale_keys == []
+    and .beads == ["b6","b7"]) and
+  ([.agents[] | select(.name == "dana")][0]
+    | .posture == "idle-stale" and .open_keys == [] and .stale_keys == ["aged"]
+    and .latest_age_s > 3600)
+' "$FIXTURE/out" >/dev/null || { jq '.agents[] | {name, kind, activity, posture, latest_age_s, beads, stale_keys}' "$FIXTURE/out" >&2; fail 'stale, secondmate-child, parent, label join, or aged-key rows misclassified'; }
+pass 'secondmate home, stale-child, parent, exact-label join, and aged-key stale land'
 
 # 3. fm-pbk: done-after-publish workers surface as done. done-worker's latest
 # status is hours old (idle territory pre-fix); done-fresh-worker's is fresh;
@@ -254,6 +268,18 @@ jq -e '([.agents[] | select(.name == "bob")][0]
     | .posture == "blocked" and .open_keys == ["proof"])' \
   "$FIXTURE/out" >/dev/null || fail 'done without resolved closed the request'
 pass 'open keyed request survives a later done line'
+
+# 7b. Reopening an aged key with a fresh stamp reopens it: bob re-raises
+# dana's stale need, so it leaves stale_keys and blocks again while dana's own
+# log still holds the aged form.
+printf 'blocked [at=%s] [key=aged]: re-raising the aged ask\n' "$now" > "$FM_HOME/state/peers/bob.log"
+"$ROSTER" --json > "$FIXTURE/out"
+jq -e '([.agents[] | select(.name == "bob")][0]
+    | .posture == "blocked" and .open_keys == ["aged"] and .stale_keys == []) and
+  ([.agents[] | select(.name == "dana")][0]
+    | .posture == "idle-stale" and .open_keys == [] and .stale_keys == ["aged"])
+' "$FIXTURE/out" >/dev/null || fail 'reopened aged key stayed stale'
+pass 'a fresh reopen refreshes an aged key while other rows keep their own stale'
 
 # 8. A malformed peer registry (row with the wrong column count) keeps the
 # agent's identity unknown - it must not fabricate answers about one peer
