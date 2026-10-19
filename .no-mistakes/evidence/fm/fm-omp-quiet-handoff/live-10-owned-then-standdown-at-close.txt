@@ -1,0 +1,10 @@
+25: watcher: unchanged - the daemon owns supervision while state/.afk exists (quiet or away mode); no omp extension arm is running; call fm_watch_arm_omp again only after a later
+29: watcher: unchanged - omp extension already owns an arm child; no manual re-arm needed; call fm_watch_arm_omp again only after a later notification says the cycle is missing,
+== after state/.afk appeared and the armed watcher closed
+no watcher or arm process bound to this checkout
+ OK
+ watcher: unchanged - omp extension already owns an arm child; no manual re-arm needed; call fm_watch_arm_omp again only after a later notification says the cycle is missing,
+ failed, or unhealthy
+ π > ◒ Opus 5.5 > 🌳 086b234068d7/01M5A76R5TNNBVWB0J86WDRWZD > ⑂ detached > S0.01 ▶────4%───────────────────────────────────────────────────────────────────────╎──┃─────────────1M─
+╰─
+ watcher: unchanged - the daemon owns supervision while state/.afk exists (quiet or away mode); no omp extension arm is running; call fm_watch_arm_omp again only after a later

@@ -1,0 +1,11 @@
+ watcher: unchanged - the daemon owns supervision while state/.afk exists (quiet or away mode); no omp extension arm is running; call fm_watch_arm_omp again only after a later
+ notification says the cycle is missing, failed, or unhealthy
+ π > ⦸ Opus 5.5 > 🌳 086b234068d7/01M5A76R5TNNBVWB0J86WDRWZD > ⑂ detached > (sub) ▶────4%───────────────────────────────────────────────────────────────────────╎──┃─────────────1M─
+╰─
+.
+..
+.afk
+.lock
+.omp-turnend-extension-loaded
+.omp-watch-extension-loaded
+no watcher process bound to the lab home

@@ -1,0 +1,18 @@
+.
+..
+.lock
+.omp-turnend-extension-loaded
+.omp-watch-extension-loaded
+34194  1849 bash tests/fm-watch-triage.test.sh
+40630 34194 bash /tmp/fm-7007/bin/fm-watch.sh
+70876  1849 bash tests/fm-watch-triage.test.sh
+18641  1849 bash /Users/jubin/Git/firstmate/bin/fm-watch-arm.sh --restart
+18786 18641 bash /Users/jubin/Git/firstmate/bin/fm-watch.sh
+ - Why I held off: the monitoring tool itself refused to start here for the same reason. Running bin/fm-wake-drain.sh from this copy could change or acknowledge another home's
+   queued notifications, and this session doesn't own them.
+ - What this means: this session isn't supervising any work, so the failure here doesn't affect anything already in progress.
+ - What to do: if a real Firstmate session reported this, handle it in that session (/Users/jubin/Git/firstmate, pane w2:p3). If this wake reached the validation session by
+   mistake, it's safe to ignore.
+                                                                                                                                                👁️ WATCH: Handle failed watcher wake
+ π > ⦸ Opus 5.5 > 🌳 086b234068d7/01M5A76R5TNNBVWB0J86WDRWZD > ⑂ detached > S0.29 ▶────4%───────────────────────────────────────────────────────────────────────╎──┃─────────────1M─
+╰─

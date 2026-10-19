@@ -1,0 +1,12 @@
+ New version 18.12.2 is available. Run: omp update
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Connected to MCP servers: google_workspace, local-llm, manifestgraph, slack.
+ Warning: watcher: not armed - no live session holds the lock; run bin/fm-session-start.sh to reclaim it, then call fm_watch_arm_omp to re-arm
+ π > ⦸ Opus 5.5 > 🌳 086b234068d7/01M5A76R5TNNBVWB0J86WDRWZD > ⑂ detached > (sub) ▶────4%───────────────────────────────────────────────────────────────────────╎──┃─────────────1M─
+╰─
+.
+..
+.afk
+.omp-turnend-extension-loaded
+.omp-watch-extension-loaded
+no watcher process bound to the lab home

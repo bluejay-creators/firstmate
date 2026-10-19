@@ -1,0 +1,21 @@
+== test_quiet_mode_watcher_hands_status_off_to_quiet_daemon
+ok - quiet mode leaves the watcher one-shot and hands the wake to the daemon
+exit=
+== test_quiet_entry_handoff_resurfaces_the_queued_wake_for_the_daemon
+ok - quiet entry hands a queued wake to the daemon through the next one-shot's resurface, not a later wake
+exit=
+== test_wedge_threshold_defers_to_a_backlog_captain_hold
+ok - a backlog captain hold bounds the wedge ladder like a captain-held line, and stays silent while the captain is away
+exit=
+== test_paused_bg_job_without_until_stays_silent_after_the_job_ends
+ok - without until, a worker paused on its own ended background job is not rechecked inside the cadence
+exit=
+== test_paused_bg_job_until_timeout_rechecks_after_the_job_ends
+ok - until set to a background job's timeout rechecks the worker paused on it once the job must have ended
+exit=
+== test_exit_picker_stale_names_the_dialog
+tests/fm-watch-triage.test.sh: line 7012: test_exit_picker_stale_names_the_dialog: command not found
+exit=
+== test_closed_exit_picker_drops_saved_dialog_name
+tests/fm-watch-triage.test.sh: line 7012: test_closed_exit_picker_drops_saved_dialog_name: command not found
+exit=
