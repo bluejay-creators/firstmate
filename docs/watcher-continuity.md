@@ -42,7 +42,8 @@ Each adapter:
 - Preserves one child or scheduled retry at a time.
 - Applies bounded exponential retry after an unexpected or failed close.
 
-Pi treats an arm child whose process is already gone as an empty slot even while its close event is still pending, so a repair call or a scheduled retry starts a fresh arm instead of answering unchanged.
+An adapter treats an arm child whose process is already gone as an empty slot even while its close event is still pending, so a repair call or a scheduled retry starts a fresh arm instead of answering unchanged.
+The omp adapter additionally refuses to answer "unchanged" for a live child unless some watcher still beats within the turn-end guard's staleness grace (`fm_watcher_fresh_beat`, bin/fm-wake-lib.sh), and its `session_start` re-verifies that same answer before trusting an existing slot, so a live arm child whose watcher stopped beating - including one a context re-emit carried over - is re-armed instead of reported healthy (fm-5gh5).
 A failed follow-up never cancels continuity restoration.
 
 ### Pi session replacement

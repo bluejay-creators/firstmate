@@ -348,6 +348,67 @@ function pidAlive(pid: string): boolean {
   }
 }
 
+const fmWakeLib = `${fmRoot}/bin/fm-wake-lib.sh`;
+
+// The watcher side of the ownership answer ("unchanged" in startArm and in the
+// session_start liveness check): bin/fm-wake-lib.sh's fm_watcher_fresh_beat
+// applies the turn-end guard's staleness threshold to state/.last-watcher-beat
+// with no process or lock requirement, so a held slot reflects a watcher that
+// actually beat within the guard's grace. A query that cannot run (missing
+// lib, shell error) or a missing/stale beacon reads as unhealthy, never as
+// healthy.
+function watcherBeatFresh(): boolean {
+  const result = spawnSync(
+    "bash",
+    ["-c", `. "$1" && fm_watcher_fresh_beat "$2"`, "bash", fmWakeLib, state],
+    { encoding: "utf8" },
+  );
+  return result.status === 0;
+}
+
+// The guard grace as bin/fm-wake-lib.sh derives it; a miss falls back to the
+// library's documented 300s floor (fm_poll_derived_grace owns the default).
+let guardGraceMsCache = 0;
+function guardGraceMs(): number {
+  if (guardGraceMsCache > 0) return guardGraceMsCache;
+  const result = spawnSync(
+    "bash",
+    ["-c", `. "$1" && fm_poll_derived_grace`, "bash", fmWakeLib],
+    { encoding: "utf8" },
+  );
+  const seconds = result.status === 0 ? Number(result.stdout.trim()) : Number.NaN;
+  guardGraceMsCache = (Number.isFinite(seconds) && seconds > 0 ? seconds : 300) * 1000;
+  return guardGraceMsCache;
+}
+
+// Arming timestamps, so a freshly armed child whose first beat window has not
+// elapsed yet is not misread as a non-beating watcher (the guard grace IS the
+// watcher's beat budget: a child younger than it may simply not have beaten).
+const armStartedAt = new WeakMap<ChildProcess, number>();
+
+// Whether the ownership slot may answer "unchanged": the arm child process
+// must be live as a process (dead tracked children never answer ownership,
+// matching the Pi adapter's liveArmChild port here) AND - once the child has
+// been up at least one guard grace, the watcher's own beat budget - some
+// watcher must still be beating. An exited-but-unclosed child must not hold
+// the single-flight slot: neither a repair call nor a scheduled retry would
+// start anything until that close finally fired. The beat half closes the
+// fm-5gh5 gap, where a live arm child whose watcher had stopped answering
+// kept the slot while no beat arrived, so fm_watch_arm_omp and session_start
+// both reported health through a window with no watcher cycle. The grace-age
+// tolerance keeps a child armed seconds ago (its first beat still in flight)
+// from earning a spurious re-arm on every redundant call.
+export function armOwnershipHealthy(owner: SessionGeneration): boolean {
+  const child = owner.child;
+  if (!child) return false;
+  if (child.exitCode !== null || child.signalCode !== null) return false;
+  const pid = child.pid;
+  if (pid === undefined || !pidAlive(String(pid))) return false;
+  const startedAt = armStartedAt.get(child);
+  if (startedAt !== undefined && Date.now() - startedAt < guardGraceMs()) return true;
+  return watcherBeatFresh();
+}
+
 function lockOwnership(): LockOwnership {
   let lockPid = "";
   try {
@@ -1775,7 +1836,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
       };
     }
     markLoaded();
-    if (owner.child) {
+    if (armOwnershipHealthy(owner)) {
       return {
         ok: true,
         message: `watcher: unchanged - omp extension already owns an arm child; no manual re-arm needed; ${repairOnlyHint}`,
@@ -1806,6 +1867,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     });
     armHostMode.set(armChild, hostMode);
     owner.child = armChild;
+    armStartedAt.set(armChild, Date.now());
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -2006,6 +2068,16 @@ const subagentArmStatus =
       generation.sendUserMessageRef.send = (sendContent: string, sendOptions?: { deliverAs?: string }) => pi.sendUserMessage(sendContent, sendOptions);
     }
     markLoaded();
+    // Liveness verification at activation: a generation that already holds an
+    // arm slot must still prove the watcher is alive and beating before this
+    // session_start reports health by silence. A context re-emit re-binds the
+    // extension to re-emit rather than replace, and startArm then re-checks
+    // the same predicate; a slot whose child or beat is gone starts a fresh
+    // arm instead of letting the re-emit window answer "unchanged" (fm-5gh5).
+    if (generation.child && !armOwnershipHealthy(generation)) {
+      debugLog(debugBinding, "session_start", "arm-slot-unhealthy", ctx, () => generationDebugFields(generation));
+      generation.child = null;
+    }
     if (lockOwnership() !== "owned") {
       debugLog(debugBinding, "session_start", "activateGeneration-not-lock-owner", ctx, () => generationDebugFields(generation));
       return;

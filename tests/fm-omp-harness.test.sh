@@ -456,7 +456,7 @@ install_omp_extension_fixture() {  # <repo>
   cp "$ROOT/bin/fm-operational-input.sh" "$ROOT/bin/fm-supervision-engine-lib.sh" "$repo/bin/"
   cp "$ROOT/bin/fm-wake-drain.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-classify-lib.sh" \
     "$ROOT/bin/fm-line-cap-lib.sh" "$ROOT/bin/fm-timeout-lib.sh" "$ROOT/bin/fm-lease-lib.sh" \
-    "$ROOT/bin/fm-afk-contract.sh" "$repo/bin/"
+    "$ROOT/bin/fm-afk-contract.sh" "$ROOT/bin/fm-path-lib.sh" "$repo/bin/"
   chmod +x "$repo/bin/fm-operational-input.sh" "$repo/bin/fm-wake-drain.sh"
   printf '{"name":"typebox","type":"module","exports":"./index.js"}\n' > "$repo/node_modules/typebox/package.json"
   printf 'export const Type = { Object(p) { return { type: "object", properties: p }; } };\n' > "$repo/node_modules/typebox/index.js"
@@ -533,6 +533,9 @@ test_watch_extension_arms_and_delivers() {
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'watcher: started pid=%s (beacon 0s) recovery-generation=gen-1\n' "$$"
+# A live arm child alone is not healthy: every round touches the beacon so the
+# ownership no-op below sees the fresh beat the post-fm-5gh5 check requires.
+: > "$FM_HOME/state/.last-watcher-beat"
 if [ ! -e "${FM_HOME:?}/state/.e2e-fired" ]; then
   : > "$FM_HOME/state/.e2e-fired"
   sleep 1
@@ -584,6 +587,56 @@ EOF
   expect_code 0 "$status" "omp watch extension contract: $out"
   [ -z "$out" ] || fail "omp watch extension test printed output: $out"
   pass ".omp watch extension: fm_watch_arm_omp arms once, repeats as a no-op, and delivers an actionable close as one follow-up"
+}
+
+# The ownership answer verifies liveness, not just the recorded slot (fm-5gh5):
+# a child whose process has exited, and a live child whose watcher stopped
+# beating, both fail armOwnershipHealthy, so startArm can never answer
+# "unchanged" for either. Driven through the exported decision function with
+# real child processes, no fake omp API needed.
+test_watch_extension_ownership_requires_a_live_beating_child() {
+  local repo home out status
+  repo="$TMP_ROOT/watch-liveness/repo"; home="$TMP_ROOT/watch-liveness/home"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state"
+  # FM_GUARD_GRACE is the turn-end guard's own staleness override, which keeps
+  # this test keyed on the guard's threshold rather than a test constant.
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_GUARD_GRACE=2 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { spawn } from "node:child_process";
+import { writeFileSync, utimesSync } from "node:fs";
+const beat = `${process.env.FM_HOME}/state/.last-watcher-beat`;
+const mod = await import(pathToFileURL(process.env.EXT).href);
+if (typeof mod.armOwnershipHealthy !== "function") throw new Error("armOwnershipHealthy was not exported");
+// A live child with no beacon at all is not a beating watcher.
+const live = spawn("sleep", ["30"]);
+if (mod.armOwnershipHealthy({ child: live })) throw new Error("a live child with no beacon passed as healthy");
+// A fresh beacon makes the same live child healthy.
+const now = new Date();
+writeFileSync(beat, "beat\n");
+utimesSync(beat, now, now);
+if (!mod.armOwnershipHealthy({ child: live })) throw new Error("a live child with a fresh beacon must be healthy");
+// Once the beacon ages past the guard grace the same live child is not beating.
+await new Promise((r) => setTimeout(r, 2600));
+if (mod.armOwnershipHealthy({ child: live })) throw new Error("a live child with a stale beacon passed as healthy");
+// A child whose process is gone never owns the slot, fresh beacon or not.
+live.kill("SIGKILL");
+await new Promise((r) => live.once("exit", r));
+const deadline = Date.now() + 5000;
+while ((live.exitCode === null && live.signalCode === null) && Date.now() < deadline) {
+  await new Promise((r) => setTimeout(r, 25));
+}
+const nowDead = new Date();
+utimesSync(beat, nowDead, nowDead);
+if (mod.armOwnershipHealthy({ child: live })) throw new Error("a dead child with a fresh beacon passed as healthy");
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp watch arm ownership liveness contract: $out"
+  [ -z "$out" ] || fail "omp watch arm ownership liveness test printed output: $out"
+  pass ".omp watch extension: arm ownership requires a live child AND a fresh watcher beat"
 }
 
 # An opted-in home spawns the supervision host in the arm's place; its streamed
@@ -1703,6 +1756,7 @@ test_control_composer_and_model_tables
 test_ownership_proof_is_omp_keyed
 test_turnend_guard_extension_compels_one_continuation
 test_watch_extension_arms_and_delivers
+test_watch_extension_ownership_requires_a_live_beating_child
 test_watch_extension_runs_the_supervision_host
 test_watch_extension_runs_the_supervision_host quiet
 test_watch_extension_keeps_the_arm_without_the_file_or_with_off

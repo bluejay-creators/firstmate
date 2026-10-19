@@ -141,6 +141,21 @@ fm_poll_derived_grace() {
   printf '%s\n' "$derived"
 }
 
+# fm_watcher_fresh_beat <state> [poll-seconds]
+# The beacon-freshness half of the turn-end guard's health predicate with no
+# process or lock requirement: true while state/.last-watcher-beat is younger
+# than the same grace bin/fm-turnend-guard.sh hands fm_watcher_healthy
+# (FM_GUARD_GRACE, else fm_poll_derived_grace; docs/turnend-guard.md "Guard
+# grace and the poll cadence" owns the derivation). Extension adapters that
+# must not touch the watcher lock use this to answer "is any watcher still
+# beating" without competing with the strict pid- and identity-matched
+# predicate.
+fm_watcher_fresh_beat() {
+  local state=$1 poll=${2:-${FM_POLL:-15}} grace
+  grace=${FM_GUARD_GRACE:-$(fm_poll_derived_grace "$poll")}
+  [ "$(fm_path_age "$state/.last-watcher-beat")" -lt "$grace" ]
+}
+
 # fm_watcher_stall_bound [poll-seconds]
 # Hard bound on a live watcher holder's beacon age: FM_WATCHER_STALL_BOUND,
 # defaulting to 3x the watcher's stale grace (FM_WATCHER_STALE_GRACE, else
