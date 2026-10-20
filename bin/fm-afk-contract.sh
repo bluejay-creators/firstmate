@@ -9,8 +9,8 @@
 # path in bin/fm-afk-return.sh calls `archive` through bin/fm-afk-launch.sh stop).
 # Being away changes how the captain is informed and what happens at a
 # captain-owned decision point, never the authority set. Hold-for-return is the
-# only reach profile this release records: there is no phone channel, and the
-# entry announcement says so every time.
+# only answer channel; optional content-free phone hints are configured separately
+# (docs/configuration.md). The entry announcement never promises phone delivery.
 #
 # AWAY OR QUIET. The same record also backs daemon-backed quiet mode, which a
 # quiet entry marks with `mode: quiet`: the captain is present there, so a quiet
@@ -137,6 +137,9 @@ FM_AFK_CONTRACT_VERSION=2
 # Older record versions this script still reads (never writes).
 FM_AFK_CONTRACT_READABLE_VERSIONS="1 2"
 FM_AFK_CONTRACT_REACH_ANNOUNCED='No phone channel is configured; anything that needs you waits for your return.'
+if [ -f "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/phone-notify" ]; then
+  FM_AFK_CONTRACT_REACH_ANNOUNCED='Optional content-free phone hints may run; anything that needs you still waits for your return.'
+fi
 FM_AFK_CONTRACT_SPEND_DEFAULT=4
 FM_AFK_CONTRACT_QUIET_HOLDS_NOTHING='you are present, so nothing waits for your return: every action you ask for, a local landing or a merge included, proceeds now under ordinary attended authority, and quiet mode changes only which updates reach this conversation.'
 # Generous against the longest legitimate holder, a merge waiting on the forge,

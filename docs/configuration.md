@@ -564,6 +564,18 @@ Target detection uses `FM_SUPERVISOR_TARGET`, then `$TMUX_PANE`, then `"${HERDR_
 
 Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, refuses at daemon startup instead of trying tmux injection primitives against a non-tmux pane.
 
+## Away-mode phone hints (config/phone-notify)
+
+Phone hints are optional and off when the local, gitignored `config/phone-notify` file is absent.
+To opt in, put one executable command name in that file (`fm-notify-phone` by default, also used for an empty file); it must be on the daemon's `PATH`, with no arguments or shell fragments in the file.
+The away daemon sends only `decisions-waiting N` for pending actionable captain holds in the canonical local backlog projection, otherwise `away-digest-ready` for an escalation batch, and `urgent` when its watcher fails or pane delivery wedges.
+No digest, task identity, title, reason, or other free text is passed in argv or stdin.
+Each template is limited locally to one attempt per ten minutes, including failed attempts and daemon restarts; the phone CLI and Jarvis bridge additionally enforce their six-per-hour cap.
+Hold counting and dispatch run asynchronously, each with a five-second process-group bound; missing commands and failures are logged without interrupting supervision.
+This hook covers the daemon's `tmux` and `herdr` paths, not Pi's supervision branch or the supervision host, and is silent in quiet mode.
+Phone hints do not carry answers or release holds: anything requiring the captain still waits for their return.
+The CLI's endpoint and credential setup remain separate; creating this hook does not configure or authorize that destination.
+
 ## Away-mode wedge alarm channels (config/wedge-alarm)
 
 When away-mode injection wedges past `FM_MAX_DEFER_SECS`, the sub-supervisor raises a loud, rate-limited alarm.
