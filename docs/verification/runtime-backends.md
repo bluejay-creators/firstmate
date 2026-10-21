@@ -791,6 +791,26 @@ Cursor is deliberately outside this cursor-anchored empty-composer matrix becaus
 
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.
 
+### omp 18.10.4 band composer through Herdr
+
+Verified on 2026-10-21 on macOS arm64 against omp 18.10.4 and Herdr 0.9.3 using `herdr pane read <pane> --source visible --format ansi`.
+The band composer places its status row above an unboxed `╰─ ` input gutter, rather than drawing a complete box or a bare agent prompt glyph.
+The version-pinned upstream [band renderer](https://github.com/can1357/oh-my-pi/blob/v18.10.4/packages/tui/src/components/composer/band.ts) owns that geometry.
+The shared classifier recognizes the gutter only directly below a recognized omp status row and retains lower-shell and lower-composer staleness protections.
+An empty-only, right-aligned `←← to see N running agents` hint uses a bright key and a dim label, as defined by upstream [composer hints](https://github.com/can1357/oh-my-pi/blob/v18.10.4/packages/tui/src/prompt/composer-hints.ts).
+The classifier discards that hint only when ANSI ghost stripping removes part of the exact placeholder; identically typed bright text remains pending.
+
+The captured viewport classified `unknown` before this shape was supported and `empty` afterward.
+The sanitized input-band capture is `tests/captures/omp-18.10.4-band-idle.ansi`.
+The focused refresh command is `bash tests/fm-composer-lib.test.sh`; its observed result was exit 0, including `ok - matrix: omp band gutter and styled hint prove empty without discarding drafts`.
+The regression covers pending text, wrapped text, identical bright placeholder text, plain captures, cursor-aware and cursorless reads, and lower dead shells under both the ambient locale and `LC_ALL=C`.
+
+Composer emptiness is not a foreground-busy verdict.
+The same live screen retained a spinner and Herdr `working` state after the assistant's recorded stop.
+Upstream [non-terminal settle handling](https://github.com/can1357/oh-my-pi/blob/v18.10.4/packages/coding-agent/src/modes/controllers/event-controller.ts#L2238-L2331) deliberately retains the loader and run-status `working` while asynchronous work can resume the run.
+Long-lived monitoring jobs can therefore outlive a model turn without making these two busy signals independent.
+This classifier change does not override the delivery busy guard or authorize typing merely because a turn stopped.
+
 ### 2026-09-20 claude 2.1.236 statusLine footer through Herdr
 
 Verified on 2026-09-20 on macOS arm64 (Darwin 25.6.0) against Claude Code 2.1.236 running as Firstmate workers in Herdr 0.8.0 panes, read through Herdr's ANSI capture with its exact capability descriptor (`styled=1`, `cursor=0`, `identity=1`, `rows=20`).
