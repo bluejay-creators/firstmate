@@ -578,7 +578,7 @@ inbox_steer_check() {  # <window> <task>
   case "$verb" in
     ring)
       ring_rc=0
-      fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
+      fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" retry || ring_rc=$?
       if [ "$ring_rc" -eq 4 ]; then
         # Live-listener verdicts arrive through the library ring path when the
         # pane is known listener-owned; the ladder stays out of its way.
@@ -603,7 +603,7 @@ inbox_steer_check() {  # <window> <task>
       ;;
     retry)
       ring_rc=0
-      fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
+      fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" retry || ring_rc=$?
       if [ "$ring_rc" -eq 4 ]; then
         # Live-listener retry: no ring is owed; spend the mark quietly.
         fm_task_inbox_clear_retry "$STATE" "$task" "$rec" || true
@@ -948,7 +948,7 @@ secondmate_ring_to_drain() {  # <task> <window>
   rec=$(fm_task_inbox_write "$STATE" "$task" \
     "${FM_FROMFIRST_MARK}delivery=${delivery_id} Drain pending rows in this home's wake queue, then resume idle supervision." \
     fire-and-forget) || return 1
-  fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")"
+  fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" retry
 }
 
 # Surface one durable parent check when the foreign queue's drain position has

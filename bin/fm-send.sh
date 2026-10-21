@@ -1135,6 +1135,7 @@ else
     fi
     case "$ring_rc" in
     4) echo "fm-send: no doorbell typed: $T runs a live in-session inbox listener; the steer is durably recorded at $INBOX_RECORD and is delivered through the session" >&2 ;;
+    5) echo "fm-send: no new doorbell typed: an outstanding doorbell already covers this inbox; the steer is durably recorded at $INBOX_RECORD" >&2 ;;
     1) echo "fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
     2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
     3) echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2 ;;
