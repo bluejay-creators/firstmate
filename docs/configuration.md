@@ -529,9 +529,7 @@ The setting is inherited into secondmate homes under the primary-authoritative c
 The local `config/herdr-worker-workspace` file names one whitespace-free Herdr workspace label that receives this home's own ship/scout spawns in place of the default launcher-workspace inheritance; [Placement beside the launcher](herdr-backend.md#placement-beside-the-launcher) owns its parsing, fallback, and placement boundaries.
 It never applies to secondmate launches, and it is inherited into secondmate homes by the same primary-authoritative contract, so a secondmate home's own crewmates land beside the primary's workers.
 
-The local `config/worker-spawn-requires-reason` file is an opt-in (file presence) that makes a seeded secondmate home refuse its own ship/scout spawns unless the caller passes `--worker-reason "<why a subagent can't do this>"` with at least 20 non-whitespace characters.
-The primary's own home launches are never gated, so the file matters only once it is inherited through the same propagation path above.
-When a spawn passes the gate, `bin/fm-spawn.sh` records `worker_reason=` in the task metadata, appends one stamped override line to that home's own status ledger, and publishes one parent-channel notice so the primary firstmate sees every override.
+`bin/fm-spawn.sh` refuses launches from seeded second-mate homes regardless of `config/worker-spawn-requires-reason` or `--worker-reason` (captain ruling 2026-10-22); use in-session subagents, or ask primary firstmate to launch a truly necessary pane with the captain's agreement.
 
 For normal herdr operations, `HERDR_SESSION` selects the named session, but destructive test cleanup must not rely on `HERDR_SESSION` alone.
 Use the explicit guarded cleanup path described in [`docs/herdr-backend.md`](herdr-backend.md) instead of `herdr server stop`.

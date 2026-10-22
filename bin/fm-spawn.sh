@@ -615,6 +615,10 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
+if fm_root_is_secondmate_home "$FM_HOME"; then
+  echo "fm-spawn: worker panes are disabled in second-mate homes (captain ruling 2026-10-22). Use in-session subagents; if a pane is truly needed, ask firstmate." >&2
+  exit 1
+fi
 # shellcheck source=bin/fm-exclude-tools-lib.sh
 . "$SCRIPT_DIR/fm-exclude-tools-lib.sh"
 if ! LAUNCH_ENV_ENABLED=$(fm_config_source_present "$CONFIG/launch-env-allowlist"); then
