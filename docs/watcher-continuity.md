@@ -413,6 +413,10 @@ The EXIT cleanup bounds its wait for `state/.watcher-down.lock` while persisting
 Only positive decimal integers are accepted, including leading-zero forms such as `08`; empty, non-numeric, and zero values (including `00`) fall back to 2 seconds.
 A live foreign holder therefore cannot strand a TERM'd watcher in this marker-lock wait: on timeout the recovery transition fails without releasing the singleton, leaving dead-pid stale evidence for the next arm to republish and clear.
 
+### External Mac watchdog
+
+The optional [Mac watchdog](configuration.md#external-mac-watchdog) requests recovery through the existing omp owner without starting or stopping an arm itself; only the watcher's own fresh beacon proves recovery.
+
 ## Regression coverage
 
 ### Pi and OpenCode watch extension

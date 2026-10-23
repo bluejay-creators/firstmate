@@ -838,6 +838,41 @@ tests/fm-afk-return.test.sh
 tests/fm-branch-supervision.test.sh
 ```
 
+## External Mac watchdog
+
+Verified on macOS 26.6.2 on 2026-10-23 through these public entry points:
+
+```bash
+bash tests/fm-watchdog.test.sh
+FM_WATCHDOG_LAUNCHD_SMOKE=1 bash tests/fm-watchdog-launchd-live.test.sh
+```
+
+The portable suite passed all nine behavioral groups, including the 120/121-second recovery boundary, 299/300-second escalation boundary, restart and concurrency reservations, new-beat recovery, missing and unrelated targets, and bounded transport failures.
+Its foreground-identity checks use two real fixture processes with deliberately divergent kernel names and argv[0], plus a real shell behind a stale omp registration.
+The latter regression failed before foreground-process verification was added.
+The fixture compiles its own inert leaf with `cc`; it does not relocate a platform-signed macOS executable or start a model.
+
+The native guard uses a real per-home LaunchAgent and the installed `fm-notify-phone` executable against a loopback receiver.
+Only Herdr identity/prompt delivery and the notify-only secret getter are synthetic adapters; no real pane, Keychain item or device is contacted.
+It validates rendered plist parsing and escaped home paths, observes RunAtLoad without a model turn, checks one exact content-free HTTP payload with restart deduplication, then observes recovery on the next scheduled invocation without a kickstart.
+The escalation deadline is advanced only in the private fixture episode; the scheduler cadence itself is real time.
+The guard spends no model tokens, runs by default where its Mac/GUI/tool capabilities exist, and an explicit opt-in refuses rather than skips a missing prerequisite.
+
+Observed native output:
+
+```text
+PASS: real launchd RunAtLoad requested recovery in an isolated home; no omp/model turn.
+PASS: actual fm-notify-phone sent exactly one watcher-down-only payload to loopback with a synthetic secret adapter; restart dedup held.
+PASS: native scheduled tick observed fresh recovery and cleared the episode after 60 seconds; no duplicate prompt/phone.
+PASS: only the unique fixture LaunchAgent was unloaded.
+```
+
+Herdr CLI 0.9.3 also supplied read-only native `agent get` and `pane process-info` responses for a running omp primary: the home and pane matched, and the foreground process list contained both the kernel name `omp` and argv[0] `omp`.
+That observation establishes the installed identity-field shape, not delivery of a real recovery prompt or successful extension re-arm.
+Live primary recovery and actual device notification remain activation checks; this verification did not install the watchdog for a live home.
+Other primary harnesses and backends are not changed or given a fallback by this opt-in omp-on-Herdr job.
+Current operator setup belongs to [configuration](../configuration.md#external-mac-watchdog), and exact runtime mechanics belong to `bin/fm-watchdog.sh`'s header.
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.

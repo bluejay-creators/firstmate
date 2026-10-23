@@ -2519,6 +2519,8 @@ The evidence below was produced on 2026-09-05 against omp 18.1.11 (`~/.local/bin
 omp publishes no harness marker: `PI_CODING_AGENT` is absent from the binary, and the default profile sets neither `PI_CODING_AGENT_DIR` nor `OMP_PROFILE` in the process environment.
 `FM_OMP_HARNESS=omp` is Firstmate's own launch marker and wins over an inherited `CLAUDECODE` only under a real omp ancestor; `tests/fm-omp-harness.test.sh` pins both directions with real processes.
 
+The external Mac watchdog's 2026-10-23 native identity observation, real-process regression and isolated launchd/notification proof are owned by [supervision verification](supervision.md#external-mac-watchdog), including its explicit live-delivery limits and refresh commands.
+
 ### Composer
 
 Under the captain's `unicode` symbol preset the idle screen through Herdr was a bare `❯` (U+276F) row followed directly by the status row:

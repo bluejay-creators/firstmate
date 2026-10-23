@@ -338,6 +338,50 @@ The primary-authoritative propagation contract, including removal of a mate's lo
 `config/supervision-host` is local to each home and not inherited, because each home's engine and model are its own choice.
 While the home runs the host, main's lease-checked commands also take the per-task lease lock, so a claim by the host's engine cannot race a mutation main already started (`bin/fm-lease-lib.sh`).
 
+## External Mac watchdog
+
+An optional macOS LaunchAgent protects an omp-on-Herdr primary when no model turn ends to run its normal guard.
+It observes the existing watcher beacon, asks the recorded primary to use its extension-owned repair tool, and escalates prolonged failure through the existing content-free phone bridge.
+[`bin/fm-watchdog.sh`](../bin/fm-watchdog.sh)'s header owns the exact cadence, thresholds, episode format, transport bounds and command interface.
+It does not replace the watcher, bypass its extension owner, or change the turn-end guard's grace.
+
+### Opt-in installation and removal
+
+Install only after the source change is merged and the separate activation is approved.
+Run from the stable Firstmate home, with `state/.firstmate-pane` naming its current Herdr pane.
+The selected pane must have both a native omp registration and a real foreground omp process, with that home as its foreground working directory.
+The existing `fm-notify-phone` configuration and notify-only credential must already work; this job creates no credential.
+Use a PATH on which `herdr`, `fm-notify-phone`, `jq` and `shasum` resolve, and select the correct `HERDR_SESSION` before rendering if it is not `default`.
+The renderer freezes those environment paths and the selected home, not secrets or the contents of `.env`.
+
+First installation, with no existing plist at the chosen destination:
+
+```bash
+plist="$HOME/Library/LaunchAgents/dev.firstmate.watchdog.plist"
+mkdir -p "$HOME/Library/LaunchAgents"
+(set -C; FM_HOME="$PWD" bash bin/fm-watchdog.sh plist > "$plist")
+plutil -lint "$plist"
+launchctl bootstrap "gui/$(id -u)" "$plist"
+```
+
+The renderer only prints configuration; the final command is the explicit activation.
+Diagnostics append to this home's `state/.watchdog.log`, and the existing phone bridge retains its own global rate limits.
+Accepted prompt submission is not proof of recovery: a later fresh watcher beacon is required.
+A rejected or ambiguous transport attempt is reserved for that stale episode rather than repeatedly typing into a busy or blocked primary.
+
+Before intentionally stopping the primary for maintenance, unload this job:
+
+```bash
+launchctl bootout "gui/$(id -u)" "$plist"
+```
+
+Use that same unload before replacing its plist or changing its captured home, PATH or Herdr session.
+Reload the approved rendered plist with `bootstrap` to resume protection.
+The LaunchAgent runs only while the Mac is awake and that user is logged in.
+It has no shell/tmux/other-harness recovery path and never discovers or starts an unrelated Herdr server.
+No omp restart is needed for this standalone job when the primary's existing watch extension is already loaded.
+Current proof and explicit live-delivery limits are in [supervision verification](verification/supervision.md#external-mac-watchdog).
+
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 
 The tracked `.tasks.toml` pins the default `tasks-axi` markdown backend to `data/backlog.md`, with `done_keep = 10` and an archive at `data/done-archive.md`.
