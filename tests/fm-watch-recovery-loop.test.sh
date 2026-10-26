@@ -443,6 +443,97 @@ SH
   pass "a consumed fresh row does not replay its predecessor or hide later inbox work"
 }
 
+# T5: capture publication may re-queue an unhandled result after an extension
+# acknowledges its queued follow-up. A new queue sequence is not a new capture.
+test_handling_successor_does_not_resurface_a_republished_capture() {
+  local dir home state fakebin out child status attempt action
+  dir=$(make_case successor-republished-capture)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  mkdir -p "$home/data" "$home/config"
+  install_successor_poll_recorder "$fakebin"
+  FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" \
+    append_wake "$state" check procevent:fixture:1 'check: procevent fixture-adapter fixture 1' \
+    || fail "could not publish the original capture"
+  out="$dir/original.out"
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    "$WATCH" > "$out" 2>&1 &
+  child=$!
+  attempt=0
+  while kill -0 "$child" 2>/dev/null && [ "$attempt" -lt 100 ]; do
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  if kill -0 "$child" 2>/dev/null; then
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+    fail "the original process-event capture did not surface"
+  fi
+  status=0
+  wait "$child" || status=$?
+  expect_code 0 "$status" "original process-event capture"
+  assert_contains "$(cat "$out")" 'process-event result captured: procevent:fixture:1' \
+    "the original capture must be delivered before its republication"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$home/config" \
+    "$ROOT/bin/fm-wake-drain.sh" --delete-sequences "$(cat "$state/.wake-queue.seq")" \
+    || fail "could not acknowledge the queued original capture"
+  action="$dir/queue-action.sh"
+  cat > "$action" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+. "$FM_TEST_ROOT/bin/fm-wake-lib.sh"
+fm_wake_append check procevent:fixture:1 'check: procevent fixture-adapter fixture 1'
+SH
+  out="$dir/successor.out"
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_WATCH_HANDLING_SUCCESSOR=1 FM_TEST_REAL_SLEEP="$(command -v sleep)" \
+    FM_TEST_ROOT="$ROOT" FM_TEST_QUEUE_ACTION="$action" "$WATCH" > "$out" 2>&1 &
+  child=$!
+  if ! wait_for_successor_polls "$state" "$child" 5; then
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+    fail "a republished capture restarted the handling recovery loop: $(cat "$out")"
+  fi
+  [ "$(cat "$state/.test-action.status")" = 0 ] \
+    || fail "the capture republication failed: $(cat "$state/.test-action.out")"
+  [ "$(cat "$state/.wake-queue.seq")" = 2 ] \
+    || fail "the capture republication must have a new queue sequence"
+  ! grep -Eq '^(signal:|stale:|check:|heartbeat($|:))' "$out" \
+    || fail "an already-surfaced capture was delivered again: $(cat "$out")"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$home/config" \
+    "$ROOT/bin/fm-inbox.sh" note --request-id after-republished --json 'fixture fresh inbox wake' \
+    > "$dir/note.json" || fail "could not append independent fresh work"
+  wait_for_successor_recovery "$out" "$child" || {
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+    fail "suppressing capture republication hid independent fresh work: $(cat "$out")"
+  }
+  status=0
+  wait "$child" || status=$?
+  expect_code 0 "$status" "fresh inbox work after capture republication"
+  grep "$(printf '\tcheck\tprocevent:fixture:1\t')" "$state/.wake-queue" >/dev/null \
+    || fail "suppression must not discard the unhandled capture"
+  printf 'pending:downtime:real-gap.1.aaa\n' > "$state/.watcher-down"
+  out="$dir/downtime.out"
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_WATCH_HANDLING_SUCCESSOR=0 FM_TEST_REAL_SLEEP="$(command -v sleep)" \
+    "$WATCH" > "$out" 2>&1 &
+  child=$!
+  wait_for_successor_recovery "$out" "$child" || {
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+    fail "a surfaced capture receipt suppressed real downtime recovery: $(cat "$out")"
+  }
+  status=0
+  wait "$child" || status=$?
+  expect_code 0 "$status" "real downtime recovery after capture republication"
+  pass "capture republication stays quiet without hiding fresh inbox work or real downtime"
+}
+
 case "${1:-}" in
   --successor-inbox)
     test_handling_successor_surfaces_fresh_durable_rows_once failed-handshake
@@ -450,12 +541,17 @@ case "${1:-}" in
   --successor-queue)
     test_handling_successor_surfaces_fresh_durable_rows_once
     test_handling_successor_ignores_consumed_fresh_rows
+    test_handling_successor_does_not_resurface_a_republished_capture
+    ;;
+  --successor-procevent)
+    test_handling_successor_does_not_resurface_a_republished_capture
     ;;
   '')
     test_handling_successor_does_not_go_blind
     test_handling_successor_surfaces_fresh_durable_rows_once
     test_handling_successor_ignores_consumed_fresh_rows
+    test_handling_successor_does_not_resurface_a_republished_capture
     test_unacknowledged_recovery_is_announced_once_per_generation
     ;;
-  *) fail "usage: ${0##*/} [--successor-inbox | --successor-queue]" ;;
+  *) fail "usage: ${0##*/} [--successor-inbox | --successor-queue | --successor-procevent]" ;;
 esac

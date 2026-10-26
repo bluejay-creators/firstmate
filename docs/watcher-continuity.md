@@ -201,6 +201,8 @@ A handling successor does not re-announce its predecessor's queued work.
 It enters its poll loop immediately and keeps scanning signals, stale panes, checks, and still-pending durable rows newer than its locked startup queue boundary.
 A new inbox row therefore surfaces even if the predecessor's handling confirmation failed or arrived late.
 An append that was already consumed before the next poll does not replay the remaining predecessor rows.
+A republished process-event capture with an existing successful-surfacing receipt is not fresh work for a handling successor, even when publication assigned it a newer queue sequence.
+The row and unhandled result remain durable; independent fresh work and non-successor downtime recovery still surface normally.
 
 ### Manual recovery and other harnesses
 
@@ -486,6 +488,7 @@ It also verifies that a suppressed notification cannot swallow the bounded resto
 - Fresh inbox and other durable rows reaching a handling successor while predecessor work remains pending.
 - A late handling confirmation preserving the outstanding acknowledgement generation without hiding new work.
 - Unchanged predecessor rows and already-consumed newer rows remaining quiet.
+- Process-event republication staying quiet during handling without discarding the result, hiding independent inbox work, or suppressing real downtime recovery.
 
 `tests/fm-watch-triage.test.sh` proves TERM stops a watcher blocked inside a poll's pane capture and still releases its lock and records an acknowledgeable stop.
 It also exercises a single TERM with a live foreign downtime-marker lock holder, retained stale singleton and subsequent arm-style recovery, including decimal `08` and zero `00` cleanup bounds.

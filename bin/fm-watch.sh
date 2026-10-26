@@ -2793,20 +2793,32 @@ rerecord_device_shifted_pr_poll() {  # <id>
 }
 
 resurface_after_downtime() {
-  local successor_queued=
+  local successor_queued='' fresh_rows row_kind row_key
   if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
     # Keep the failed-handshake suppression for predecessor rows, not for
     # durable work appended after this successor began supervising. An append
     # counter alone is insufficient: newer rows may already have been consumed.
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || exit 1
     if [ -s "$FM_WAKE_QUEUE" ]; then
-      successor_queued=$(awk -F '\t' -v cutoff="$WATCHER_SUCCESSOR_QUEUE_SEQ" '
-        NF >= 5 && $2 ~ /^[0-9]+$/ && $2 > cutoff { print 1; exit }
+      fresh_rows=$(awk -F '\t' -v cutoff="$WATCHER_SUCCESSOR_QUEUE_SEQ" '
+        NF >= 5 && $2 ~ /^[0-9]+$/ && $2 > cutoff && !seen[$3 SUBSEP $4]++ { print $3 "\t" $4 }
       ' "$FM_WAKE_QUEUE") || {
         fm_lock_release "$FM_WAKE_QUEUE_LOCK"
         echo "watcher: successor queue could not be read safely" >&2
         exit 1
       }
+      while IFS=$'\t' read -r row_kind row_key; do
+        [ -n "$row_kind" ] || continue
+        case "$row_kind:$row_key" in
+          check:procevent:*)
+            # Reconcile may republish a capture after delivery but before
+            # handling. Its new queue sequence is not a new notification.
+            [ ! -e "$(procevent_surfaced_marker "$row_key")" ] || continue
+            ;;
+        esac
+        successor_queued=1
+        break
+      done <<< "$fresh_rows"
     fi
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
     [ "$successor_queued" = 1 ] || return 0
