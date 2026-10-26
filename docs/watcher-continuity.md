@@ -165,6 +165,9 @@ This is deliberate Option B ordering.
 Whenever restoration succeeds, the fleet is protected before the model handles the wake.
 When restoration does not succeed, the model is never left blind.
 
+On omp, an already-drained queue or an identical stale reason inside the suppression window suppresses only the follow-up, never successor restoration.
+The owner still verifies a successor within the same retry bound and surfaces a typed restoration failure if that bound is exhausted.
+
 ### Claude handling successor
 
 Claude's Stop hook also starts one handling successor before notification.
@@ -194,8 +197,10 @@ The bounded turn-end guard enforces recovery at Stop when no watcher is live and
 So a finished, hung, or identity-mismatched claim cannot suppress that recovery ([`turnend-guard.md`](turnend-guard.md#harness-integrations) owns that boundary).
 
 The recovery-episode contract below owns once-per-generation announcement.
-A handling successor does not re-announce.
-It enters its poll loop immediately and keeps scanning signals, stale panes, and checks.
+A handling successor does not re-announce its predecessor's queued work.
+It enters its poll loop immediately and keeps scanning signals, stale panes, checks, and still-pending durable rows newer than its locked startup queue boundary.
+A new inbox row therefore surfaces even if the predecessor's handling confirmation failed or arrived late.
+An append that was already consumed before the next poll does not replay the remaining predecessor rows.
 
 ### Manual recovery and other harnesses
 
@@ -447,6 +452,11 @@ The same suite covers ordinary same-process session replacement for `/new`, `/re
 The guard and session-start suites prove that active generation evidence tolerates a fresh-beacon handoff.
 They also prove that a legacy or handoff-phase watcher marker from an absent replacement extension still raises the outage diagnostic.
 
+### omp watch extension
+
+`tests/fm-omp-watch-continuity.test.sh` drives real arm children through drained-queue and repeated-stale suppression, then proves a later actionable wake still arrives with a live successor.
+It also verifies that a suppressed notification cannot swallow the bounded restoration failure.
+
 ### Arm, recovery, triage, and lock suites
 
 `tests/fm-watch-arm.test.sh` covers:
@@ -473,6 +483,9 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 
 - The once-per-generation announcement bound with the real Pi extension against a refused handling handshake.
 - A handling successor that must surface a real crew event instead of going blind.
+- Fresh inbox and other durable rows reaching a handling successor while predecessor work remains pending.
+- A late handling confirmation preserving the outstanding acknowledgement generation without hiding new work.
+- Unchanged predecessor rows and already-consumed newer rows remaining quiet.
 
 `tests/fm-watch-triage.test.sh` proves TERM stops a watcher blocked inside a poll's pane capture and still releases its lock and records an acknowledgeable stop.
 It also exercises a single TERM with a live foreign downtime-marker lock holder, retained stale singleton and subsequent arm-style recovery, including decimal `08` and zero `00` cleanup bounds.

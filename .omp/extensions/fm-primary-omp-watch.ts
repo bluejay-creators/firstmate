@@ -1591,11 +1591,13 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
         // drained carries no work for main - mark it delivered and let the
         // cleanup path at the head of the next iteration clear it.
         const queueCount = wakeQueuePendingCount(extensionWakeQueuePath());
+        let suppressedPredecessor: string | undefined;
         for (const candidate of owner.pendingActionables.filter(
           (item) => !item.delivered && !owner.unconsumedWakes.has(item.token),
         )) {
           if (queueCount === 0) {
             candidate.delivered = true;
+            suppressedPredecessor = candidate.predecessorArmPid;
             continue;
           }
           // Coalesce rule (3): a pane whose stale reason we ALREADY delivered
@@ -1604,6 +1606,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
           if (/^stale:/.test(candidate.message) &&
               staleWakeSuppressed(owner.deliveredStaleAt, candidate, Date.now(), staleWakeupTtlMs)) {
             candidate.delivered = true;
+            suppressedPredecessor = candidate.predecessorArmPid;
           }
         }
         for (const dropped of owner.pendingActionables.filter((item) => item.delivered && !attemptedCleanup.has(item.token))) {
@@ -1620,7 +1623,18 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
         const eligible = owner.pendingActionables.filter(
           (item) => !item.delivered && !owner.unconsumedWakes.has(item.token),
         );
-        if (eligible.length === 0) break;
+        if (eligible.length === 0) {
+          // Coalescing suppresses notification, never watcher ownership.
+          // A real actionable close has already released owner.child; restore
+          // its successor even when no follow-up remains to drive that path.
+          if (suppressedPredecessor !== undefined) {
+            owner.deferredClose = null;
+            const restoration = await restoreAfterActionableClose(owner, suppressedPredecessor);
+            if (restoration.failure) surfaceFailure(owner, restoration.failure);
+            continue;
+          }
+          break;
+        }
         const batch = buildPendingActionableBatch(eligible.slice(0, 8));
         const pending = batch.items[0];
         const existingClaim = replacementCoordinator.deliveries.get(pending.token);

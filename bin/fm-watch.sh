@@ -2571,6 +2571,24 @@ WATCHER_RECOVERY_PENDING=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
 fi
+# Only rows already queued at this locked startup boundary belong to the
+# predecessor. Snapshot before the arm check so an append during startup is
+# still fresh even if that check announces its recovery marker.
+WATCHER_SUCCESSOR_QUEUE_SEQ=0
+if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || exit 1
+  if [ -s "$FM_WAKE_QUEUE" ]; then
+    WATCHER_SUCCESSOR_QUEUE_SEQ=$(awk -F '\t' '
+      NF >= 5 && $2 ~ /^[0-9]+$/ && $2 > newest { newest=$2 }
+      END { printf "%.0f\n", newest }
+    ' "$FM_WAKE_QUEUE") || {
+      fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+      echo "watcher: successor queue boundary could not be read safely" >&2
+      exit 1
+    }
+  fi
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+fi
 if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ] \
   && [ "${FM_WATCH_FOREGROUND_CHECKPOINT:-0}" != 1 ]; then
   if ! fm_recovery_marker_reopen_announced "$WATCHER_DOWNTIME_MARKER"; then
@@ -2775,18 +2793,35 @@ rerecord_device_shifted_pr_poll() {  # <id>
 }
 
 resurface_after_downtime() {
-  # Handling successors already have a predecessor-delivered wake on the way.
-  # Re-announcing from this cycle is what turned a lost handshake into an
-  # unbounded recovery loop; stay in the poll loop and supervise instead.
+  local successor_queued=
   if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
-    return 0
+    # Keep the failed-handshake suppression for predecessor rows, not for
+    # durable work appended after this successor began supervising. An append
+    # counter alone is insufficient: newer rows may already have been consumed.
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || exit 1
+    if [ -s "$FM_WAKE_QUEUE" ]; then
+      successor_queued=$(awk -F '\t' -v cutoff="$WATCHER_SUCCESSOR_QUEUE_SEQ" '
+        NF >= 5 && $2 ~ /^[0-9]+$/ && $2 > cutoff { print 1; exit }
+      ' "$FM_WAKE_QUEUE") || {
+        fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+        echo "watcher: successor queue could not be read safely" >&2
+        exit 1
+      }
+    fi
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+    [ "$successor_queued" = 1 ] || return 0
   fi
   if [ "$WATCHER_RECOVERY_PENDING" -ne 1 ]; then
     if ! fm_recovery_marker_arm_check "$WATCHER_DOWNTIME_MARKER"; then
       echo "watcher: recovery state could not be consumed safely" >&2
       exit 1
     fi
-    [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
+    # A late predecessor confirmation can put the same generation into
+    # handling after the fresh append. That is not proof its new row surfaced.
+    [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || [ "$successor_queued" = 1 ] || return 0
+  fi
+  if [ "$successor_queued" = 1 ]; then
+    WATCHER_RECOVERY_PENDING=1
   fi
   wake "check: rearm-resurface"
 }
