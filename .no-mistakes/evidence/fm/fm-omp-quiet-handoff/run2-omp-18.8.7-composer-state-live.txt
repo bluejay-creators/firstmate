@@ -1,0 +1,4 @@
+omp omp/18.8.7, live pane %0 (180x45) read through fm_tmux_composer_state
+idle (learn-once hint showing): target-commit=empty base-commit(fb75c1f)=unknown
+typed 'hello captain': target-commit=pending base-commit(fb75c1f)=unknown
+after erasing: target-commit=empty base-commit(fb75c1f)=unknown

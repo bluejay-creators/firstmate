@@ -1,0 +1,4 @@
+idle(hint)=empty
+typed=pending
+after-erase=empty
+base-commit(fb75c1f) classifier on the same live idle pane=unknown

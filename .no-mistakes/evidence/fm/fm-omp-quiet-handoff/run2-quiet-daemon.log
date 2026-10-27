@@ -1,0 +1,12 @@
+[2026-10-10T09:58:54-0700] daemon starting (pid 83419); target=%0; target_source=FM_SUPERVISOR_TARGET; backend=tmux; backend_source=FM_SUPERVISOR_BACKEND; afk=on; inject_skip='heartbeat'; stale_escalate=240s; batch=90s
+[2026-10-10T09:58:55-0700] watcher non-wake stdout, idling: watcher: already running pid 72253
+[2026-10-10T09:59:11-0700] watcher non-wake stdout, idling: watcher: already running pid 72253
+[2026-10-10T09:59:27-0700] wake: check: rearm-resurface
+[2026-10-10T09:59:29-0700] self-handle: signal: LAB/project/state/demo.status -> routine signal: demo.status: working [at=1791651556]: in flight on demo
+[2026-10-10T10:00:32-0700] wake: signal: LAB/project/state/demo.status
+[2026-10-10T10:00:33-0700] self-handle: signal: LAB/project/state/demo.status -> signal already escalated (catch-all scan): demo.status: failed [at=1791651586]: pipeline broke on demo
+[2026-10-10T10:08:23-0700] wake: heartbeat
+[2026-10-10T10:08:24-0700] wake force-self (FM_INJECT_SKIP): heartbeat
+[2026-10-10T10:11:31-0700] wake: signal: LAB/project/state/demo.status
+[2026-10-10T10:11:32-0700] escalate: signal: LAB/project/state/demo.status -> demo.status: failed [at=1791652251]: pipeline broke on demo (appended)
+[2026-10-10T10:13:39-0700] daemon shutting down

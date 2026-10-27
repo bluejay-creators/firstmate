@@ -1,0 +1,34 @@
+note: the first 'failed' write replaced the status log in place, so the daemon's recorded offset sat past it and it was classified 'already escalated'; the product appends to status logs, so this run appends.
+pane hash before failure: 886d8d9172fa
+appended failed line to state/demo.status at 17:10:51Z
+daemon escalation logged after 17000ms at 17:11:33Z
+pane changed after 38500ms at 17:13:07Z
+---- daemon log tail:
+[2026-10-10T10:08:24-0700] wake force-self (FM_INJECT_SKIP): heartbeat
+[2026-10-10T10:11:31-0700] wake: signal: /var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T//fm-lab.G5Q0Nc/project/state/demo.status
+[2026-10-10T10:11:32-0700] escalate: signal: /var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T//fm-lab.G5Q0Nc/project/state/demo.status -> demo.status: failed [at=1791652251]: pipeline broke on demo (appended)
+---- omp pane (bottom):
+                                                       cursor instead of quitting your draft — see /hotkeys for your exit key
+ Failed: free-search [config: ~/.omp/agent/mcp.json]: Unable to connect. Is the computer able to access the url?; google_workspace [config: ~/.omp/agent/mcp.json]: HTTP 401:
+ [WWW-Authenticate: Bearer [redacted] openid", resource_metadata="htt…; google_workspace_personal [config: ~/.omp/agent/mcp.json]: Unable to connect. Is the computer able to
+ access the url?. Still connecting: local-llm, manifestgraph, slack…
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 18.8.8 is available. Run: omp update
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ watcher: started omp extension arm child 1; future ordinary re-arms are automatic; call fm_watch_arm_omp again only after a later notification says the cycle is missing, failed,
+ or unhealthy
+ : Firstmate operational input waiting: read
+ '/private/var/folders/_8/fh05lms95m5fzkkp77gf0cd40000gn/T/fm-lab.G5Q0Nc/project/state/operational-inbox/1791652387-9bb04a95a883314e.msg' and handle its contents as Firstmate
+ operational input.
+  󱊷 Reading away supervision rules                                                                                                       󰚇 INPUT: Handle Firstmate operational input
+ ⠴ 5s  󰪟 GPT-6-Astra  ⇄ collab:1   fm-lab.G5Q0Nc/project   detached  󰙺 0.28 ────────9%─────────────────────────────────────────────────────────󰕝─────────󰁨────────────272K─
+╰─
+---- state/.afk still present: quiet
+: omp update
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ watcher: started omp extension arm child 1; future ordinary re-arms are automatic; call fm_watch_arm_omp again only after a later notification says the cycle is missing, failed,
+ or unhealthy
+ 󰵗  󰪟 GPT-6-Astra  ⇄ collab:1   fm-lab.G5Q0Nc/project   detached  󰙺 ─────────9%──────────────────────────────────────────────────────────────󰕝─────────󰁨──────────────272K─
+╰─                                                                                                                                                     󰘶 󰌒 to change thinking effort
+---- state/.afk still present: quiet

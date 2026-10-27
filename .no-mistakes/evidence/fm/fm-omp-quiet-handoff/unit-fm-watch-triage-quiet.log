@@ -1,0 +1,3 @@
+ok - quiet mode leaves the watcher one-shot and hands the wake to the daemon
+ok - quiet entry hands a queued wake to the daemon through the next one-shot's resurface, not a later wake
+exit=0
