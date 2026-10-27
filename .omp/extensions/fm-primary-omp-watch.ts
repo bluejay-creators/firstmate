@@ -18,9 +18,9 @@
 //     successor arms; unlike Pi, it is not retained until a distinct active
 //     successor generation commits its own arm, so omp keeps the plain
 //     teardown-and-rearm replacement shape.
-//   - The Pi supervision branch is out of scope for omp: every actionable wake
-//     is delivered to main, so no branch offer is made and no calm presentation
-//     hooks exist.
+//   - The Pi supervision branch is out of scope for omp: wakes this extension
+//     handles without the supervision host go to main, so no branch offer is
+//     made and no calm presentation hooks exist.
 //   - While state/.afk exists (quiet or away mode) the daemon owns supervision
 //     and this extension stands down instead of arming, then re-arms itself
 //     once the flag is gone; daemonOwnerActive and rearmAfterDaemonStandDown

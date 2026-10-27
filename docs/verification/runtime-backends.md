@@ -3213,7 +3213,7 @@ Its native App Server peer and watcher-close process are deterministic fixtures;
 ## Oh My Pi (omp)
 
 omp runs crewmate, scout, secondmate, and primary work; [`supervision.md`](supervision.md#omp-oh-my-pi-native-delivery-2026-09-05) owns the primary evidence.
-The evidence below was produced on 2026-09-05 against omp 18.1.11 (`~/.local/bin/omp`, a Bun-compiled single binary) on macOS 26 arm64 through the Herdr backend with the `openai-codex/gpt-6-astra` model, building on the 2026-09-02 adapter investigation against 18.1.2.
+Except where a later date or version is stated, the evidence below was produced on 2026-09-05 against omp 18.1.11 (`~/.local/bin/omp`, a Bun-compiled single binary) on macOS 26 arm64 through the Herdr backend with the `openai-codex/gpt-6-astra` model, building on the 2026-09-02 adapter investigation against 18.1.2.
 
 ### Process identity and markers
 
@@ -3237,7 +3237,7 @@ After the rule, the same live Herdr capture read `empty`, a steer's doorbell lan
 ### 2026-10-09 omp 18.8.7 corner prompt through tmux
 
 omp 18.8.7 redraws the composer: the status row now sits directly above the prompt as powerline segments with the context cells embedded in a `─` rule, and the prompt row is a dark-grey `╰─` corner (omp's `boxRound.bottomLeft` and `boxRound.horizontal` symbols) followed by one space and the typed text, with wrapped input continuing on three-space-indented rows.
-A fresh session right-aligns a learn-once hint on the prompt row (`󰘶 󰌒 to change thinking effort`, an accent key cell then a dim italic label) until the conversation starts.
+The captured fresh session right-aligned a learn-once hint on the prompt row (`󰘶 󰌒 to change thinking effort`, an accent key cell then a dim italic label).
 
 Captured on 2026-10-09 (macOS arm64, tmux 3.6a, private socket, 180x45, the `nerd` symbol preset) with `tmux capture-pane -p -e`:
 
@@ -3247,15 +3247,11 @@ Captured on 2026-10-09 (macOS arm64, tmux 3.6a, private socket, 180x45, the `ner
 ```
 
 Before this shape was taught, the real `fm_tmux_composer_state` read that idle pane `unknown`: the corner is neither an agent glyph nor a complete border, and the cursor sits on an edge row.
-The quiet-mode daemon on an omp primary therefore deferred its failure escalation with `supervisor composer not confirmed-empty (state=unknown)` 146 times and raised its 301s wedge alarm, and the failure reached the captain only in the `bin/fm-afk-return.sh` brief.
 After it, the same live pane read `empty` idle with the hint showing, `pending` with `hello captain` typed, and `pending` with the cursor parked on a wrapped continuation row.
 
-The corner is deliberately not proof on its own: omp closes transcript frames (`╭─ title`, `│ …`, `╰─`) with the same lone dim corner, so the classifier anchors the corner only on the row directly beneath omp's status row.
-The status-row rule recognises the 18.8 powerline form by its rule-embedded context cell (`─N%─` on a row closing with the rule); omp's symbol tables keep the `─` rule and the `π` identity cell under the `unicode` preset, while the `ascii` preset (`+-` corner, `-` rules) is unverified and still reads `unknown`.
-`tests/fm-composer-lib.test.sh` pins the captured rows (idle with the hint, idle after a turn, typed, wrapped, a frame footer, and the plain-capture degradation) in both locales, including byte-exact extraction before and after a paste whether the hint remains visible or disappears.
-Shared row-content extraction removes the captured hint's bright key remnant only when its label disappeared during ghost stripping and the remaining user-text prefix matches the plain row; bright hint-like user text, uncaptured key cells, and plain captures remain untouched.
-The shared bare-row content boundary preserves the structurally identified prompt and its styling separately while stripping ghost content, so bright user glyphs remain payload in single-row classification, wrapped classification, and byte-exact extraction, with or without the hint. The omp corner is excluded from globally accepted agent glyphs and enabled only in status-anchored scanning and selected bare-composer consumers.
-Status-anchored `╰─ ` input is resolved before border transitions, so a payload ending in `╯` remains input; genuine rounded borders and unanchored transcript corners retain their refusal behavior.
+`bin/fm-composer-lib.sh` owns corner anchoring, captured-hint recognition, and prompt/payload separation; its comments record why transcript corners, bright user glyphs, and uncaptured hints cannot prove emptiness.
+The `ascii` preset (`+-` corner, `-` rules) remains unverified and reads `unknown`.
+`test_matrix_omp_corner_prompt_row` in `tests/fm-composer-lib.test.sh` pins the captured idle, typed, wrapped, and plain-capture shapes in both locales, byte-exact extraction with and without the hint, bright hint-like payload, box-ending drafts, and genuine-frame refusal.
 
 On 2026-10-27, `bash tests/fm-composer-lib.test.sh` passed, including the retained fully dim Cursor cases.
 A bounded no-pane smoke through `fm_composer_classify_screen` and `fm_composer_extract_selected_content` observed `idle=empty before=<> after=<hello captain> exact-paste=pass` using the captured hint bytes and styling; no live session was restarted.

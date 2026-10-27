@@ -689,9 +689,7 @@ tests/fm-turnend-guard.test.sh
 
 ### Quiet-mode ownership on omp
 
-While `state/.afk` exists quiet mode must have exactly one supervisor: `bin/fm-supervise-daemon.sh` running the watcher one-shot.
-The failure this guards is the omp watch extension (or the supervision host in its place) restarting a long-running watcher beside the daemon, which double-woke main per wake and broke classification in the daemon log.
-The fix lives in `.omp/extensions/fm-primary-omp-watch.ts`: while `state/.afk` exists every arm attempt stands down instead of launching a child, a watcher armed before the flag appeared exits one-shot at its next wake and its queued record is left to the daemon rather than delivered to main as a continuity failure, and the extension re-arms itself at the next session event once the flag is gone.
+Rule 12 of the [omp supervision protocol](../supervision-protocols/omp.md) owns daemon handoff and automatic return to extension-owned supervision.
 The daemon keeps its pre-existing handoff: its one-shot child reports `watcher: already running` while the pre-quiet watcher still holds `state/.watch.lock`, and the daemon idles until that watcher exits.
 
 | Case | Observed |
@@ -699,12 +697,9 @@ The daemon keeps its pre-existing handoff: its one-shot child reports `watcher: 
 | Quiet one-shot hand-off through the watcher | `tests/fm-watch-triage.test.sh`: `test_quiet_mode_watcher_hands_status_off_to_quiet_daemon` - the watcher exits after enqueueing one `signal:` wake for the daemon |
 | Queued hand-off reaches the daemon at its next one-shot | `tests/fm-watch-triage.test.sh`: `test_quiet_entry_handoff_resurfaces_the_queued_wake_for_the_daemon` - a watcher armed before `state/.afk` exits one-shot with its queued `signal:`, the fresh one-shot started next exits at once with `check: rearm-resurface` off the `pending:downtime` recovery marker, and the drain run on that resurface presents the queued row |
 | Extension stand-down, silent hand-off, and re-arm | `tests/fm-omp-harness.test.sh`: `test_watch_extension_stands_down_for_the_daemon_and_rearms` - under `state/.afk` the tool launches no arm and reports the daemon owner; a child whose watcher exits one-shot after the flag appears delivers no follow-up and starts no successor; once the flag is removed the next session event re-arms without a tool call |
-| Quiet entry during successor restoration | `tests/fm-omp-harness.test.sh`: `test_watch_extension_hands_off_during_successor_restoration` - quiet entry while an arm or host successor awaits readiness, or while a failed-confirmation successor awaits retirement, sends no follow-up and leaves no replacement replay; attended supervision resumes after quiet exit |
+| Quiet entry during successor restoration | `tests/fm-omp-harness.test.sh`: `test_watch_extension_hands_off_during_successor_restoration` - arm and host cases cover successor readiness, handling confirmation, and failed-confirmation retirement; each retires the successor, lets the daemon resurface and consume the original queued check, sends no follow-up or replacement replay, and resumes attended supervision after quiet exit |
 
-The refresh commands for these guarantees are the two tests above plus `tests/fm-daemon.test.sh`, `tests/fm-supervision-host.test.sh`, and `tests/fm-watch-arm.test.sh`.
-
-On 2026-10-27, `/usr/bin/python3 /tmp/fm-detached-test-7007.py tests/fm-omp-harness.test.sh` passed with `DETACHED_CHANGED_TEST_EXIT=0`, sequentially after the composer regression file.
-The restoration cases use isolated child processes and file barriers, not worker panes or live Firstmate state.
+The focused regressions are the two `test_quiet_*` cases in `tests/fm-watch-triage.test.sh` named above and `tests/fm-omp-harness.test.sh`; the restoration cases use isolated child processes and file barriers, not worker panes or live Firstmate state.
 
 ## Supervision host
 

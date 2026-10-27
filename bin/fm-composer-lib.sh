@@ -1372,9 +1372,11 @@ _fm_composer_screen_row() {  # <n> <screen>
   printf '%s\n' "$2" | sed -n "$(($1 + 1))p"
 }
 
-# _fm_composer_row_content: extract the classification content of one raw row:
-# ghost-strip when styled, plain otherwise, normalize-trim, and strip one
-# matching pair of side border glyphs.
+# _fm_composer_row_content: extract the classification content of one raw row.
+# On a proven bare prompt row, preserve actual prompt identity and styling
+# across ghost stripping: a bright payload glyph must not become the prompt
+# after a dim real prompt disappears. Then normalize-trim and strip one matching
+# pair of side border glyphs.
 _fm_composer_row_content() {  # <raw-row> <styled> [bare-prompt] -> content on stdout
   local raw=$1 styled=$2 stripped plain prompt='' prompt_raw=''
   if [ "${3:-0}" = 1 ]; then
