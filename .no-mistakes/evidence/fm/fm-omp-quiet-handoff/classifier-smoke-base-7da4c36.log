@@ -1,0 +1,19 @@
+FAIL  omp 18.8 idle, captured nerd-pair effort hint (tmux)       want=empty    got=unknown
+FAIL  omp 18.8 idle, captured nerd-pair effort hint (herdr)      want=empty    got=unknown
+FAIL  omp 18.8 idle, bare corner under status row (tmux)         want=empty    got=unknown
+FAIL  omp 18.8 typed draft under status row (tmux)               want=pending  got=unknown
+PASS  ADV: uncaptured 'ctrl+t' key cell + effort label           not=empty    got=unknown
+PASS  ADV: single nerd token + effort label                      not=empty    got=unknown
+PASS  ADV: uncaptured running-agents hint                        not=empty    got=unknown
+PASS  ADV: lone dim frame footer under cursor                    not=empty    got=unknown
+PASS  ADV: lone frame footer, cursorless bottom row              not=empty    got=unknown
+PASS  ADV: corner beneath plain prose, not status row            not=empty    got=unknown
+FAIL  frame footer above live idle composer still idle           want=empty    got=unknown
+PASS  cursor fully dim placeholder (herdr)                       want=empty    got=empty
+PASS  cursor typed draft (herdr)                                 want=pending  got=pending
+PASS  cortex idle 'Type your message...' (cortex=1)              want=empty    got=empty
+PASS  cortex busy 'Type to queue message...' (cortex=1)          want=empty    got=empty
+PASS  cortex typed draft (cortex=1)                              want=pending  got=pending
+PASS  ADV: cortex titled box without cortex identity             not=empty    got=unknown
+
+SMOKE_FAILURES=5

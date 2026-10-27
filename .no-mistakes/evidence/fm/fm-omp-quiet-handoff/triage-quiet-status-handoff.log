@@ -1,0 +1,1 @@
+ok - quiet mode leaves the watcher one-shot and hands the wake to the daemon
