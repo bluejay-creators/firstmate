@@ -1,0 +1,14 @@
+watcher_exit=0
+watcher_output=check: rearm-resurface
+daemon_exit=0
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 registered custom check(s), but no live watcher process holds this home lock (last beat: 1s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  Quiet mode owns watcher supervision; load /quiet and ensure the daemon is running instead of starting normal supervision directly.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+
+queue_after=
+escalations=check: /Users/jubin/Git/bluejay-creators/.nm7007/worktrees/8b8b897c6977/01M5YYVGAPA7RVXGCG54HQCZKN/.validation-7007/home/state/live-quiet.check.sh: live quiet original check

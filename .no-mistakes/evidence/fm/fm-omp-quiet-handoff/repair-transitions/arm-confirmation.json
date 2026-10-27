@@ -1,0 +1,14 @@
+{
+  "case": "arm-confirmation",
+  "result": "passed",
+  "native_primary": true,
+  "controlled_arm_or_host": true,
+  "real_watcher_and_daemon_consumer": true,
+  "queued_check_retained_until_retirement": true,
+  "recovery_episode": "handling",
+  "owned_watcher_retired": true,
+  "daemon_consumed_without_second_wake": true,
+  "main_model_turns": 0,
+  "replacement_replay_record": false,
+  "host_launches": 0
+}

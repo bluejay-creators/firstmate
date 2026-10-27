@@ -1,0 +1,170 @@
+{
+  "verdict": "passed",
+  "transitions": [
+    {
+      "case": "arm-readiness",
+      "result": "passed",
+      "native_primary": true,
+      "controlled_arm_or_host": true,
+      "real_watcher_and_daemon_consumer": true,
+      "queued_check_retained_until_retirement": true,
+      "recovery_episode": "downtime",
+      "owned_watcher_retired": true,
+      "daemon_consumed_without_second_wake": true,
+      "main_model_turns": 0,
+      "replacement_replay_record": false,
+      "host_launches": 0
+    },
+    {
+      "case": "host-readiness",
+      "result": "passed",
+      "native_primary": true,
+      "controlled_arm_or_host": true,
+      "real_watcher_and_daemon_consumer": true,
+      "queued_check_retained_until_retirement": true,
+      "recovery_episode": "downtime",
+      "owned_watcher_retired": true,
+      "daemon_consumed_without_second_wake": true,
+      "main_model_turns": 0,
+      "replacement_replay_record": false,
+      "host_launches": 2
+    },
+    {
+      "case": "arm-confirmation",
+      "result": "passed",
+      "native_primary": true,
+      "controlled_arm_or_host": true,
+      "real_watcher_and_daemon_consumer": true,
+      "queued_check_retained_until_retirement": true,
+      "recovery_episode": "handling",
+      "owned_watcher_retired": true,
+      "daemon_consumed_without_second_wake": true,
+      "main_model_turns": 0,
+      "replacement_replay_record": false,
+      "host_launches": 0
+    },
+    {
+      "case": "host-confirmation",
+      "result": "passed",
+      "native_primary": true,
+      "controlled_arm_or_host": true,
+      "real_watcher_and_daemon_consumer": true,
+      "queued_check_retained_until_retirement": true,
+      "recovery_episode": "handling",
+      "owned_watcher_retired": true,
+      "daemon_consumed_without_second_wake": true,
+      "main_model_turns": 0,
+      "replacement_replay_record": false,
+      "host_launches": 2
+    }
+  ],
+  "native_product_exit": 130,
+  "unexpected_provider_requests": 0,
+  "memory_before": {
+    "Pages free": 135071,
+    "Pages occupied by compressor": 793061,
+    "Swapouts": 0
+  },
+  "memory_after": {
+    "Pages free": 88566,
+    "Pages occupied by compressor": 786127,
+    "Swapouts": 0
+  },
+  "elapsed_seconds": 15.54,
+  "scope": "four remaining restoration transitions only; one isolated native omp runtime; no worker pane or operator home",
+  "limits": [
+    "Restoration arm/host timing controlled by local barriers; actual extension callbacks, owned retirement, watcher lock, wake queue and daemon consumer executed.",
+    "Prior recorded composer and quiet/re-arm evidence reused, not rerun.",
+    "Only controlled local restoration timing was exercised, not external fleet/provider actions.",
+    "Available native runtime is omp 18.10.4; no claim that a new 18.8 runtime was launched, and the captured 18.8 contract was not altered.",
+    "New report exports filtered results and hashes only; existing earlier terminal capture artifacts were preserved rather than republished."
+  ],
+  "tested_head_sha": "864c846d292c15ea677ea452b8ffbfac775ce2cb",
+  "assigned_phase_verdict": "passed",
+  "source_changes": false,
+  "root_cause": "Previous test turn ended before four remaining native-runtime transitions were exercised; no failing product behavior found in the assigned checks.",
+  "verification": {
+    "command": "/usr/bin/python3 .validation-7007/finish-transitions.py",
+    "exit_code": 0,
+    "sequential": true,
+    "four_transitions_passed": true,
+    "attended_rearm_without_replay": true,
+    "native_runtime_version": "18.10.4",
+    "external_provider_requests": 0
+  },
+  "reused_prior_evidence": {
+    "manifest": "reused-evidence-manifest.json",
+    "not_rerun": true,
+    "selected_composer_and_detached_omp_regressions": "previously passed",
+    "both_changed_quiet_triage_selectors": "previously passed separately",
+    "captured_frame_smoke": "previously passed in UTF-8 and C locales",
+    "actual_paste_captures": 18,
+    "quiet_daemon_original_check_consumed": true,
+    "attended_rearm_recorded": true
+  },
+  "scenario_results": [
+    {
+      "name": "Idle omp captured hint and exact paste",
+      "evidence": "Retained actual omp captures plus previous composer regression and exact extraction smoke; not repeated.",
+      "result": "reused prior evidence"
+    },
+    {
+      "name": "Bright glyph and box-ending drafts",
+      "evidence": "Retained actual omp draft captures and previous pending/extracted-payload regressions; Cursor behavior remains fixture-backed.",
+      "result": "reused prior evidence"
+    },
+    {
+      "name": "Frame refusal, uncaptured hints, Cortex/Cursor idle anchors",
+      "evidence": "Previous composer regressions and no-pane smoke; no native Cortex/Cursor runtime claimed.",
+      "result": "reused prior evidence"
+    },
+    {
+      "name": "Quiet arm suppression and attended rearm",
+      "evidence": "Prior isolated product quiet consumption and two arm records; current native runtime starts quiet, exercises four transitions, then re-arms attended without replay.",
+      "result": "passed with retained and current evidence"
+    },
+    {
+      "name": "Quiet entry during arm/host readiness and handling confirmation",
+      "evidence": "Four per-transition JSON records from the current single isolated native runtime; original queue retained under lock, owned successor retired, real daemon consumer drained without another wake.",
+      "result": "passed"
+    },
+    {
+      "name": "Queued watcher check reaches next daemon cycle without a second wake",
+      "evidence": "Prior actual isolated quiet-consumption record and both changed triage selectors, plus all four current daemon-consumption transitions.",
+      "result": "passed with retained and current evidence"
+    }
+  ],
+  "teardown": {
+    "product_exit": 130,
+    "recorded_processes_reconciled": 18,
+    "recorded_processes_remaining": 0,
+    "watcher_lock_remaining": false,
+    "exact_owned_fixture_cleanup": true,
+    "note": "RPC SIGINT exited the disposable product without a session_shutdown observer event; one recorded after-transitions fixture was identified by exact PID and command, then terminated. No shared process scan or shared child retirement."
+  },
+  "recoverable_scaffolding": {
+    "archive": "controlled-scaffolding.tar.gz",
+    "sha256": "37cc1c902ec71aefd8c0a30c5067a8ee9c3b1809e4666c0b43c59d288d3b9b17",
+    "members": [
+      "observer.ts",
+      "finish-transitions.py",
+      "fixture/bin/fm-watch-arm.sh",
+      "fixture/bin/fm-supervision-host.sh"
+    ],
+    "excluded": "raw configs, auth stores, caches, databases, session histories, terminal dumps and downloaded dependencies"
+  },
+  "cleanup": {
+    "scaffolding_path": ".validation-7007",
+    "removed": true,
+    "prior_evidence_trees": "unchanged",
+    "raw_runtime_data_removed": true
+  },
+  "phase_boundaries": {
+    "full_suite_run": false,
+    "lint_run": false,
+    "pipeline_controls_used": false,
+    "publication_performed": false,
+    "operator_home_or_live_Firstmate_modified": false,
+    "worker_panes_created": false
+  }
+}

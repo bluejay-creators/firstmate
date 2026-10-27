@@ -1,0 +1,39 @@
+{
+  "head": "864c846d292c15ea677ea452b8ffbfac775ce2cb",
+  "result": "recorded assigned-phase completion reconciled",
+  "four_transition_records_consistent": true,
+  "preserved_evidence_hashes_verified": 25,
+  "recoverable_scaffolding_archive_verified": true,
+  "archive_members": [
+    "observer.ts",
+    "finish-transitions.py",
+    "fixture/bin/fm-watch-arm.sh",
+    "fixture/bin/fm-supervision-host.sh"
+  ],
+  "scaffolding_and_recorded_home_absent": true,
+  "runtime_relaunched_during_reconciliation": false,
+  "checks_repeated_during_reconciliation": false,
+  "limits": [
+    "Restoration arm/host timing controlled by local barriers; actual extension callbacks, owned retirement, watcher lock, wake queue and daemon consumer executed.",
+    "Prior recorded composer and quiet/re-arm evidence reused, not rerun.",
+    "Only controlled local restoration timing was exercised, not external fleet/provider actions.",
+    "Available native runtime is omp 18.10.4; no claim that a new 18.8 runtime was launched, and the captured 18.8 contract was not altered.",
+    "New report exports filtered results and hashes only; existing earlier terminal capture artifacts were preserved rather than republished."
+  ],
+  "provenance": "Existing completed native-runtime proof from this validation run reused as instructed; this reconciliation does not claim another live execution.",
+  "runtime_proof": {
+    "invocation": "/usr/bin/python3 .validation-7007/finish-transitions.py",
+    "runtime_version": "18.10.4",
+    "transition_cases": [
+      "arm-readiness",
+      "host-readiness",
+      "arm-confirmation",
+      "host-confirmation"
+    ],
+    "queue_retained_until_owned_retirement": true,
+    "original_check_consumed_without_second_wake": true,
+    "main_model_turns": 0,
+    "unexpected_provider_requests": 0,
+    "completed_handoff_replayed_on_attended_rearm": false
+  }
+}

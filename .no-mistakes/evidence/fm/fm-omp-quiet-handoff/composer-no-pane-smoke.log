@@ -1,0 +1,69 @@
+$ bash .validation-tmp/composer-no-pane-smoke.sh
+
+locale=en_US.UTF-8; captured-frame input, no running harness or pane
+omp-idle-hint: state=empty extracted=<>
+omp-idle-no-hint: state=empty extracted=<>
+omp-draft hint=no: state=pending extracted=<hello captain>
+omp-draft hint=no: state=pending extracted=<→>
+omp-draft hint=no: state=pending extracted=<→ explain this>
+omp-draft hint=no: state=pending extracted=<╰─>
+omp-draft hint=no: state=pending extracted=<Please print ╯>
+omp-draft hint=no: state=pending extracted=<│retain│>
+omp-draft hint=no: state=pending extracted=<shift+tab to change thinking effort>
+omp-draft hint=yes: state=pending extracted=<hello captain>
+omp-draft hint=yes: state=pending extracted=<→>
+omp-draft hint=yes: state=pending extracted=<→ explain this>
+omp-draft hint=yes: state=pending extracted=<╰─>
+omp-draft hint=yes: state=pending extracted=<Please print ╯>
+omp-draft hint=yes: state=pending extracted=<│retain│>
+omp-draft hint=yes: state=pending extracted=<shift+tab to change thinking effort>
+omp-wrapped-user-glyph: state=pending extracted=<→>
+cursor-draft: state=pending extracted=<╰─>
+cursor-tmux-cursorless-reclassification: state=pending payload=<╰─>
+cursor-draft: state=pending extracted=<╰─ explain this>
+cursor-tmux-cursorless-reclassification: state=pending payload=<╰─ explain this>
+cursor-draft: state=pending extracted=<→>
+cursor-tmux-cursorless-reclassification: state=pending payload=<→>
+cursor-fully-dim-idle: state=empty extracted=<>
+cortex-anchored-idle: state=empty placeholder=<Type your message...>
+cortex-bright-draft: state=pending extracted=<Type your message...>
+cortex-anchored-idle: state=empty placeholder=<Type to queue message...>
+cortex-bright-draft: state=pending extracted=<Type to queue message...>
+unproven-frame-refusal: state=unknown
+unproven-frame-refusal: state=unknown
+
+locale=C; captured-frame input, no running harness or pane
+omp-idle-hint: state=empty extracted=<>
+omp-idle-no-hint: state=empty extracted=<>
+omp-draft hint=no: state=pending extracted=<hello captain>
+omp-draft hint=no: state=pending extracted=<→>
+omp-draft hint=no: state=pending extracted=<→ explain this>
+omp-draft hint=no: state=pending extracted=<╰─>
+omp-draft hint=no: state=pending extracted=<Please print ╯>
+omp-draft hint=no: state=pending extracted=<│retain│>
+omp-draft hint=no: state=pending extracted=<shift+tab to change thinking effort>
+omp-draft hint=yes: state=pending extracted=<hello captain>
+omp-draft hint=yes: state=pending extracted=<→>
+omp-draft hint=yes: state=pending extracted=<→ explain this>
+omp-draft hint=yes: state=pending extracted=<╰─>
+omp-draft hint=yes: state=pending extracted=<Please print ╯>
+omp-draft hint=yes: state=pending extracted=<│retain│>
+omp-draft hint=yes: state=pending extracted=<shift+tab to change thinking effort>
+omp-wrapped-user-glyph: state=pending extracted=<→>
+cursor-draft: state=pending extracted=<╰─>
+cursor-tmux-cursorless-reclassification: state=pending payload=<╰─>
+cursor-draft: state=pending extracted=<╰─ explain this>
+cursor-tmux-cursorless-reclassification: state=pending payload=<╰─ explain this>
+cursor-draft: state=pending extracted=<→>
+cursor-tmux-cursorless-reclassification: state=pending payload=<→>
+cursor-fully-dim-idle: state=empty extracted=<>
+cortex-anchored-idle: state=empty placeholder=<Type your message...>
+cortex-bright-draft: state=pending extracted=<Type your message...>
+cortex-anchored-idle: state=empty placeholder=<Type to queue message...>
+cortex-bright-draft: state=pending extracted=<Type to queue message...>
+unproven-frame-refusal: state=unknown
+unproven-frame-refusal: state=unknown
+
+No panes, sessions, credentials, or live Firstmate state accessed.
+
+EXIT=0

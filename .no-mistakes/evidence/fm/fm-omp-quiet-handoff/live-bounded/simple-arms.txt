@@ -1,0 +1,2 @@
+arm=6581 script=fm-watch-arm.sh args=--restart
+arm=9902 script=fm-watch-arm.sh args=--restart

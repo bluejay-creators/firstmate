@@ -1,0 +1,4 @@
+$ bash tests/fm-watch-triage.test.sh
+ok - quiet entry hands a queued wake to the daemon through the next one-shot's resurface, not a later wake
+
+EXIT=0

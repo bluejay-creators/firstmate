@@ -1,0 +1,11 @@
+$ /usr/bin/python3 /tmp/fm-detached-test-7007.py tests/fm-omp-harness.test.sh
+DETACHED_CHANGED_TEST_PID=17011
+ok - fm-harness: omp detects by its anchored name; the marker is a precedence override that needs real omp ancestry
+ok - session lock and tmux liveness: omp is anchored, decoys stay out
+ok - fm-spawn: the omp launch line clears markers, pins posture, and wires the state-resident extension
+ok - fm-spawn: omp model validation is scoped to providers the listing can prove
+not ok - omp secondmate spawn should succeed: error: secondmate home cannot be inside the firstmate repo: /Users/jubin/Git/bluejay-creators/.nm7007/worktrees/8b8b897c6977/01M5YYVGAPA7RVXGCG54HQCZKN/.validation-tmp/fm-omp-harness.SbcYM8/secondmate/sm: expected exit 0, got 1
+
+DETACHED_CHANGED_TEST_EXIT=1
+
+EXIT=1
