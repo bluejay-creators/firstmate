@@ -1,0 +1,26 @@
+.
+..
+.inactive-outcome-reconcile
+.last-check
+.last-heartbeat
+.last-watcher-beat
+.lock
+.omp-turnend-extension-loaded
+.omp-watch-extension-loaded
+.secondmate-liveness-tick
+.watch-arm-output.8sH4I7
+.watch.lock
+.watch.lock.owner.L78BtI
+home-summary.json
+terminal-outcomes
+25177 93304 bash /Users/jubin/.no-mistakes/worktrees/086b234068d7/01M5A76R5TNNBVWB0J86WDRWZD/bin/fm-watch-arm.sh --restart
+26098 25177 bash /Users/jubin/.no-mistakes/worktrees/086b234068d7/01M5A76R5TNNBVWB0J86WDRWZD/bin/fm-watch.sh
+ watcher: unchanged - the daemon owns supervision while state/.afk exists (quiet or away mode); no omp extension arm is running; call fm_watch_arm_omp again only after a later
+ notification says the cycle is missing, failed, or unhealthy
+ Reply with only the word OK and call no tools.
+ OK
+ π > ◒ Opus 5.5 > 🌳 086b234068d7/01M5A76R5TNNBVWB0J86WDRWZD > ⑂ detached > S0.01 ▶────4%───────────────────────────────────────────────────────────────────────╎──┃─────────────1M─
+╰─
+ failed, or unhealthy
+ π > ◒ Opus 5.5 > 🌳 086b234068d7/01M5A76R5TNNBVWB0J86WDRWZD > ⑂ detached > S0.01 ▶────4%───────────────────────────────────────────────────────────────────────╎──┃─────────────1M─
+╰─
