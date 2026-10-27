@@ -513,13 +513,9 @@ fm_busy_lines_match() {  # [harness]
 # space, then the typed text, with wrapped input continuing on three-space
 # indented rows and the status row drawn directly ABOVE the prompt. Verified
 # live on omp 18.8.7 through tmux (docs/verification/runtime-backends.md).
-# The corner is an AGENT glyph so every strip and emptiness test treats it
-# like the others, but the row scan anchors it ONLY directly beneath omp's
-# status row (_fm_composer_glyph_anchors_row): omp closes a transcript frame
-# with the same lone dim `╰─`, and a frame footer must never read `empty`.
 FM_COMPOSER_OMP_PROMPT_GLYPH='╰─'
 FM_COMPOSER_OMP_EFFORT_KEYS='󰘶 󰌒'
-FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' '›' '⟩' '→' '❭' "$FM_COMPOSER_OMP_PROMPT_GLYPH")
+FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' '›' '⟩' '→' '❭')
 FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 
 # The ONE fleet-wide idle-placeholder set: composer text a harness renders in
@@ -911,16 +907,17 @@ _fm_composer_titled_rule_row() {  # <trimmed-row> <plain-rule-spaces>
   [ "$spaces" = "$expected" ]
 }
 
-# _fm_composer_glyph_anchors_row: 0 when agent glyph <glyph> may anchor a bare
-# composer (or prove an envelope) on a row whose trimmed row above is <above>.
-# Every agent glyph is its own proof except omp's `╰─` corner, which omp also
-# uses to close transcript frames: the corner anchors only directly beneath
-# omp's status row (_fm_composer_row_is_omp_status), the two-row shape omp
-# 18.8 draws. A frame footer, a tree branch, or a corner on the top row of a
-# capture never becomes a composer candidate.
-_fm_composer_glyph_anchors_row() {  # <glyph> <above-trimmed>
-  [ "$1" = "$FM_COMPOSER_OMP_PROMPT_GLYPH" ] || return 0
-  _fm_composer_row_is_omp_status "$2"
+_fm_composer_anchored_agent_glyph_var() {
+  local FM_COMPOSER_AGENT_PROMPT_GLYPHS=$FM_COMPOSER_AGENT_PROMPT_GLYPHS
+  case "$2" in
+    "$FM_COMPOSER_OMP_PROMPT_GLYPH"|"$FM_COMPOSER_OMP_PROMPT_GLYPH "*)
+      if _fm_composer_row_is_omp_status "$3"; then
+        FM_COMPOSER_AGENT_PROMPT_GLYPHS="$FM_COMPOSER_AGENT_PROMPT_GLYPHS
+$FM_COMPOSER_OMP_PROMPT_GLYPH"
+      fi
+      ;;
+  esac
+  fm_composer_leading_agent_glyph_var "$1" "$2"
 }
 
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
@@ -1009,8 +1006,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] 
         '┃'*) probe=${probe#┃} ;;
       esac
       fm_composer_normalize_trim_var probe
-      if fm_composer_leading_agent_glyph_var glyph "$probe" \
-         && _fm_composer_glyph_anchors_row "$glyph" "$prev_trimmed"; then
+      if _fm_composer_anchored_agent_glyph_var glyph "$probe" "$prev_trimmed"; then
         row_glyph=$glyph
         row_glyph_row=$row
       fi
@@ -1074,8 +1070,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] 
        && ! _fm_composer_row_is_pi_status "$trimmed" \
        && ! _fm_composer_row_is_cortex_status "$trimmed"; then
       FM_COMPOSER_SCAN_SHELL_ROW=$row
-    elif [ -z "$kind" ] && fm_composer_leading_agent_glyph_var glyph "$trimmed" \
-         && _fm_composer_glyph_anchors_row "$glyph" "$prev_trimmed"; then
+    elif [ -z "$kind" ] && _fm_composer_anchored_agent_glyph_var glyph "$trimmed" "$prev_trimmed"; then
       FM_COMPOSER_SCAN_BARE_ROW=$row
     fi
     # Cursor safety: a cursor sitting on a structural edge row is never an
@@ -1381,16 +1376,14 @@ _fm_composer_screen_row() {  # <n> <screen>
 # ghost-strip when styled, plain otherwise, normalize-trim, and strip one
 # matching pair of side border glyphs.
 _fm_composer_row_content() {  # <raw-row> <styled> [bare-prompt] -> content on stdout
-  local raw=$1 styled=$2 stripped plain prompt=''
+  local raw=$1 styled=$2 stripped plain prompt='' prompt_raw=''
   if [ "${3:-0}" = 1 ]; then
     plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
     fm_composer_normalize_trim_var plain
-    case "$plain" in
-      "$FM_COMPOSER_OMP_PROMPT_GLYPH"|"$FM_COMPOSER_OMP_PROMPT_GLYPH "*)
-        prompt=$FM_COMPOSER_OMP_PROMPT_GLYPH
-        raw=${raw/"$prompt"/}
-        ;;
-    esac
+    if fm_composer_leading_agent_glyph_var prompt "$plain"; then
+      prompt_raw=${raw%%"$prompt"*}$prompt
+      raw=${raw/"$prompt"/}
+    fi
   fi
   if [ "$styled" = 1 ]; then
     stripped=$(printf '%s\n' "$raw" | fm_composer_strip_ghost)
@@ -1398,7 +1391,7 @@ _fm_composer_row_content() {  # <raw-row> <styled> [bare-prompt] -> content on s
     stripped=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
   fi
   fm_composer_normalize_trim_var stripped
-  if [ "$styled" = 1 ] && [ -n "$prompt" ]; then
+  if [ "$styled" = 1 ] && [ "$prompt" = "$FM_COMPOSER_OMP_PROMPT_GLYPH" ]; then
     case "$stripped" in
       *"$FM_COMPOSER_OMP_EFFORT_KEYS")
         local prefix hint="$FM_COMPOSER_OMP_EFFORT_KEYS to change thinking effort"
@@ -1415,7 +1408,13 @@ _fm_composer_row_content() {  # <raw-row> <styled> [bare-prompt] -> content on s
         ;;
     esac
   fi
-  [ -z "$prompt" ] || stripped="$prompt $stripped"
+  if [ -n "$prompt" ] && [ -z "$stripped" ] && [ "$plain" != "$prompt" ]; then
+    prompt_raw=$(printf '%s\n' "$prompt_raw" | fm_composer_strip_ghost)
+    fm_composer_normalize_trim_var prompt_raw
+  fi
+  if [ -n "$prompt" ] && { [ -n "$stripped" ] || [ "$plain" = "$prompt" ] || [ -n "$prompt_raw" ]; }; then
+    stripped="$prompt $stripped"
+  fi
   case "$stripped" in
     '│'*'│') stripped=${stripped#│}; stripped=${stripped%│} ;;
     '┃'*'┃') stripped=${stripped#┃}; stripped=${stripped%┃} ;;
@@ -1462,6 +1461,8 @@ _fm_composer_classify_rows() {  # <screen> <styled> <ambiguous> <first-row> <las
 # `Use /skills ...`), so it must read `unknown` rather than a false `pending`.
 _fm_composer_classify_bare_row() {  # <screen> <styled> <row>
   local screen=$1 styled=$2 row=$3 raw content plain state
+  local FM_COMPOSER_AGENT_PROMPT_GLYPHS="$FM_COMPOSER_AGENT_PROMPT_GLYPHS
+$FM_COMPOSER_OMP_PROMPT_GLYPH"
   raw=$(_fm_composer_screen_row "$row" "$screen")
   content=$(_fm_composer_row_content "$raw" "$styled" 1)
   plain=$(_fm_composer_row_content "$raw" 0 1)
@@ -1562,6 +1563,8 @@ _fm_composer_wrap_region_ok() {  # <plain-screen> <glyph-row> <cursor-row>
 # glyph row itself).
 _fm_composer_classify_bare_wrap() {  # <screen> <styled> <glyph-row> <cursor-row>
   local screen=$1 styled=$2 g=$3 cy=$4 row raw content glyph='' text_seen=0
+  local FM_COMPOSER_AGENT_PROMPT_GLYPHS="$FM_COMPOSER_AGENT_PROMPT_GLYPHS
+$FM_COMPOSER_OMP_PROMPT_GLYPH"
   row=$g
   while [ "$row" -le "$cy" ]; do
     raw=$(_fm_composer_screen_row "$row" "$screen")
@@ -1843,9 +1846,6 @@ _fm_composer_row_is_composer_furniture() {  # <trimmed-row> <proof-glyph>
   fm_composer_idle_matches "$row" \
     "${FM_COMPOSER_MODE_HINT_RE:-$FM_COMPOSER_MODE_HINT_RE_DEFAULT}" sensitive && return 0
   fm_composer_leading_agent_glyph_var glyph "$row" || return 1
-  # omp's corner proves only omp's own two-row shape (see its declaration);
-  # anywhere else it is a transcript frame footer, not a foreign prompt.
-  [ "$glyph" != "$FM_COMPOSER_OMP_PROMPT_GLYPH" ] || return 1
   [ -n "$proof" ] && [ "$glyph" != "$proof" ]
 }
 
@@ -2052,6 +2052,7 @@ _fm_composer_select_cursorless() {
 fm_composer_extract_selected_content() {  # <caps> <screen>
   local caps=$1 screen=$2 styled=0 kv plain row raw content glyph joined='' footer_re prompt_row=-1
   local leading_blank=1 placeholder_position=0 prompt_is_shell=0 cwd_start bare_prompt
+  local FM_COMPOSER_AGENT_PROMPT_GLYPHS=$FM_COMPOSER_AGENT_PROMPT_GLYPHS
   footer_re=${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}
   while IFS= read -r kv; do
     [ "$kv" = styled=1 ] && styled=1
@@ -2061,6 +2062,10 @@ EOF
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
   _fm_composer_scan_screen "$plain" '' 1
   _fm_composer_select_cursorless "$plain" || return 1
+  if [ "$FM_COMPOSER_SELECTED_KIND" = bare ]; then
+    FM_COMPOSER_AGENT_PROMPT_GLYPHS="$FM_COMPOSER_AGENT_PROMPT_GLYPHS
+$FM_COMPOSER_OMP_PROMPT_GLYPH"
+  fi
   row=$FM_COMPOSER_SELECTED_FIRST
   cwd_start=-1
   if [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ]; then

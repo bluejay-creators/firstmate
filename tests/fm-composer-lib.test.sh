@@ -486,6 +486,39 @@ test_matrix_cursor_fully_dim_placeholder() {
   pass "matrix: cursor's fully dim placeholder reads empty; typed text stays pending"
 }
 
+test_matrix_bare_prompt_payload_identity() {
+  local prompt message screen row out plain
+  for prompt in '→' '❯' '›' '⟩' '❭'; do
+    for message in '╰─' '╰─ explain this' '→' '→ explain this' '❯' '›' '⟩' '❭' '>' '$' '%' '#' '│retain│'; do
+      row="${ESC}[2m${prompt} ${ESC}[0m${ESC}[38;2;224;222;244m${message}${ESC}[0m"
+      screen=$'transcript\n\n'"$row"
+      assert_screen "bright payload after dim $prompt on tmux: $message" pending "$CAPS_TMUX" "$screen" 2
+      assert_screen "bright payload after dim $prompt on herdr: $message" pending "$CAPS_STYLED" "$screen"
+      assert_screen "bright payload after dim $prompt on zellij: $message" pending "$CAPS_STYLED_NOID" "$screen"
+      out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+      [ "$out" = "$message" ] || fail "bare $prompt extraction must preserve '$message', got '$out'"
+      out=$(LC_ALL=C fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+      [ "$out" = "$message" ] || fail "byte-locale bare $prompt extraction must preserve '$message', got '$out'"
+      plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+      assert_screen "plain $prompt payload remains unproven: $message" unknown "$CAPS_PLAIN" "$plain"
+      out=$(fm_composer_extract_selected_content "$CAPS_PLAIN" "$plain")
+      [ "$out" = "$message" ] || fail "plain bare $prompt extraction must preserve '$message', got '$out'"
+      screen="$screen"$'\n'"${ESC}[2m   suggested continuation${ESC}[0m"
+      assert_screen "wrapped bright payload after dim $prompt on tmux: $message" pending "$CAPS_TMUX" "$screen" 3
+      assert_screen "wrapped bright payload after dim $prompt, cursorless: $message" pending "$CAPS_STYLED_NOID" "$screen"
+      out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+      [ "$out" = "$message" ] || fail "wrapped bare $prompt extraction must preserve '$message', got '$out'"
+    done
+  done
+  row="${ESC}[2m→ ${ESC}[0m${ESC}[38;2;224;222;244m╰─${ESC}[0m"
+  screen=$'transcript\n ▄▄▄▄▄▄▄▄\n'"$row"$'\n ▀▀▀▀▀▀▀▀\n  Auto · 64%  Run Everything\n  ~/wt · <branch>\n'
+  assert_screen "Cursor blank cursor stays unproven with a draft" unknown "$CAPS_TMUX" "$screen" 6
+  assert_screen "Cursor tmux cursorless reclassification preserves a draft" pending "$CAPS_TMUX" "$screen" ''
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+  [ "$out" = '╰─' ] || fail "Cursor framed draft extraction must preserve its corner, got '$out'"
+  pass "matrix: bare prompt identity survives ghost stripping without consuming bright payload"
+}
+
 test_matrix_herdr_halfblock_rule_bounds_bare_wrap() {
   # Herdr draws a composer's rules with half-block glyphs (▄ above, ▀ below)
   # rather than the box-drawing family. Without treating those as edges, a bare
@@ -614,13 +647,9 @@ test_matrix_omp_corner_prompt_row() {
     && fail "prose with a rule-wrapped percentage that does not close on the rule must not be omp status"
   _fm_composer_row_is_omp_status 'retry at 8% capacity' \
     && fail "ordinary text with a percentage must not be mistaken for omp status furniture"
-  # The content classifier: the corner alone is the empty composer, the
-  # corner with text is unsubmitted input, and the ghost-stripped-to-nothing
-  # corner row is named by its plain row (the corner is darker than the
-  # ghost-luma ceiling).
-  out=$(classify 0 '╰─'); [ "$out" = empty ] || fail "bare omp corner should read empty, got '$out'"
+  out=$(classify 0 '╰─'); [ "$out" != empty ] || fail "an unproven omp corner must not read empty"
   out=$(classify 0 '╰─ hello'); [ "$out" = pending ] || fail "omp corner with text should read pending, got '$out'"
-  out=$(classify 0 '' '' sensitive '╰─'); [ "$out" = empty ] || fail "a ghost-stripped omp corner must remain empty, got '$out'"
+  out=$(classify 0 '' '' sensitive '╰─'); [ "$out" = unknown ] || fail "a stripped unproven omp corner must remain unknown, got '$out'"
   # The hint remnant is the captured nerd pair, byte for byte. Any other key
   # cell (a guessed single token, a typed word plus a token, the uncaptured
   # running-agents hint) is a draft until it is captured: it must not read
@@ -1632,6 +1661,7 @@ test_matrix_codex_dim_hint_row
 test_matrix_muse_truecolor_glyph_survives_signal_loss
 test_matrix_cursor_reverse_video_placeholder_remnant
 test_matrix_cursor_fully_dim_placeholder
+test_matrix_bare_prompt_payload_identity
 test_matrix_herdr_halfblock_rule_bounds_bare_wrap
 test_matrix_omp_status_row_bounds_bare_composer
 test_matrix_omp_corner_prompt_row

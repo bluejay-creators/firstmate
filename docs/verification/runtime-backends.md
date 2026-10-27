@@ -2845,6 +2845,8 @@ typed        : bright `Add a follow-up`  pending
 
 `test_matrix_cursor_fully_dim_placeholder` in `tests/fm-composer-lib.test.sh` pins this shape and asserts the row ghost-strips to empty, so the older reverse-video remnant path cannot satisfy it.
 `tests/fm-tmux-agent-liveness.test.sh` repeats the idle `empty` and typed `pending` verdicts through a real pane whose foreground binary is `cursor-agent`.
+`test_matrix_bare_prompt_payload_identity` also pins bright user glyphs after a dim actual prompt: single-row and wrapped classification remain `pending`, and extraction retains the payload byte-for-byte.
+On 2026-10-27, `bash tests/fm-composer-lib.test.sh` passed; a bounded no-pane Cursor smoke changed from `classification=empty extraction=<>` before the correction to `classification=pending extraction=<╰─>` after it.
 Refresh the Cursor liveness evidence with:
 
 ```sh
@@ -3252,7 +3254,7 @@ The corner is deliberately not proof on its own: omp closes transcript frames (`
 The status-row rule recognises the 18.8 powerline form by its rule-embedded context cell (`─N%─` on a row closing with the rule); omp's symbol tables keep the `─` rule and the `π` identity cell under the `unicode` preset, while the `ascii` preset (`+-` corner, `-` rules) is unverified and still reads `unknown`.
 `tests/fm-composer-lib.test.sh` pins the captured rows (idle with the hint, idle after a turn, typed, wrapped, a frame footer, and the plain-capture degradation) in both locales, including byte-exact extraction before and after a paste whether the hint remains visible or disappears.
 Shared row-content extraction removes the captured hint's bright key remnant only when its label disappeared during ghost stripping and the remaining user-text prefix matches the plain row; bright hint-like user text, uncaptured key cells, and plain captures remain untouched.
-The shared row-content boundary preserves the structurally identified omp prompt separately while stripping ghost content, so bright user glyphs remain payload in single-row classification, wrapped classification, and byte-exact extraction, with or without the hint.
+The shared bare-row content boundary preserves the structurally identified prompt and its styling separately while stripping ghost content, so bright user glyphs remain payload in single-row classification, wrapped classification, and byte-exact extraction, with or without the hint. The omp corner is excluded from globally accepted agent glyphs and enabled only in status-anchored scanning and selected bare-composer consumers.
 Status-anchored `╰─ ` input is resolved before border transitions, so a payload ending in `╯` remains input; genuine rounded borders and unanchored transcript corners retain their refusal behavior.
 
 On 2026-10-27, `bash tests/fm-composer-lib.test.sh` passed, including the retained fully dim Cursor cases.
