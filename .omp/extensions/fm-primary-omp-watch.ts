@@ -670,6 +670,12 @@ export default function (pi: ExtensionAPI) {
     }
     if (!generationIsLive(owner)) return false;
     if (daemonOwnerActive()) {
+      const retired = await retireArm(owner.child);
+      if (!generationIsLive(owner)) return false;
+      if (!retired || !daemonOwnerActive()) {
+        schedulePendingCleanup(owner);
+        return false;
+      }
       owner.daemonStandDown = true;
       return true;
     }

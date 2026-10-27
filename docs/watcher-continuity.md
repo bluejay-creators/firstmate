@@ -74,6 +74,7 @@ omp's replacement follows its own generation-owner contract in `.omp/extensions/
 - It retires the predecessor arm at replacement shutdown instead of retaining it across the handoff.
 - It reports no shutdown reason, so every shutdown with a pending actionable close persists the handoff for the next owning `session_start` to replay.
 - While `state/.afk` exists (quiet or away mode) it launches no arm and delivers no wake, because the daemon owns supervision; rule 12 of `docs/supervision-protocols/omp.md` owns that contract.
+- If daemon ownership begins during successor restoration or handling confirmation, it retires its owned successor before completing the pending actionable handoff, so the daemon can resurface and consume the queued wake.
 
 ### Cursor stop hook
 
