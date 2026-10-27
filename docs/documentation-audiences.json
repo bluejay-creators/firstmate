@@ -445,6 +445,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "docs/supervision-protocols/omp-secondmate.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/supervision-protocols/omp.md",
       "audience": "agent-runtime"
     },

@@ -1,5 +1,7 @@
 Mode: omp (Oh My Pi) extension background wake.
 
+For an omp secondmate, the renderer selects the [inbox-first protocol](omp-secondmate.md).
+
 When this session owns supervision and away mode is not active:
 1. Drain first with `bin/fm-wake-drain.sh --brief --ack`.
    That call prints one line per queued wake (kind · task · first ~100 chars), acks itself when everything presented absorbed as routine, or prints the exact `WAKE_ACK_REQUIRED` `--ack-through` command to run after handling otherwise; until then the work remains durable for idempotent re-handling after interruption.
