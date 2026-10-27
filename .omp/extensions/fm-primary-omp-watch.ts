@@ -811,7 +811,8 @@ export default function (pi: ExtensionAPI) {
           }
           settleClaim("delivered");
           if (!awaitingConsumption) {
-            // omp consumed it before this ran.
+            // No follow-up awaits consumption: omp consumed it, or the daemon
+            // now owns the queued wake.
             pending.delivered = true;
             try {
               finishPendingActionable(owner, pending);
@@ -833,9 +834,9 @@ export default function (pi: ExtensionAPI) {
       if (generationIsLive(owner)) {
         owner.restoring = false;
         if (owner.pendingActionables.some((pending) => pending.delivered)) schedulePendingCleanup(owner);
-        // No bare arm is launched here. A generation without a child at this
-        // point has either delivered a typed restoration failure after its
-        // bounded retries, which hands repair to main through fm_watch_arm_omp
+        // No bare arm is launched here: daemon stand-down must remain inert.
+        // Otherwise, a generation without a child has either delivered a typed
+        // restoration failure after its bounded retries, handing repair to main through fm_watch_arm_omp
         // (one more silent launch past the bound could hold a hung child that
         // the repair call would then report as "unchanged"), or lost a
         // verified successor during the delivery, which takes the ordinary

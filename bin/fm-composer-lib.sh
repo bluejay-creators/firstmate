@@ -502,17 +502,13 @@ fm_busy_lines_match() {  # [harness]
 }
 
 # The prompt glyphs, each declared exactly once (see THE SAFETY RULE above).
-# AGENT glyphs are a genuine empty agent composer on any row, bordered or bare.
+# The global AGENT list below proves a composer on bordered or bare rows.
 # SHELL glyphs are one only INSIDE a composer container; on a bare row they are
 # a dead-shell prompt and must never read `empty`. Newline-separated and
 # consumed by `read` rather than word splitting, so `$`, `%`, and `#` stay
 # literal and no entry is ever exposed to pathname expansion.
-# omp 18.8 draws its prompt as a rounded corner `╰─` (its `boxRound.bottomLeft`
-# and `boxRound.horizontal` symbols, `╰` + `─` under both the unicode and the
-# nerd preset; the ascii preset's `+-` is unverified and not claimed), one
-# space, then the typed text, with wrapped input continuing on three-space
-# indented rows and the status row drawn directly ABOVE the prompt. Verified
-# live on omp 18.8.7 through tmux (docs/verification/runtime-backends.md).
+# omp's corner stays outside that list; see THE SHAPE CATALOGUE for anchoring.
+# Its unicode and nerd presets share the corner; ascii's `+-` is unverified.
 FM_COMPOSER_OMP_PROMPT_GLYPH='╰─'
 FM_COMPOSER_OMP_EFFORT_KEYS='󰘶 󰌒'
 FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' '›' '⟩' '→' '❭')
@@ -569,9 +565,9 @@ FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT='^(Build|Plan)[[:space:]]+·[[:space:]]+'
 # is deliberately not matched - and the marker is quantifier-free so the same
 # bytes match under LC_ALL=C as under a UTF-8 locale.
 FM_COMPOSER_MODE_HINT_RE_DEFAULT='^[[:space:]]*(⏵|⏸)'
-# omp (Oh My Pi) draws a one-row status line directly BELOW its borderless
+# omp 18.1.11 draws a one-row status line directly BELOW its borderless
 # composer: an identity or spinner cell, then middle-dot separated model, path,
-# git, and context cells. Verified live through Herdr on omp 18.1.11:
+# git, and context cells. Verified live through Herdr:
 # ` π  · ◔ GPT-6-Astra · 🌳 …-workspace · ⑂ detached · ◫ 15.4%/272K ⟲ · (sub)`
 # idle under the unicode preset, ` 󰵗  ·  qwen3:8b ·  … ·  36.7%/41K` under
 # nerd, and ` ⠧ 11s  · …` while busy. Without this rule the bare composer's
