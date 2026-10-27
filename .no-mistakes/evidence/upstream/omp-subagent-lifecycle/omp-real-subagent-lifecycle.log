@@ -1,0 +1,14 @@
+product=omp omp/18.10.4
+surface=real installed omp RPC primary in canonical marked lab on private tmux socket
+lab_permission_preflight=passed
+primary_watcher=armed
+real_task_tool=invoked_and_completed
+primary_after_task=PRIMARY_AFTER_TASK
+watcher_pid_before=7912
+watcher_pid_after_subagent_shutdown=7912
+watcher_process_start_before=Fri Oct 16 11:50:04 2026    
+watcher_process_start_after=Fri Oct 16 11:50:04 2026    
+result=PASS same live watcher process survived real task subagent bind/start/shutdown and primary resumed
+rpc_frame_summary:
+tool_execution_start task(via xd bridge)
+agent_end_count=2
