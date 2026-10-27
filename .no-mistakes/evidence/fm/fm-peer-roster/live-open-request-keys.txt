@@ -1,0 +1,37 @@
+### default human view, baseline state
+Workspace w1 | Herdr ok | Beads ok | peers ok
+alice: matched activity=working work=blocked report=fresh@2026-10-09T22:57Z note [at=1791586621] [key=build]: work underway on the roster beads=fmr-2jz(in_progress,deps:blocked:fmr-elf=open)
+bob: matched activity=idle work=unknown report=stale@1970-01-01T00:00Z done [at=1]: old task beads=fmr-8mb(open,deps:clear:)
+charlie: unavailable activity=unknown work=unknown report=missing@-  beads=-
+managed w1:t4 fm-job: activity=working worker=job
+unmapped w1:t5 Stranger: activity=idle
+unassigned: 1
+  fmr-21g [usga] assignee=- open deps=clear
+other assignees: 2
+  fmr-2mk [agents] assignee=Alice open deps=clear
+  fmr-elf [platform] assignee=other open deps=clear
+exit=0
+
+### bob log: old blocked key + fresh needs-decision key
+blocked [at=1] [key=runner-github-app]: waiting on app install
+needs-decision [at=1791586665] [key=runner-idle-stop]: stop idle runner?
+--- json (bob)
+{"activity":"idle","work_evidence":"blocked","open_keys":["runner-github-app","runner-idle-stop"],"freshness":"fresh"}
+--- human
+bob: matched activity=idle work=blocked open=runner-github-app,runner-idle-stop report=fresh@2026-10-09T22:57Z needs-decision [at=1791586665] [key=runner-idle-stop]: stop idle runner? beads=fmr-8mb(open,deps:clear:)
+
+### + done line (no resolved)
+{"work_evidence":"blocked","open_keys":["runner-github-app","runner-idle-stop"]}
+
+### + resolved newer key only
+{"work_evidence":"blocked","open_keys":["runner-github-app"]}
+--- human
+bob: matched activity=idle work=blocked open=runner-github-app report=fresh@2026-10-09T22:57Z resolved [at=1791586665] [key=runner-idle-stop]: keep it beads=fmr-8mb(open,deps:clear:)
+
+### + resolved older key (combined tag form)
+{"work_evidence":"unknown","open_keys":[],"freshness":"unknown"}
+--- human
+bob: matched activity=idle work=unknown report=unknown@- resolved [key=runner-github-app at=1791586665]: app installed beads=fmr-8mb(open,deps:clear:)
+
+### restored stale log
+{"activity":"idle","work_evidence":"unknown","freshness":"stale"}

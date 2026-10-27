@@ -1,0 +1,26 @@
+### A. idle peer, fresh report, dependency-clear bead, no open keys -> tracked (never "unblocked"/available)
+{"activity":"idle","work_evidence":"tracked","freshness":"fresh","open_keys":[],"beads":[{"id":"fmr-8mb","dependency_state":"clear"}]}
+bob: matched activity=idle work=tracked report=fresh@2026-10-09T22:58Z note [at=1791586733]: still here, polling the bridge beads=fmr-8mb(open,deps:clear:)
+
+### B. worker metadata whose recorded pane no longer matches the live pane in tab w1:t4
+backend=herdr
+herdr_session=fm-lab-roster-38741-13883
+herdr_tab_id=w1:t4
+window=fm-lab-roster-38741-13883:w1:p4
+endpoint_task_id=job
+window=fm-lab-roster-38741-13883:w1:p99
+{"managed_tabs":[],"unregistered":[{"tab_id":"w1:t4","label":"fm-job","resolution":"unmapped","activity":"working"},{"tab_id":"w1:t5","label":"Stranger","resolution":"unmapped","activity":"idle"}]}
+unmapped w1:t4 fm-job: activity=working
+unmapped w1:t5 Stranger: activity=idle
+
+### C. a second live tab labelled Alice (Stranger renamed) -> alice ambiguous, no pane attributed
+{"tab_id":"w1:t5","label":"Alice"}
+[{"tab_id":"w1:t1","label":"1"},{"tab_id":"w1:t2","label":"◐ Alice"},{"tab_id":"w1:t3","label":"Bob"},{"tab_id":"w1:t4","label":"◐ fm-job"},{"tab_id":"w1:t5","label":"Alice"},{"tab_id":"w1:t6","label":"plain-shell"}]
+{"alice":{"resolution":"ambiguous","activity":"unknown","work_evidence":"unknown","tab_id":null,"pane_ids":null},"unregistered":[{"tab_id":"w1:t2","label":"Alice","resolution":"ambiguous","activity":"working"},{"tab_id":"w1:t5","label":"Alice","resolution":"ambiguous","activity":"idle"}]}
+alice: ambiguous activity=unknown work=unknown report=fresh@2026-10-09T22:57Z note [at=1791586621] [key=build]: work underway on the roster beads=fmr-2jz(in_progress,deps:blocked:fmr-elf=open)
+ambiguous w1:t2 Alice: activity=working
+ambiguous w1:t5 Alice: activity=idle
+{"tab_id":"w1:t5","label":"Stranger"}
+
+### restored: Stranger back, alice matched again
+{"alice":{"resolution":"matched","tab_id":"w1:t2"},"unregistered":[{"tab_id":"w1:t5","label":"Stranger","resolution":"unmapped"}]}

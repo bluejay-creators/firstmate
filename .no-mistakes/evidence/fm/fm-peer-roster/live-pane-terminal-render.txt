@@ -1,0 +1,16 @@
+### Herdr pane w1:p1 visible terminal grid (herdr pane read --source visible) after running 'bin/fm-peer-roster.sh' default view inside the lab pane
+Workspace w1 | Herdr ok | Beads ok | peers ok
+alice: matched activity=working work=blocked report=fresh@2026-10-09T22:57Z note [at=1791586621] [key=build]: work unde
+rway on the roster beads=fmr-2jz(in_progress,deps:blocked:fmr-elf=open)
+bob: matched activity=idle work=unknown report=stale@1970-01-01T00:00Z done [at=1]: old task beads=fmr-8mb(open,deps:cl
+ear:)
+charlie: unavailable activity=unknown work=unknown report=missing@-  beads=-
+managed w1:t4 fm-job: activity=working worker=job
+unmapped w1:t5 Stranger: activity=idle
+unassigned: 1
+  fmr-21g [usga] assignee=- open deps=clear
+other assignees: 2
+  fmr-2mk [agents] assignee=Alice open deps=clear
+  fmr-elf [platform] assignee=other open deps=clear
+
+fm-roster-board.lFRkrY  master ❯
