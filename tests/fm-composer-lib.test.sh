@@ -208,7 +208,7 @@ test_matrix_claude_named_session_titled_rule() {
   # A multiword session name renders the same way, at the same width.
   multi='────────────────── Andrew Chen ─'
   assert_screen "multiword named claude idle on herdr" empty "$CAPS_STYLED" \
-    "${idle/"$titled"/"$multi"}" '' "$claude_idle"
+    "transcript line"$'\n'"$multi"$'\n'"❯$NBSP"$'\n'"$rule"$'\n  ⏵⏵ auto mode on (shift+tab to cycle)' '' "$claude_idle"
   assert_screen "multiword named claude typed on herdr" pending "$CAPS_STYLED" \
     "transcript line"$'\n'"$multi"$'\n'"❯ fix the login bug"$'\n'"$rule" '' "$claude_idle"
   # Claude's prompt suggestion is dim ghost text, not input.
