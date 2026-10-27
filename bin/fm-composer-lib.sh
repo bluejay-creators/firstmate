@@ -986,6 +986,14 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] 
       '┗'*'┛') kind=bottom; family=heavy ;;
       '+'*'+') kind=ascii; family=ascii ;;
     esac
+    case "$trimmed" in
+      "$FM_COMPOSER_OMP_PROMPT_GLYPH "*)
+        if _fm_composer_row_is_omp_status "$prev_trimmed"; then
+          kind=
+          family=
+        fi
+        ;;
+    esac
     # This row's glyph proof, computed once for every envelope that contains
     # it: the same side-border strip _fm_composer_row_content performs, then
     # the agent-glyph test. A border row never carries a proof.
@@ -1372,26 +1380,33 @@ _fm_composer_screen_row() {  # <n> <screen>
 # _fm_composer_row_content: extract the classification content of one raw row:
 # ghost-strip when styled, plain otherwise, normalize-trim, and strip one
 # matching pair of side border glyphs.
-_fm_composer_row_content() {  # <raw-row> <styled> -> content on stdout
-  local raw=$1 styled=$2 stripped
+_fm_composer_row_content() {  # <raw-row> <styled> [bare-prompt] -> content on stdout
+  local raw=$1 styled=$2 stripped plain prompt=''
+  if [ "${3:-0}" = 1 ]; then
+    plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
+    fm_composer_normalize_trim_var plain
+    case "$plain" in
+      "$FM_COMPOSER_OMP_PROMPT_GLYPH"|"$FM_COMPOSER_OMP_PROMPT_GLYPH "*)
+        prompt=$FM_COMPOSER_OMP_PROMPT_GLYPH
+        raw=${raw/"$prompt"/}
+        ;;
+    esac
+  fi
   if [ "$styled" = 1 ]; then
     stripped=$(printf '%s\n' "$raw" | fm_composer_strip_ghost)
   else
     stripped=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
   fi
   fm_composer_normalize_trim_var stripped
-  if [ "$styled" = 1 ]; then
+  if [ "$styled" = 1 ] && [ -n "$prompt" ]; then
     case "$stripped" in
       *"$FM_COMPOSER_OMP_EFFORT_KEYS")
-        local plain prefix hint="$FM_COMPOSER_OMP_EFFORT_KEYS to change thinking effort"
-        plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
-        fm_composer_normalize_trim_var plain
+        local prefix hint="$FM_COMPOSER_OMP_EFFORT_KEYS to change thinking effort"
         case "$plain" in
           "$FM_COMPOSER_OMP_PROMPT_GLYPH "*"$hint")
             plain=${plain#"$FM_COMPOSER_OMP_PROMPT_GLYPH"}
             plain=${plain%"$hint"}
             prefix=${stripped%"$FM_COMPOSER_OMP_EFFORT_KEYS"}
-            prefix=${prefix#"$FM_COMPOSER_OMP_PROMPT_GLYPH"}
             fm_composer_normalize_trim_var plain
             fm_composer_normalize_trim_var prefix
             if [ "$prefix" = "$plain" ]; then stripped=$prefix; fi
@@ -1400,6 +1415,7 @@ _fm_composer_row_content() {  # <raw-row> <styled> -> content on stdout
         ;;
     esac
   fi
+  [ -z "$prompt" ] || stripped="$prompt $stripped"
   case "$stripped" in
     '│'*'│') stripped=${stripped#│}; stripped=${stripped%│} ;;
     '┃'*'┃') stripped=${stripped#┃}; stripped=${stripped%┃} ;;
@@ -1447,8 +1463,8 @@ _fm_composer_classify_rows() {  # <screen> <styled> <ambiguous> <first-row> <las
 _fm_composer_classify_bare_row() {  # <screen> <styled> <row>
   local screen=$1 styled=$2 row=$3 raw content plain state
   raw=$(_fm_composer_screen_row "$row" "$screen")
-  content=$(_fm_composer_row_content "$raw" "$styled")
-  plain=$(_fm_composer_row_content "$raw" 0)
+  content=$(_fm_composer_row_content "$raw" "$styled" 1)
+  plain=$(_fm_composer_row_content "$raw" 0 1)
   _fm_composer_bare_row_strip_furniture_var content
   _fm_composer_bare_row_strip_furniture_var plain
   state=$(fm_composer_classify_content 0 "$content" \
@@ -1549,7 +1565,7 @@ _fm_composer_classify_bare_wrap() {  # <screen> <styled> <glyph-row> <cursor-row
   row=$g
   while [ "$row" -le "$cy" ]; do
     raw=$(_fm_composer_screen_row "$row" "$screen")
-    content=$(_fm_composer_row_content "$raw" "$styled")
+    content=$(_fm_composer_row_content "$raw" "$styled" "$((row == g))")
     if [ "$row" -eq "$g" ]; then
       _fm_composer_bare_row_strip_furniture_var content
       if fm_composer_leading_agent_glyph_var glyph "$content"; then
@@ -2035,7 +2051,7 @@ _fm_composer_select_cursorless() {
 
 fm_composer_extract_selected_content() {  # <caps> <screen>
   local caps=$1 screen=$2 styled=0 kv plain row raw content glyph joined='' footer_re prompt_row=-1
-  local leading_blank=1 placeholder_position=0 prompt_is_shell=0 cwd_start
+  local leading_blank=1 placeholder_position=0 prompt_is_shell=0 cwd_start bare_prompt
   footer_re=${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}
   while IFS= read -r kv; do
     [ "$kv" = styled=1 ] && styled=1
@@ -2053,7 +2069,11 @@ EOF
   fi
   while [ "$row" -le "$FM_COMPOSER_SELECTED_LAST" ]; do
     raw=$(_fm_composer_screen_row "$row" "$screen")
-    content=$(_fm_composer_row_content "$raw" "$styled")
+    bare_prompt=0
+    if [ "$FM_COMPOSER_SELECTED_KIND" = bare ] && [ "$row" -eq "$FM_COMPOSER_SELECTED_FIRST" ]; then
+      bare_prompt=1
+    fi
+    content=$(_fm_composer_row_content "$raw" "$styled" "$bare_prompt")
     placeholder_position=0
     case "$FM_COMPOSER_SELECTED_KIND" in
       bare)

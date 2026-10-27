@@ -660,6 +660,33 @@ test_matrix_omp_corner_prompt_row() {
   screen="$head"$'\n'"$status"$'\n'"${dim}╰─ ${grey}shift+tab ${ESC}[2mto change thinking effort${ESC}[0m"$'\n\n'
   out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
   [ "$out" = 'shift+tab' ] || fail "an uncaptured key-cell remnant must remain input, got '$out'"
+  local hint_tail
+  for hint_tail in '' "$(printf '%*s' 100 '')${hint}"; do
+    for message in '→' '→ explain this' '❯' '›' '⟩' '❭' '╰─' '>' '$' '%' '#' 'Please print ╯' '│retain│'; do
+      screen="$head"$'\n'"$status"$'\n'"${dim}╰─ ${grey}${message}${hint_tail}${ESC}[0m"$'\n\n'
+      assert_screen "omp payload with preserved prompt on tmux: $message" pending "$CAPS_TMUX" "$screen" 3 probe-absent
+      assert_screen "omp payload with preserved prompt on herdr: $message" pending "$CAPS_STYLED" "$screen" '' probe-absent
+      assert_screen "omp payload with preserved prompt on zellij: $message" pending "$CAPS_STYLED_NOID" "$screen"
+      out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+      [ "$out" = "$message" ] || fail "omp payload must survive prompt and hint removal byte-exactly, expected '$message', got '$out'"
+      out=$(LC_ALL=C fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+      [ "$out" = "$message" ] || fail "omp payload must survive byte-locale extraction, expected '$message', got '$out'"
+      plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+      assert_screen "nonempty omp payload on a plain capture: $message" unknown "$CAPS_PLAIN" "$plain"
+      out=$(fm_composer_extract_selected_content "$CAPS_PLAIN" "$plain")
+      [ "$out" = "${message}${hint_tail:+ $key_a $key_b to change thinking effort}" ] \
+        || fail "plain omp extraction must preserve payload and unproven hint, got '$out'"
+    done
+    screen="$head"$'\n'"$status"$'\n'"${dim}╰─ ${grey}→${hint_tail}${ESC}[0m"$'\n'"${dim}   suggested continuation${ESC}[0m"$'\n\n'
+    assert_screen "omp user glyph before a ghost continuation on tmux" pending "$CAPS_TMUX" "$screen" 4 probe-absent
+    assert_screen "omp user glyph before a ghost continuation, cursorless" pending "$CAPS_STYLED_NOID" "$screen"
+    out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+    [ "$out" = '→' ] || fail "wrapped omp extraction must preserve the user glyph, got '$out'"
+  done
+  screen="$head"$'\n'"$status"$'\n'"${grey}╰─ → explain this${ESC}[0m"$'\n\n'
+  assert_screen "omp bright prompt and bright user glyph" pending "$CAPS_STYLED_NOID" "$screen"
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+  [ "$out" = '→ explain this' ] || fail "a bright actual omp prompt must be removed exactly once, got '$out'"
   screen="$head"$'\n'"$status"$'\n'"$prompt_hint"$'\n\n'
   # A plain capture cannot tell the hint from typed text: degrade, never fabricate.
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
@@ -700,6 +727,9 @@ test_matrix_omp_corner_prompt_row() {
   # bare composer: a typed bordered composer stays pending.
   screen=$'╭────────╮\n│ ❯ hi   │\n╰────────╯'
   assert_screen "a rounded box bottom is not an empty omp corner" pending "$CAPS_STYLED" "$screen" '' probe-absent
+  screen="$status"$'\n╰────────╯'
+  assert_screen "a genuine rounded border below omp status, cursorless" unknown "$CAPS_STYLED_NOID" "$screen"
+  assert_screen "a genuine rounded border below omp status under the cursor" unknown "$CAPS_TMUX" "$screen" 1 probe-absent
   pass "matrix: omp 18.8.7's corner prompt beneath its status row reads empty idle, pending typed, and never from a frame footer"
 }
 
