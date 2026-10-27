@@ -518,6 +518,7 @@ fm_busy_lines_match() {  # [harness]
 # status row (_fm_composer_glyph_anchors_row): omp closes a transcript frame
 # with the same lone dim `╰─`, and a frame footer must never read `empty`.
 FM_COMPOSER_OMP_PROMPT_GLYPH='╰─'
+FM_COMPOSER_OMP_EFFORT_KEYS='󰘶 󰌒'
 FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' '›' '⟩' '→' '❭' "$FM_COMPOSER_OMP_PROMPT_GLYPH")
 FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 
@@ -551,7 +552,7 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # uncaptured hint degrades to `pending`/`unknown` until it is captured.
 # FM_COMPOSER_IDLE_RE overrides for an unverified harness;
 # matching is case-insensitive.
-FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Ask Devin to build features, fix bugs, or work on your code$|^Ask your question\.\.\.$|^Type your message\.\.\.$|^Type to queue message\.\.\.$|^󰘶 󰌒 to change thinking effort$'
+FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Ask Devin to build features, fix bugs, or work on your code$|^Ask your question\.\.\.$|^Type your message\.\.\.$|^Type to queue message\.\.\.$|^'"$FM_COMPOSER_OMP_EFFORT_KEYS"' to change thinking effort$'
 
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed
@@ -1379,6 +1380,26 @@ _fm_composer_row_content() {  # <raw-row> <styled> -> content on stdout
     stripped=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
   fi
   fm_composer_normalize_trim_var stripped
+  if [ "$styled" = 1 ]; then
+    case "$stripped" in
+      *"$FM_COMPOSER_OMP_EFFORT_KEYS")
+        local plain prefix hint="$FM_COMPOSER_OMP_EFFORT_KEYS to change thinking effort"
+        plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
+        fm_composer_normalize_trim_var plain
+        case "$plain" in
+          "$FM_COMPOSER_OMP_PROMPT_GLYPH "*"$hint")
+            plain=${plain#"$FM_COMPOSER_OMP_PROMPT_GLYPH"}
+            plain=${plain%"$hint"}
+            prefix=${stripped%"$FM_COMPOSER_OMP_EFFORT_KEYS"}
+            prefix=${prefix#"$FM_COMPOSER_OMP_PROMPT_GLYPH"}
+            fm_composer_normalize_trim_var plain
+            fm_composer_normalize_trim_var prefix
+            if [ "$prefix" = "$plain" ]; then stripped=$prefix; fi
+            ;;
+        esac
+        ;;
+    esac
+  fi
   case "$stripped" in
     '│'*'│') stripped=${stripped#│}; stripped=${stripped%│} ;;
     '┃'*'┃') stripped=${stripped#┃}; stripped=${stripped%┃} ;;

@@ -657,18 +657,23 @@ export default function (pi: ExtensionAPI) {
     recovery?: { generation: string; watcherPid: string },
   ): Promise<boolean> {
     if (!generationIsLive(owner)) return false;
-    if (recovery) {
+    let deliveryMessage = message;
+    if (recovery && !daemonOwnerActive()) {
       const confirmed = confirmHandlingDeliveryWithRetry(owner, recovery);
       if (!confirmed.ok) {
         const watcherPid = recovery.watcherPid;
         if (!pidAlive(watcherPid)) {
           await retireArm(owner.child);
         }
-        return await sendWake(owner, `${message}\n\n${confirmed.detail}`, pending);
+        deliveryMessage = `${message}\n\n${confirmed.detail}`;
       }
     }
-    // No supervision branch on omp: every actionable wake goes to main.
-    return await sendWake(owner, message, pending);
+    if (!generationIsLive(owner)) return false;
+    if (daemonOwnerActive()) {
+      owner.daemonStandDown = true;
+      return true;
+    }
+    return await sendWake(owner, deliveryMessage, pending);
   }
 
   function surfaceFailure(owner: SessionGeneration, message: string): void {
@@ -782,17 +787,6 @@ export default function (pi: ExtensionAPI) {
             releaseClaim();
             return;
           }
-          if (restoration.standDown) {
-            settleClaim("delivered");
-            pending.delivered = true;
-            try {
-              finishPendingActionable(owner, pending);
-            } catch (error) {
-              surfaceCleanupFailure(owner, error);
-            }
-            releaseClaim();
-            continue;
-          }
           const message = restoration.failure ? `${pending.message}\n\n${restoration.failure}` : pending.message;
           const delivered = await deliverActionableWake(owner, message, pending, restoration.recovery);
           if (!delivered) {
@@ -900,13 +894,12 @@ export default function (pi: ExtensionAPI) {
   async function restoreAfterActionableClose(owner: SessionGeneration, predecessorArmPid: string): Promise<{
     failure: string;
     recovery?: { generation: string; watcherPid: string };
-    standDown?: true;
   }> {
     let failure = "";
     for (let attempt = 0; attempt <= retryLimit; attempt += 1) {
       if (!generationIsLive(owner)) return { failure: "" };
       const replacement = startArm(owner, predecessorArmPid);
-      if (replacement.standDown) return { failure: "", standDown: true };
+      if (replacement.standDown) return { failure: "" };
       const successorChild = owner.child;
       if (replacement.ok && successorChild && await waitForReadiness(successorChild)) {
         return { failure: "", recovery: armRecovery.get(successorChild) };

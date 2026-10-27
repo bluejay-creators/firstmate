@@ -641,9 +641,31 @@ test_matrix_omp_corner_prompt_row() {
   assert_screen "idle omp 18.8.7 with hint on tmux" empty "$CAPS_TMUX" "$screen" 3 probe-absent
   assert_screen "idle omp 18.8.7 with hint on herdr" empty "$CAPS_STYLED" "$screen" '' probe-absent
   assert_screen "idle omp 18.8.7 with hint on zellij" empty "$CAPS_STYLED_NOID" "$screen"
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+  [ -z "$out" ] || fail "the idle omp hint must not be extracted as user input, got '$out'"
+  local before=$out after message='hello captain'
+  screen="$head"$'\n'"$status"$'\n'"${dim}╰─ ${grey}${message}$(printf '%*s' 100 '')${hint}"$'\n\n'
+  assert_screen "typed omp text before its effort hint" pending "$CAPS_STYLED_NOID" "$screen"
+  after=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+  [ "$after" = "${before}${message}" ] || fail "a successful paste before the omp hint must satisfy the exact content proof, got '$after'"
+  screen="$head"$'\n'"$status"$'\n'"${dim}╰─ ${grey}${message}${ESC}[0m"$'\n\n'
+  after=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+  [ "$after" = "${before}${message}" ] || fail "a successful paste that hides the omp hint must satisfy the exact content proof, got '$after'"
+  for message in "$key_a $key_b" "$key_a $key_b to change thinking effort" 'shift+tab to change thinking effort' "$key_a to see 3 running agents"; do
+    screen="$head"$'\n'"$status"$'\n'"${dim}╰─ ${grey}${message}${ESC}[0m"$'\n\n'
+    assert_screen "bright hint-like omp user text: $message" pending "$CAPS_STYLED_NOID" "$screen"
+    out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+    [ "$out" = "$message" ] || fail "bright hint-like user text must remain byte-exact, got '$out'"
+  done
+  screen="$head"$'\n'"$status"$'\n'"${dim}╰─ ${grey}shift+tab ${ESC}[2mto change thinking effort${ESC}[0m"$'\n\n'
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+  [ "$out" = 'shift+tab' ] || fail "an uncaptured key-cell remnant must remain input, got '$out'"
+  screen="$head"$'\n'"$status"$'\n'"$prompt_hint"$'\n\n'
   # A plain capture cannot tell the hint from typed text: degrade, never fabricate.
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
   assert_screen "idle omp 18.8.7 with hint on a plain capture" unknown "$CAPS_PLAIN" "$plain"
+  out=$(fm_composer_extract_selected_content "$CAPS_PLAIN" "$plain")
+  [ "$out" = "$key_a $key_b to change thinking effort" ] || fail "a plain hint has no styling proof and must not be removed, got '$out'"
   # After the first turn the hint is gone and the prompt row is the bare corner.
   screen="$head"$'\n'"$status"$'\n'"$prompt_idle"$'\n\n'
   assert_screen "idle omp 18.8.7 on tmux" empty "$CAPS_TMUX" "$screen" 3 probe-absent
