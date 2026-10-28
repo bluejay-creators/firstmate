@@ -226,6 +226,10 @@ type SessionGeneration = {
   // fresh key and IS delivered. Never consulted across a fresh session_start
   // replay: a wake a replacement handed back already earned its delivery.
   deliveredStaleAt: Map<string, number>;
+  // Queue sequences change when reconciliation reannounces an unhandled
+  // capture; its source/capture key does not. Acceptance is session-scoped,
+  // not a handled marker: a replacement may recover the durable result.
+  acceptedCaptures: Set<string>;
   // The send channel pinned to the conversation that owns this generation
   // ("Send-channel session ownership" at the top of this file owns the
   // contract).
@@ -849,6 +853,7 @@ function createGeneration(): SessionGeneration {
     cleanupFailure: "",
     unconsumedWakes: new Map(),
     deliveredStaleAt: new Map(),
+    acceptedCaptures: new Set(),
     deferredClose: null,
     sendUserMessageRef: { send: null },
   };
@@ -1092,7 +1097,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
   // so concurrent rows are still serialized through the queue lock.
   function drainWakeQueueBriefAck(
     owner: SessionGeneration,
-  ): { text: string; ackPending: boolean; ackThrough: string | null; ackGeneration: string | null } | null {
+  ): { rows: string[]; ackPending: boolean; ackThrough: string | null; ackGeneration: string | null } | null {
     const drain = spawnSync("bash", [fmWakeDrainScript, "--brief", "--ack"], {
       cwd: fmRoot,
       encoding: "utf8",
@@ -1118,7 +1123,6 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
       // over an empty summary.
       return null;
     }
-    const summary = rows.join(" · ");
     const ackPending = Boolean(ackLine?.startsWith("WAKE_ACK_REQUIRED:"));
     let ackThrough: string | null = null;
     let ackGeneration: string | null = null;
@@ -1131,7 +1135,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     }
     // Only the rows ride the wake text; the ack contract stays an extension
     // concern, settled in-extension by ackPresentedWake below.
-    return { text: summary, ackPending, ackThrough, ackGeneration };
+    return { rows, ackPending, ackThrough, ackGeneration };
   }
 
   // Acknowledge exactly what a --brief --ack drain presented: run its named
@@ -1229,35 +1233,51 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     if (!generationIsLive(owner)) return false;
     const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
     const content = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${formatWakeMessage(message)}`);
-    for (const item of items) owner.unconsumedWakes.set(item.token, { content, pending: item });
     // Hidden wake path: drain the queue first so the model receives the
     // already-digested one-line summary in a hidden custom message the chat
     // never renders; the turn opens on the custom message itself through
-    // triggerTurn:true. The extension acknowledges exactly the presented
-    // rows as part of delivery (ackPresentedWake), so each wake carries
-    // only rows not yet delivered and the durable queue never re-presents
-    // them; an acknowledgement failure keeps the rows queued and surfaces
-    // loudly rather than swallowing them. Fall back to today's visible
-    // sendUserMessage banner when the drain fails, the outgoing hidden send
-    // is rejected before omp accepts it, or the sendMessage API is missing
-    // in this omp build.
+    // triggerTurn:true. Queue acknowledgement settles the exact presentation,
+    // not the durable process-event result. Reconciliation may publish that
+    // unhandled result again with a new queue sequence; coalesce its stable
+    // source/capture key only after omp accepted it in this generation.
+    // Unrelated rows and new capture generations must still reach main.
+    // Fall back to the visible banner if the drain or hidden send fails,
+    // or this omp build has no sendMessage API.
     const drained = drainWakeQueueBriefAck(owner);
-    if (drained && drained.text && pi.sendMessage) {
+    if (drained && pi.sendMessage) {
+      const captures: string[] = [];
+      // An unknown acknowledgement contract retains the existing loud
+      // replay behavior rather than earning a suppression receipt.
+      const rows = drained.ackPending && drained.ackThrough && drained.ackGeneration
+        ? drained.rows.filter((row) => {
+          const key = /^check · (procevent:[^ ·]+:\d+) · /.exec(row)?.[1];
+          if (!key) return true;
+          if (owner.acceptedCaptures.has(key)) return false;
+          captures.push(key);
+          return true;
+        })
+        : drained.rows;
+      if (rows.length === 0 && !notesSuffix) {
+        ackPresentedWake(owner, drained);
+        finishAbsorbedItems(owner, items);
+        return generationIsLive(owner);
+      }
       // Re-key each pending record under the drained summary so a matching
       // role:"custom" message_start (omp 18.10.4) finishes the record; the
       // composite content keys only the visible fallback's consumption.
-      const hiddenContent = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${drained.text}`);
+      const hiddenContent = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${rows.join(" · ")}`);
       for (const item of items) owner.unconsumedWakes.set(item.token, { content: hiddenContent, pending: item });
       try {
         await pi.sendMessage({ customType: "fm.wake", content: hiddenContent, display: false }, { triggerTurn: true, deliverAs: "followUp" });
+        for (const key of captures) owner.acceptedCaptures.add(key);
         ackPresentedWake(owner, drained);
         return generationIsLive(owner);
       } catch {
-        // Re-key to the composite so a visible-fallback consumption still
-        // finishes every member.
-      for (const item of items) owner.unconsumedWakes.set(item.token, { content, pending: item });
+        // A rejected hidden send earned no capture receipt. Register the
+        // visible fallback below so its consumption still finishes the batch.
       }
     }
+    for (const item of items) owner.unconsumedWakes.set(item.token, { content, pending: item });
     const channel = sendWakeChannel(owner, content);
     debugLog(debugBinding, "wake_send", channel.path, undefined, () => generationDebugFields(owner));
     if (items.length === 1) {

@@ -77,6 +77,12 @@ omp's replacement follows its own generation-owner contract in `.omp/extensions/
 - A subagent session (task tool, /tan clone) rebinding the factory is not a replacement: the rebind keeps the primary's live generation active, the session's events carry ctx.agent.kind === "sub" and stand down, and its start, shutdown, and arming calls never touch the supervising session's generation or handoff.
   The supervision-host extension follows the same rule, so an in-process subagent is safe for bounded read-only or short investigative work (`.agents/skills/harness-adapters/references/harness/omp.md` owns when a supervisor prefers one).
 
+The omp compact-delivery path coalesces an already accepted process-event capture by its `procevent:<source>:<capture-sequence>` identity within the owning session.
+Reconciliation can assign that same unhandled capture a new wake-queue sequence; this does not earn another model notification, including when it rides an unrelated wake.
+Fresh rows and a new capture sequence still deliver.
+Only a successful hidden-message acceptance with a known queue-acknowledgement contract earns this receipt; rejected sends do not.
+The receipt never marks the durable capture handled and resets at session replacement, so an unhandled result remains recoverable.
+
 ### Cursor stop hook
 
 Cursor's `.cursor/hooks.json` `stop` hook (`bin/fm-turnend-guard-cursor.sh`) owns routine tokenless re-arm for a Cursor primary.
