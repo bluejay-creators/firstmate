@@ -71,7 +71,7 @@ run_teardown() {  # <home> <id>
   local home=$1 id=$2
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$id"
+    FM_CONFIG_OVERRIDE="$home/config" FM_PUBLIC_FOLLOWUP_PRIMARY_HOME= "$TEARDOWN" "$id"
 }
 
 tasks_in() {  # <home> <tasks-axi args...>
@@ -146,12 +146,13 @@ SH
 }
 
 run_pr_merge() {  # <home> <id> <url>
-  local home=$1
-  shift
+  local home=$1 id=$2 url=$3
+  shift 3
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_CONFIG_OVERRIDE="$home/config" FM_TEST_GH_LOG="$home/gh.log" \
-    FM_TEST_GH_AXI_LOG="$home/gh-axi.log" "$ROOT/bin/fm-pr-merge.sh" "$@"
+    FM_TEST_GH_AXI_LOG="$home/gh-axi.log" "$ROOT/bin/fm-pr-merge.sh" \
+    "$id" "$url" --captain-approval fixture-captain-instruction "$@"
 }
 
 wait_for_test_file() {  # <path> <pid>
@@ -230,6 +231,8 @@ write_origin_meta() {  # <home> <id> [kind]
 # Build a fixture home whose configured backend is a scratch Beads graph.
 # Echoes "<home>|<graph-beads-dir>". The graph repo dir is named "fm" because
 # bd derives the row-id prefix from the repo directory name.
+# Scratch graphs test storage, not Git integration. Do not clone the session's
+# delegating hooks into their own resolved hook path during bd init.
 make_beads_home() {  # <name>
   local name=$1 case_dir home graph fb
   case_dir="$TMP_ROOT/$name"
@@ -238,7 +241,7 @@ make_beads_home() {  # <name>
   mkdir -p "$home/data" "$home/config" "$home/projects" "$graph"
   (umask 077; mkdir -p "$home/state")
   git -C "$graph" init -q
-  if ! (cd "$graph" && bd init >"$case_dir/bd-init.log" 2>&1); then
+  if ! (cd "$graph" && bd init --skip-hooks >"$case_dir/bd-init.log" 2>&1); then
     cat "$case_dir/bd-init.log" >&2
     fail "fixture bd init failed on $graph"
   fi
@@ -272,7 +275,7 @@ probe_tasks_axi_beads() {
   rm -rf "$probe_home" "$probe_graph"
   mkdir -p "$probe_home/data" "$probe_graph"
   git -C "$probe_graph" init -q
-  (cd "$probe_graph" && bd init >/dev/null 2>&1) || return 1
+  (cd "$probe_graph" && bd init --skip-hooks >/dev/null 2>&1) || return 1
   cat > "$probe_home/.tasks.toml" <<PROBEEOF
 backend = "beads"
 

@@ -67,6 +67,13 @@ make_case() {
   # The base branch the forge reports by default: unprotected, with no ruleset
   # rule, so nothing is required unless a case says otherwise.
   write_github_required "$case_dir"
+  # Legacy cases explicitly attest their concrete fixture approval in
+  # run_pr_merge; this authoritative non-production binding allows their exact
+  # named red/missing waivers without inferring an environment from "main".
+  cat > "$case_dir/home/config/merge-policy.json" <<'JSON'
+{"version":1,"bindings":[{"repository":"https://github.com/example/repo","base":"main","system":"fixture","environment":"other","autonomous_paths":[]}],"grants":[],"sensitive_paths":[]}
+JSON
+  chmod 0600 "$case_dir/home/config/merge-policy.json"
   : > "$case_dir/gh.log"
   # The worktree is a git copy whose HEAD is on a remote-tracking ref, as a
   # pushed ship task's is, so fm-pr-check.sh's named-head gate accepts it when
@@ -255,6 +262,23 @@ case "${1:-} ${2:-}" in
     # The required-check reads: the branch itself, and its rules read without
     # the merge-queue filter the queue reader below applies.
     case " $* " in
+      *"/pulls/"*"/files?"*)
+        if [ -f "${FM_TEST_GH_POLICY_FILES:-}" ]; then
+          cat "$FM_TEST_GH_POLICY_FILES"
+        else
+          printf '[{"filename":"src/feature.py"}]\n'
+        fi
+        exit 0
+        ;;
+      *" repos/"*"/pulls/"*)
+        endpoint=${*: -1}
+        repo_path=${endpoint#repos/}
+        pr_number=${repo_path##*/}
+        policy_url="https://github.com/${repo_path%/pulls/*}/pull/$pr_number"
+        jq -c --arg url "$policy_url" \
+          '{head:{sha:.headRefOid},base:{ref:.baseRefName},html_url:$url,changed_files:1}' "$FM_TEST_GH_VIEW_JSON"
+        exit 0
+        ;;
       *" repos/"*"/commits/"*"/check-runs"*)
         case "$*" in
           *"/commits/$(cat "$FM_TEST_GH_HEAD")/check-runs"*) ;;
@@ -354,6 +378,13 @@ add_glab_mock() {
 #!/usr/bin/env bash
 printf 'GITLAB_HOST=%s %s\n' "${GITLAB_HOST-<unset>}" "$*" >> "$FM_TEST_GLAB_LOG"
 case_dir=$(dirname "$FM_TEST_GLAB_JSON")
+if [ "${1:-}" = api ]; then
+  case "${*: -1}" in
+    */changes\?*) jq -c '. + {overflow:false,changes:[{old_path:"src/feature.py",new_path:"src/feature.py"}]}' "$FM_TEST_GLAB_JSON" ;;
+    *) cat "$FM_TEST_GLAB_JSON" ;;
+  esac
+  exit 0
+fi
 case "${1:-} ${2:-}" in
   "mr view")
     [ ! -e "$case_dir/glab-view-fails" ] || exit 1
@@ -410,8 +441,8 @@ write_mr_json() {
     "$state" "$detail" "$conflicts" > "$file"
   printf '"blocking_discussions_resolved":%s,"sha":"%s","head_pipeline":%s,' \
     "$discussions" "$head" "$pipeline" >> "$file"
-  printf '"merge_when_pipeline_succeeds":%s,"merge_after":%s}\n' \
-    "$merge_when_pipeline_succeeds" "$merge_after" >> "$file"
+  printf '"merge_when_pipeline_succeeds":%s,"merge_after":%s,"target_branch":"main","web_url":"%s"}\n' \
+    "$merge_when_pipeline_succeeds" "$merge_after" "$MR_URL" >> "$file"
 }
 
 # tea mock recording every invocation, so a test can prove the login and
@@ -462,6 +493,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$endpoint" in
+  */files\?*) printf '[{"filename":"src/feature.py"}]\n' ;;
   */status|*/status\?*)
     [ ! -e "$log_dir/tea-status-fails" ] || exit 1
     page=1
@@ -538,8 +570,8 @@ write_forgejo_pr_json() {
       *) fail "write_forgejo_pr_json: unknown field '$key'" ;;
     esac
   done
-  printf '{"state":"%s","mergeable":%s,"merged":%s,"draft":%s,"head":{"sha":"%s"}}\n' \
-    "$state" "$mergeable" "$merged" "$draft" "$head" > "$file"
+  printf '{"state":"%s","mergeable":%s,"merged":%s,"draft":%s,"head":{"sha":"%s"},"base":{"ref":"main"},"html_url":"%s","changed_files":1}\n' \
+    "$state" "$mergeable" "$merged" "$draft" "$head" "$FJ_URL" > "$file"
 }
 
 # write_forgejo_status_json <file> [state=<value>] [total_count=<n>]
@@ -562,8 +594,8 @@ write_forgejo_status_json() {
   if [ "$total" = 0 ]; then
     printf '{"state":"","total_count":0,"statuses":[]}\n' > "$file"
   else
-    printf '{"state":"%s","total_count":%s,"statuses":[%s]}\n' "$state" "$total" \
-      "$(seq "$total" | sed "s/.*/{\"context\":\"ci-&\",\"status\":\"$state\"}/" | paste -sd, -)" \
+    "$JQ_BIN" -cn --arg state "$state" --argjson total "$total" \
+      '{state:$state,total_count:$total,statuses:[range(1;$total+1)|{context:("ci-"+tostring),status:$state}]}' \
       > "$file"
   fi
 }
@@ -659,6 +691,14 @@ glab_merge_line() {
 
 run_pr_merge() {
   local case_dir=$1 rc; shift
+  local -a request
+  if [ "$#" -ge 2 ] && [ "${FM_TEST_NO_APPROVAL:-0}" != 1 ]; then
+    request=("$1" "$2" --captain-approval fixture-captain-instruction)
+    shift 2
+    request+=("$@")
+  else
+    request=("$@")
+  fi
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_HOME="${FM_TEST_HOME:-$case_dir/home}" \
   FM_STATE_OVERRIDE="$case_dir/state" \
@@ -671,6 +711,7 @@ run_pr_merge() {
   FM_TEST_GH_MERGEABLE_CALLS="$case_dir/mergeable-calls" \
   FM_TEST_GH_HEAD="$case_dir/github-head" \
   FM_TEST_GH_RUNS="$case_dir/github-runs.json" \
+  FM_TEST_GH_POLICY_FILES="$case_dir/github-policy-files.json" \
   FM_TEST_GH_MERGE_RC_FILE="$case_dir/github-merge-rc" \
   FM_TEST_GH_MERGE_OUTPUT="$(cat "$case_dir/github-merge-output" 2>/dev/null || true)" \
   FM_TEST_GH_GRAPHQL_FAIL="$case_dir/github-graphql-fail" \
@@ -693,7 +734,7 @@ run_pr_merge() {
   FM_TEST_TEA_LOG="$case_dir/tea.log" \
   HOME="${FM_TEST_USER_HOME:-$case_dir/user-home}" \
   PATH="$case_dir/fakebin:$PATH" \
-    "$PR_MERGE" "$@"
+    "$PR_MERGE" "${request[@]}"
   rc=$?
   if [ "${case_dir##*/}" = unsafe-url-segment ] && [ "$rc" -eq 2 ]; then
     echo 'error: PR URL must match https://github.com/<owner>/<repo>/pull/<number>' >&2
@@ -1147,7 +1188,7 @@ test_github_failed_merge_with_queue_flags_never_claims_acceptance() {
     "github-failed-merge-queue-flags: a failed merge command was reported as an armed auto-merge"
   assert_grep 'base branch main requires the merge queue; retry with:' "$case_dir/stderr" \
     "github-failed-merge-queue-flags: the failed merge command lost its concrete retry guidance"
-  assert_grep 'task-x1 https://github.com/example/repo/pull/74 --attended-override -- --auto --merge' "$case_dir/stderr" \
+  assert_grep 'task-x1 https://github.com/example/repo/pull/74 --captain-approval fixture-captain-instruction --attended-override -- --auto --merge' "$case_dir/stderr" \
     "github-failed-merge-queue-flags: the retry guidance named no queue flags"
   assert_no_grep 'verified: ' "$case_dir/stdout" \
     "github-failed-merge-queue-flags: a failed merge command was reported as verified"
@@ -2922,6 +2963,7 @@ test_secondmate_without_parent_binding_is_loud() {
   pass "a secondmate home that cannot report upward says so instead of merging in silence"
 }
 
+if [ "${FM_PR_MERGE_POLICY_ONLY:-0}" != 1 ]; then
 test_github_zero_exit_queue_required_refuses_with_exact_retry
 test_github_closed_unqueued_outcome_omits_retry_flags
 test_github_agreeing_queue_rules_keep_retry_guidance
@@ -2988,6 +3030,7 @@ test_forgejo_missing_tool_refuses_before_recording
 test_forgejo_rejected_merge_is_never_trusted_by_exit_status
 test_forgejo_transient_confirm_read_failure_still_persists_authority
 test_forgejo_merge_method_and_extra_args
+fi
 
 # The merge gate asks whether the task is still held for the captain. A home
 # that carries no backlog records no captain calls at all, so nothing can be
@@ -3560,7 +3603,7 @@ test_allow_red_requires_one_separate_name() {
   pass "fm-pr-merge accepts exactly one separately named red-check waiver"
 }
 
-test_away_record_permits_any_green_merge_under_away_authority() {
+test_approved_green_merge_keeps_away_posture_provenance() {
   local case_dir rc url head
   head=acacacacacacacacacacacacacacacacacacacac
   url=https://github.com/example/repo/pull/83
@@ -3614,12 +3657,12 @@ test_away_record_permits_any_green_merge_under_away_authority() {
     *"$url") ;;
     *) fail "attended-untagged: the attended outcome carried an authority tag: $(grep -F 'merge landed' "$case_dir/state/.wake-queue")" ;;
   esac
-  pass "while the away-posture record exists any green merge lands under away authority, yolo or not, and attended merges stay untagged"
+  pass "approved green merges retain away posture provenance, and attended merges stay untagged"
 }
 
 # While the away-posture record exists main is parked, so the supervision
 # branch actor may reach the merge gate - and meets exactly the gate main
-# would: any task merges green at its live head under away authority, a red
+# would: approved or explicitly granted green tasks merge under away posture, a red
 # one is refused whatever the words say, and without the record the branch is
 # refused at the role partition before any forge call
 # (docs/pi-supervision-branch.md "Postures").
@@ -3642,7 +3685,7 @@ test_away_branch_actor_merges_green_under_the_record() {
   [ ! -e "$case_dir/gh.log" ] || assert_no_grep 'pr ' "$case_dir/gh.log" \
     "away-branch-attended: gh ran for an attended branch merge"
 
-  # No yolo and no grant list: the record alone relocates the green merge.
+  # The record relocates the actor; run_pr_merge separately attests approval.
   case_dir=$(make_case away-branch-green)
   mkdir -p "$case_dir/wt" "$case_dir/home"
   add_gh_mocks "$case_dir" "$head"
@@ -4438,6 +4481,7 @@ test_allow_missing_refused_on_forgejo() {
   pass "fm-pr-merge refuses --allow-missing on Forgejo"
 }
 
+if [ "${FM_PR_MERGE_POLICY_ONLY:-0}" != 1 ]; then
 test_gitlab_head_override_args_refuse_before_recording
 test_secondmate_merge_reports_upward_once
 test_secondmate_merge_reports_on_the_local_route
@@ -4471,7 +4515,7 @@ test_allow_red_still_waives_only_the_current_failure
 test_allow_red_is_refused_while_away
 test_quiet_record_keeps_merges_attended
 test_allow_red_requires_one_separate_name
-test_away_record_permits_any_green_merge_under_away_authority
+test_approved_green_merge_keeps_away_posture_provenance
 test_away_branch_actor_merges_green_under_the_record
 test_away_branch_refuses_when_record_archived_during_preflight
 test_away_posture_refuses_asynchronous_merge_paths
@@ -4494,3 +4538,211 @@ test_app_bound_required_status_context_matches_by_name
 test_required_partial_reads_report_all_failures
 test_allow_red_refused_on_forgejo
 test_allow_missing_refused_on_forgejo
+fi
+
+# Focused policy/taskless cases share the real executable and forge fixtures.
+# FM_PR_MERGE_POLICY_ONLY=1 selects these without the legacy regression walk.
+write_fixture_grant() {
+  local config=$1
+  mkdir -p "$config"
+  cat > "$config/merge-policy.json" <<'JSON'
+{"version":1,"bindings":[{"repository":"https://github.com/example/repo","base":"main","system":"platform","environment":"kstage","autonomous_paths":["src/*"]}],"grants":[{"id":"fixture-green-grant","repository":"https://github.com/example/repo","system":"platform","environment":"kstage","all_checks_green":true,"report_after":true}],"sensitive_paths":[]}
+JSON
+  chmod 0600 "$config/merge-policy.json"
+}
+
+policy_run() {
+  local case_dir=$1
+  shift
+  POLICY_RC=0
+  run_pr_merge "$case_dir" "$@" > "$case_dir/stdout" 2> "$case_dir/stderr" || POLICY_RC=$?
+}
+
+assert_policy_outcome() {
+  local case_dir=$1 outcome=$2 record
+  record=$(find "$case_dir/state" -name '.merge-decision.*' -type f)
+  [ -n "$record" ] || fail "policy decision was not retained"
+  jq -e --arg outcome "$outcome" '.outcome == $outcome' "$record" >/dev/null \
+    || fail "policy audit did not record $outcome"
+}
+
+test_taskless_needs_real_approval_and_never_creates_a_task() {
+  local case_dir url=https://github.com/example/repo/pull/120
+  case_dir=$(make_case taskless-approval)
+  add_gh_mocks "$case_dir" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  rm "$case_dir/state/task-x1.meta"
+  FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" --taskless "$url"
+  expect_code 1 "$POLICY_RC" "taskless attended session must not imply approval"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "unapproved taskless request merged"
+  # Each attempt has its own audit; inspect the approved attempt separately.
+  rm "$case_dir/state"/.merge-decision.*
+  policy_run "$case_dir" --taskless "$url"
+  expect_code 0 "$POLICY_RC" "approved taskless request: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 120 example/repo --squash
+  [ -z "$(find "$case_dir/state" -name '*.meta' -o -name '*.pr-poll' -o -name '*.check.sh')" ] \
+    || fail "taskless request fabricated task metadata or a task poll"
+  assert_policy_outcome "$case_dir" merged
+  jq -e '.task == null and .facts.approval == "fixture-captain-instruction"' \
+    "$case_dir/state"/.merge-decision.* >/dev/null || fail "taskless approval audit lost provenance"
+  assert_grep "merge landed: $url authority=captain taskless" "$case_dir/state/.wake-queue" \
+    "taskless landed outcome was not durably reported"
+  pass "taskless merges share live preflight, require concrete approval, and create no task"
+}
+
+test_taskless_preserves_required_producer_and_named_waivers() {
+  local case_dir head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  case_dir=$(make_case taskless-producer)
+  add_gh_mocks "$case_dir" "$head"
+  rm "$case_dir/state/task-x1.meta"
+  write_github_required "$case_dir" ruleset:ci
+  jq '.[1].parameters.required_status_checks[0].integration_id=15368' \
+    "$case_dir/github-required-rules.json" > "$case_dir/updated.json"
+  mv "$case_dir/updated.json" "$case_dir/github-required-rules.json"
+  printf '{"check_runs":[{"name":"ci","app":{"id":42},"head_sha":"%s"}]}\n' "$head" \
+    > "$case_dir/github-runs.json"
+  policy_run "$case_dir" --taskless https://github.com/example/repo/pull/121
+  expect_code 1 "$POLICY_RC" "taskless wrong producer must refuse"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "taskless producer binding was bypassed"
+  policy_run "$case_dir" --taskless https://github.com/example/repo/pull/121 --allow-missing unrelated
+  expect_code 1 "$POLICY_RC" "taskless waiver must match the exact required name"
+  policy_run "$case_dir" --taskless https://github.com/example/repo/pull/121 --allow-missing ci
+  expect_code 0 "$POLICY_RC" "taskless exact attended named waiver: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 121 example/repo --squash
+  pass "taskless preflight retains app-bound requirements and exact named waivers"
+}
+
+test_taskless_grant_and_sensitive_precedence() {
+  local case_dir variant
+  for variant in green sensitive kind unclassified truncated; do
+    case_dir=$(make_case "taskless-grant-$variant")
+    add_gh_mocks "$case_dir" cccccccccccccccccccccccccccccccccccccccc
+    rm "$case_dir/state/task-x1.meta"
+    write_fixture_grant "$case_dir/home/config"
+    case "$variant" in
+      sensitive) printf '[{"filename":"src/iam.py"}]\n' > "$case_dir/github-policy-files.json" ;;
+      unclassified) printf '[{"filename":"other/feature.py"}]\n' > "$case_dir/github-policy-files.json" ;;
+      truncated) printf '[]\n' > "$case_dir/github-policy-files.json" ;;
+    esac
+    if [ "$variant" = kind ]; then
+      FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" --taskless https://github.com/example/repo/pull/122 --kind spend
+    else
+      FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" --taskless https://github.com/example/repo/pull/122
+    fi
+    if [ "$variant" = green ]; then
+      expect_code 0 "$POLICY_RC" "green grant: $(cat "$case_dir/stderr")"
+      assert_policy_outcome "$case_dir" merged
+      assert_grep 'authority=grant taskless' "$case_dir/state/.wake-queue" "grant outcome report missing"
+    else
+      expect_code 1 "$POLICY_RC" "unsafe/unclassified grant $variant must refuse"
+      assert_no_grep 'pr merge' "$case_dir/gh.log" "grant overrode $variant"
+    fi
+  done
+  pass "taskless exact green grants cannot override sensitivity or incomplete classification"
+}
+
+test_taskless_queued_and_unconfirmed_are_not_landed() {
+  local case_dir variant
+  for variant in queued unconfirmed; do
+    case_dir=$(make_case "taskless-outcome-$variant")
+    add_gh_mocks "$case_dir" dddddddddddddddddddddddddddddddddddddddd
+    rm "$case_dir/state/task-x1.meta"
+    if [ "$variant" = queued ]; then
+      write_github_outcome "$case_dir" OPEN false true main
+    else
+      write_github_outcome "$case_dir" OPEN false false main
+    fi
+    policy_run "$case_dir" --taskless https://github.com/example/repo/pull/123
+    if [ "$variant" = queued ]; then
+      expect_code 0 "$POLICY_RC" "confirmed queue should be reported only as queued"
+      assert_grep 'is queued' "$case_dir/stdout" "queue proof was not reported"
+    else
+      expect_code 1 "$POLICY_RC" "unconfirmed merge must refuse"
+    fi
+    assert_policy_outcome "$case_dir" "$variant"
+    assert_absent "$case_dir/state/.wake-queue" "non-landed request published a landed outcome"
+    assert_no_grep 'is merged' "$case_dir/stdout" "non-landed request was called merged"
+  done
+  pass "taskless accepted/queued requests are never published as landed"
+}
+
+test_taskless_role_and_away_controls() {
+  local case_dir
+  case_dir=$(make_case taskless-branch-attended)
+  add_gh_mocks "$case_dir" eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  rm "$case_dir/state/task-x1.meta"
+  FM_SUPERVISION_ACTOR=branch policy_run "$case_dir" --taskless https://github.com/example/repo/pull/124
+  expect_code 6 "$POLICY_RC" "attended branch actor must not merge taskless PRs"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "taskless bypassed actor partition"
+  case_dir=$(make_case taskless-away-grant)
+  add_gh_mocks "$case_dir" eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  rm "$case_dir/state/task-x1.meta"
+  write_fixture_grant "$case_dir/home/config"
+  write_away_record "$case_dir" --words 'merge only the explicitly granted green platform change'
+  FM_TEST_NO_APPROVAL=1 FM_SUPERVISION_ACTOR=branch policy_run "$case_dir" --taskless https://github.com/example/repo/pull/125
+  expect_code 0 "$POLICY_RC" "away branch grant: $(cat "$case_dir/stderr")"
+  case_dir=$(make_case taskless-away-queue)
+  add_gh_mocks "$case_dir" eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  rm "$case_dir/state/task-x1.meta"
+  write_away_record "$case_dir"
+  printf 'merge_method=SQUASH\n' > "$case_dir/github-rules"
+  policy_run "$case_dir" --taskless https://github.com/example/repo/pull/126
+  expect_code 2 "$POLICY_RC" "away taskless merge queue must refuse"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "taskless bypassed away queue control"
+  pass "taskless requests preserve actor relocation and synchronous-away queue controls"
+}
+
+test_policy_reads_root_not_inherited_copies() {
+  local case_dir parent
+  parent="$TMP_ROOT/policy-central-parent"
+  mkdir -p "$parent/config" "$parent/state"
+  case_dir=$(make_home_case policy-root-home local "$parent")
+  add_gh_mocks "$case_dir" ffffffffffffffffffffffffffffffffffffffff
+  rm "$case_dir/state/task-x1.meta"
+  printf 'malformed inherited copy\n' > "$case_dir/home/config/merge-policy.json"
+  write_fixture_grant "$parent/config"
+  FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" --taskless https://github.com/example/repo/pull/127
+  expect_code 0 "$POLICY_RC" "child must read root policy: $(cat "$case_dir/stderr")"
+  printf 'malformed root override\n' > "$parent/config/merge-policy.json"
+  write_fixture_grant "$case_dir/home/config"
+  : > "$case_dir/gh.log"
+  policy_run "$case_dir" --taskless https://github.com/example/repo/pull/128
+  expect_code 1 "$POLICY_RC" "malformed root policy must refuse even with approval"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "malformed root fell back to inherited policy"
+  pass "descendants read the root policy directly and never fall back on malformed authority"
+}
+
+test_taskless_other_forges_keep_outcome_proof() {
+  local case_dir
+  case_dir=$(make_gitlab_case taskless-gitlab)
+  rm "$case_dir/state/task-x1.meta"
+  policy_run "$case_dir" --taskless "$MR_URL"
+  expect_code 0 "$POLICY_RC" "taskless GitLab merge: $(cat "$case_dir/stderr")"
+  assert_policy_outcome "$case_dir" merged
+  case_dir=$(make_gitlab_case taskless-gitlab-unconfirmed)
+  rm "$case_dir/state/task-x1.meta"
+  : > "$case_dir/glab-stays-open"
+  policy_run "$case_dir" --taskless "$MR_URL"
+  expect_code 1 "$POLICY_RC" "taskless GitLab must not accept an unconfirmed merge"
+  assert_policy_outcome "$case_dir" unconfirmed
+  assert_absent "$case_dir/state/.wake-queue" "unconfirmed GitLab request was reported landed"
+  case_dir=$(make_forgejo_case taskless-forgejo)
+  rm "$case_dir/state/task-x1.meta"
+  policy_run "$case_dir" --taskless "$FJ_URL"
+  expect_code 0 "$POLICY_RC" "taskless Forgejo merge: $(cat "$case_dir/stderr")"
+  assert_policy_outcome "$case_dir" merged
+  case_dir=$(make_forgejo_case taskless-forgejo-unconfirmed)
+  rm "$case_dir/state/task-x1.meta"
+  : > "$case_dir/tea-merge-fails"
+  policy_run "$case_dir" --taskless "$FJ_URL"
+  expect_code 1 "$POLICY_RC" "Forgejo zero-exit rejection must remain refused"
+  assert_policy_outcome "$case_dir" unconfirmed
+  pass "taskless GitLab and Forgejo retain their live-head and terminal-proof guards"
+}
+
+test_taskless_needs_real_approval_and_never_creates_a_task
+test_taskless_preserves_required_producer_and_named_waivers
+test_taskless_grant_and_sensitive_precedence
+test_taskless_queued_and_unconfirmed_are_not_landed
+test_taskless_role_and_away_controls
+test_policy_reads_root_not_inherited_copies
+test_taskless_other_forges_keep_outcome_proof

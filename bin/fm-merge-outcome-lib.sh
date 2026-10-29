@@ -113,3 +113,27 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
   [ ! -e "${FM_CONFIG_OVERRIDE:-$home/config}/fleet-ledger" ] || [ "$status" -ne 0 ] || FM_HOME=$home FM_STATE_OVERRIDE=$state "$_FM_MERGE_OUTCOME_LIB_DIR/fm-fleet-ledger.sh" merged "$id" pr "$FM_PR_URL" || true
   return "$status"
 }
+
+# A taskless outcome uses the same home-role destination, but has no task
+# lifecycle, poll, metadata, or merge-notification marker to create or mutate.
+fm_merge_outcome_report_taskless() { # <home> <state> <canonical-url> <policy-authority>
+  local home=$1 state=$2 url=$3 authority=$4 destination status=0 line self_rc=0
+  # shellcheck disable=SC2034 # Sourced wake helpers consume scoped globals.
+  local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+  case "$authority" in captain|grant) ;; *) return 2 ;; esac
+  fm_pr_url_parse "$url" || return 2
+  [ -d "$state" ] && [ ! -L "$state" ] || return 1
+  if destination=$(fm_parent_channel_destination "$home" "$state"); then
+    line="done [key=merged-pr-$FM_PR_URL]: merged $FM_PR_URL authority=$authority taskless"
+    fm_parent_channel_append_once "$destination" "$(status_stamp_line "$line")" || status=1
+  else
+    self_rc=$?
+    [ "$self_rc" -eq 1 ] || return 3
+    STATE=$state
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$_FM_MERGE_OUTCOME_LIB_DIR/fm-wake-lib.sh"
+    fm_wake_append check "merged-pr-$FM_PR_URL" \
+      "check: merge landed: $FM_PR_URL authority=$authority taskless" || status=1
+  fi
+  return "$status"
+}

@@ -102,9 +102,9 @@
 #   fm-afk-contract.sh archived <entered_epoch>   print that archived record's path
 #
 # CROSS-SUBSYSTEM LOCK (state/.afk-contract.lock; this script is its one owner).
-# This record is authority another subsystem reads and then ACTS on outside this
-# script: bin/fm-pr-merge.sh reads an away record as away merge authority
-# and afterwards hands a merge to the forge. A publication, replacement, or
+# This record carries posture another subsystem reads and then ACTS on outside
+# this script: bin/fm-pr-merge.sh combines it with its separate central policy
+# before handing a merge to the forge. A publication, replacement, or
 # archive landing between that read and the forge handoff would land a merge on
 # authority that no longer holds, so the two subsystems share one lock instead of
 # each locking its own records: the record-mutating subcommands (enter,

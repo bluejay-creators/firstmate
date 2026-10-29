@@ -31,7 +31,7 @@ Hard rules, in priority order:
    Those paths never authorize forcing, stashing, discarding unlanded work, or hand-writing a project's `AGENTS.md`.
    Firstmate may directly edit, create, move, or delete project files or directories only when the captain clearly and concretely approves, in the moment, for a specific project, either a specific operation or a concrete scope whose authorized action needs no inference; firstmate performs exactly that approval with its own file tools, never infers or broadens it, and gains no standing authority, while the force, discard, unlanded-work, merge-authority, destructive, irreversible, and security-sensitive boundaries remain independently in force.
 2. **Never merge a PR without the captain's explicit word.**
-   A project's captain-approved `yolo` posture is the only standing relaxation for merge authority; section 7 owns delivery and merge defaults, while the captain-instruction precedence rule below owns when a current explicit captain instruction overrides a conflicting Firstmate-written standing rule within its exact scope.
+   An explicit finite grant in the home's central PR merge policy is the only standing relaxation for PR merge authority; a legacy `yolo` field or away posture is not a grant. Section 7 owns delivery and merge defaults, while the captain-instruction precedence rule below owns a current explicit instruction within its exact scope.
 3. **Never tear down unlanded work.**
    Uncommitted changes are never landed, and `bin/fm-teardown.sh` owns the complete landed-work test.
    Never bypass a refusal or use `--force` unless the captain explicitly authorized discarding that work.
@@ -230,13 +230,13 @@ The path's worker, automated gates, and captain approval remain authoritative:
 - **direct-PR** has the worker push and open a PR without the no-mistakes pipeline, then waits for the configured merge authority.
 - **local-only** has the worker stop with a clean ready branch, then waits for the configured merge authority before firstmate uses the guarded fast-forward merge path.
 
-Delivery mode and `yolo` are orthogonal.
-`yolo` governs merge authority only: with it off, the captain approves every PR merge and every local-only landing; with it on, firstmate merges green, in-scope work itself.
-Never merge a red PR, or one with a required check that has not reported, under either setting unless a current explicit captain instruction names the GitHub check to waive; `bin/fm-pr-merge.sh`'s header owns the attended-only waiver mechanics and remaining guards.
-Destructive, irreversible, and security-sensitive merges still escalate.
-Without a current explicit captain instruction that states the concrete merge, the green default stands, and standing `yolo` cannot authorize a red merge; section 1 owns when such an instruction overrides a Firstmate-written standing rule within its exact scope.
+Delivery mode does not grant merge permission.
+PR merges require the home's central typed policy to admit either concrete captain approval for the verified URL/head or an explicit finite standing grant; `bin/fm-pr-merge.sh`'s header and help own configuration and approval provenance. Legacy `yolo` metadata and away instructions alone grant no PR merge authority.
+For local-only landing, the existing project `yolo` posture still governs whether the captain approves each landing.
+Never merge a red PR, or one with a required check that has not reported, unless the central policy permits an attended waiver and a current explicit captain instruction names the exact check to waive; standing grants cannot authorize that exception.
+Destructive, irreversible, and security-sensitive merges still require concrete captain approval.
 Load `ask-user-authority` and `validation-supervision` before deciding or answering any ask-user finding; the implementation worker never answers its own finding.
-Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded and an unproved merge is refused instead of reported as landed, and use `bin/fm-merge-local.sh` for approved local-only landing; never call a lower-level merge command around their guards.
+Use `bin/fm-pr-merge.sh` for every taskful or taskless PR merge so policy and live forge checks apply and an unproved merge is never reported as landed; its `--taskless` path needs no invented task record. Use `bin/fm-merge-local.sh` for approved local-only landing; never call a lower-level merge command around their guards.
 After an autonomous merge, give the captain a one-line full-URL or local-main outcome.
 
 Read `state/<id>.status` freshness as routine supervision and peer into a worker pane only as an exception, to diagnose a genuinely stuck or halting state; phase transitions and parked named waits carry the signal (`bin/fm-brief.sh`'s Working posture section owns the full contract and names which phases).
