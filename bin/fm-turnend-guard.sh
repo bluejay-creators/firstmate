@@ -294,6 +294,13 @@ if [ "$CLAUDE_MODE" -eq 1 ] && fm_session_lock_foreign_owner_live "$STATE"; then
 fi
 
 if [ "$CLAUDE_MODE" -eq 0 ]; then
+  # A re-arm publishes the singleton pid before its ownership metadata.
+  # Re-read the full strict proof once after that short publication window.
+  # A fresh beacon alone, a dead pid, or foreign ownership still cannot pass.
+  sleep 0.2
+  if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
+    allow_supervised_stop
+  fi
   block_stop
 fi
 

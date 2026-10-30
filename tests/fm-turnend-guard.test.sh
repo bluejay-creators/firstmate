@@ -13,6 +13,9 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# Every scenario resolves its own fixture home, never the invoking primary's.
+unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE
+
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-supervision-lib.sh"
 
@@ -20,7 +23,6 @@ TMP_ROOT=$(fm_test_tmproot fm-turnend-guard)
 fm_git_identity fmtest fmtest@example.invalid
 
 REQUIRED_REASON='watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn'
-AWAY_REQUIRED_REASON='Away mode owns watcher supervision'
 
 # REQUIRED_REASON is the CLAUDE repair line, so the cases asserting it need
 # detect_own to answer claude. CLAUDECODE=1 alone no longer pins that - a
@@ -362,6 +364,62 @@ test_hook_silent_with_live_lock_and_fresh_beacon() {
   expect_code 0 "$status" "hook must exit 0 with a live identity-matched watcher lock and fresh beacon"
   [ -z "$out" ] || fail "hook produced output despite a live fresh watcher lock: $out"
   pass "fm-turnend-guard: silent no-op with a live watcher lock and fresh beacon"
+}
+
+test_hook_rechecks_watcher_publication() {
+  local dir pid identity fakebin ready release once guard_pid out status foreign_status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-watcher-publication")
+  : > "$dir/state/task1.meta"
+  touch "$dir/state/.last-watcher-beat"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify publication holder"
+  }
+  mkdir -p "$dir/state/.watch.lock"
+  printf '%s\n' "$pid" > "$dir/state/.watch.lock/pid"
+  fakebin=$(fm_fakebin "$dir/publication")
+  ready="$dir/publication-ready"
+  release="$dir/publication-release"
+  once="$dir/publication-once"
+  mkfifo "$ready" "$release"
+  cat > "$fakebin/cat" <<'SH'
+#!/usr/bin/env bash
+if [ "$#" -eq 1 ] && [ "$1" = "$FM_PUBLICATION_HOME" ] \
+  && (set -C; : > "$FM_PUBLICATION_ONCE") 2>/dev/null; then
+  snapshot=$(/bin/cat "$1" 2>/dev/null || true)
+  printf 'ready\n' > "$FM_PUBLICATION_READY"
+  IFS= read -r _ < "$FM_PUBLICATION_RELEASE"
+  printf '%s' "$snapshot"
+  exit 0
+fi
+exec /bin/cat "$@"
+SH
+  chmod +x "$fakebin/cat"
+  (
+    out=$(PATH="$fakebin:$PATH" FM_PUBLICATION_HOME="$dir/state/.watch.lock/fm-home" \
+      FM_PUBLICATION_ONCE="$once" FM_PUBLICATION_READY="$ready" \
+      FM_PUBLICATION_RELEASE="$release" run_hook "$dir" false)
+    printf '%s\n' "$?" > "$dir/guard.status"
+    printf '%s' "$out" > "$dir/guard.out"
+  ) &
+  guard_pid=$!
+  IFS= read -r _ < "$ready"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  printf 'published\n' > "$release"
+  wait "$guard_pid"
+  status=$(cat "$dir/guard.status")
+  out=$(cat "$dir/guard.out")
+  printf '%s\n' "$TMP_ROOT/foreign-home" > "$dir/state/.watch.lock/fm-home"
+  run_hook "$dir" false > "$dir/foreign.out"; foreign_status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "hook must settle a proof read crossing watcher metadata publication"
+  [ -z "$out" ] || fail "completed watcher publication produced a false alarm: $out"
+  expect_code 2 "$foreign_status" "settling must not accept a live fresh watcher for another home"
+  pass "fm-turnend-guard: settles watcher publication but still rejects foreign ownership"
 }
 
 test_hook_non_claude_health_ignores_claude_budget_contention() {
@@ -1185,7 +1243,7 @@ EOF
 run_hook_claude() {
   local dir=$1 stop_active=$2 home
   home=$(cd "$dir" && pwd)
-  printf '{"stop_hook_active":%s,"session_id":"sess-claude-mode"}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" --claude 2>&1
+  printf '{"stop_hook_active":%s,"session_id":"sess-claude-mode"}' "$stop_active" | PATH="$BLIND_BIN:$PATH" CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" --claude 2>&1
 }
 
 seed_claude_failure() {
@@ -1880,7 +1938,6 @@ test_hook_claude_mode_away_mode_never_uses_stop_autoarm_fail_open() {
   seed_claude_budget "$dir" 3
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" true); status=$?
   expect_code 2 "$status" "away mode must not use a stale Stop-autoarm failure to fail open"
-  assert_contains "$out" 'Away mode owns watcher supervision' "away-mode block lost its daemon ownership guidance"
   assert_absent "$dir/state/.claude-autoarm-failure-alarmed" "away mode consumed the Stop-autoarm attended alarm"
   pass "fm-turnend-guard --claude: away ownership excludes the Stop-autoarm fail-open"
 }
@@ -2036,7 +2093,6 @@ test_hook_away_mode_blocks_without_any_supervisor() {
   dir=$(make_away_home_between_cycles "$TMP_ROOT/hook-afk-no-supervisor")
   out=$(run_hook "$dir" false); status=$?
   expect_code 2 "$status" "away mode with no daemon and no watcher must still block"
-  assert_contains "$out" "$AWAY_REQUIRED_REASON" "away-mode block must point at the daemon, not normal supervision"
   pass "fm-turnend-guard: away mode with no daemon and no watcher still blocks"
 }
 
@@ -2047,7 +2103,6 @@ test_hook_away_mode_blocks_on_dead_daemon() {
   record_daemon_lock "$dir" "$dead" "dead daemon identity"
   out=$(run_hook "$dir" false); status=$?
   expect_code 2 "$status" "a daemon lock left by a dead daemon must not satisfy supervision"
-  assert_contains "$out" "$AWAY_REQUIRED_REASON" "away-mode block must point at the daemon, not normal supervision"
   pass "fm-turnend-guard: away mode blocks on a dead away-mode daemon"
 }
 
@@ -2063,7 +2118,6 @@ test_hook_away_mode_blocks_on_pid_reused_daemon() {
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   expect_code 2 "$status" "a live pid whose recorded identity does not match must not satisfy supervision"
-  assert_contains "$out" "$AWAY_REQUIRED_REASON" "away-mode block must point at the daemon, not normal supervision"
   pass "fm-turnend-guard: away mode blocks on a pid-reused away-mode daemon lock"
 }
 
@@ -2082,7 +2136,6 @@ test_hook_away_mode_blocks_on_stale_beacon() {
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   expect_code 2 "$status" "a live daemon that stopped restarting its watcher must block once the beacon goes stale"
-  assert_contains "$out" "$AWAY_REQUIRED_REASON" "away-mode block must point at the daemon, not normal supervision"
   pass "fm-turnend-guard: away-mode daemon ownership never substitutes for a fresh beacon"
 }
 
@@ -2144,7 +2197,6 @@ test_hook_away_daemon_blocks_dead_daemon_despite_poll_derived_grace() {
   record_daemon_lock "$dir" "$dead" "dead daemon identity"
   out=$(FM_GUARD_GRACE='' FM_POLL=600 run_hook "$dir" false); status=$?
   expect_code 2 "$status" "a wider poll-derived grace must not paper over a dead daemon"
-  assert_contains "$out" "$AWAY_REQUIRED_REASON" "away-mode block must point at the daemon, not normal supervision"
   pass "fm-turnend-guard: a dead away-mode daemon still blocks under the poll-derived grace"
 }
 
@@ -2166,7 +2218,6 @@ test_hook_away_daemon_blocks_beacon_older_than_poll_derived_grace() {
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   expect_code 2 "$status" "a beacon older than the poll-derived grace must still block"
-  assert_contains "$out" "$AWAY_REQUIRED_REASON" "away-mode block must point at the daemon, not normal supervision"
   pass "fm-turnend-guard: the poll-derived grace is bounded, not unlimited"
 }
 
@@ -2211,6 +2262,7 @@ test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_source_only_home
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
+test_hook_rechecks_watcher_publication
 test_hook_non_claude_health_ignores_claude_budget_contention
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary

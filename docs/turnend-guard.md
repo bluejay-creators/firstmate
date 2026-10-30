@@ -94,6 +94,12 @@ The turn-end guard needs that strict check because it fires at the turn boundary
 At that boundary the auto-arm is bringing a fresh watcher up for the upcoming idle period.
 The guard cooperates with that arm rather than trusting a beacon left by the cycle that just ended.
 
+If the first strict check fails on a non-Claude stop, the guard waits 200 milliseconds and reads the complete proof once more before blocking.
+This bounds the observation gap between a re-arm publishing its singleton PID and writing its home, script path, and process identity.
+The second read must still prove a live matching process, this home's complete ownership metadata, and a fresh beacon.
+An absent, dead, foreign, incomplete, or stale owner still blocks; the guard never arms a watcher itself.
+Claude retains its existing bounded cooperative wait below.
+
 ### Foreign session-lock owner
 
 When an active home instead has a live session lock held by a verified harness that the current session does not own, the Claude guard emits a read-only ownership diagnostic and allows the turn to end safely.
@@ -549,6 +555,7 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 - Child-worktree exclusion.
 - `FM_HOME` and `FM_STATE_OVERRIDE` precedence.
 - The live-lock and fresh-beacon guard predicate.
+- A deterministic read crossing watcher ownership publication, followed by a foreign-home refusal under the same fresh beacon.
 - The cooperative `--claude` open-generation claim wait.
 - Monotonic failed-epoch progression.
 - Bounded attended fail-open.
