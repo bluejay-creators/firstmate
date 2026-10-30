@@ -141,6 +141,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-tool-update-check.sh` | Report watched tooling with an update available, and updates installed but left inert by PATH order |
 | `fm-propel.sh`           | Bounded Beads propulsion dispatcher: classifies ready beads, pairs assignees, recurses on blockers, surfaces gates ([propel.md](propel.md)) |
 | `fm-propel-pane-check.sh` | Ask whether the declared machine capacity still admits one more crewmate on the propel path |
+| `fm-bead-accountability-check.sh` | Register and poll board accountability without dispatching work ([contract](propel.md#task-accountability-and-committed-deadlines)) |
+| `fm_bead_accountability.py` | Check ownership/dependencies/readiness/deadlines and record owner-authored ETA revisions through Beads and the existing Inbox |
 | `fm-startup-growth-check.sh` | Daily metadata-only growth check for startup memory and tracked startup/instruction surfaces |
 | `fm-pr-lib.sh`           | Own canonical task and PR validation plus private atomic PR-poll publication, merge-notification identity, and retirement |
 | `fm-pr-poll.sh`          | Provide the byte-static watcher program for validated pull-request, merge-request, and Gerrit-change poll sidecars |

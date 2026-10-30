@@ -417,6 +417,9 @@ An unjoined home (no `config/beads-board`) exits 0 with no `bd` call.
 Lifecycle marking is automatic: `bin/fm-spawn.sh --bead <bead-id>` (or a `bead: <bead-id>` line in the backlog item's note, read when the automatic transition gate applies) records the linkage on the task record, marks the bead `in_progress`, and stamps its start at dispatch; [`bin/fm-teardown.sh`](../bin/fm-teardown.sh) and [`bin/fm-pr-merge.sh`](../bin/fm-pr-merge.sh) close the bead on landed completion.
 All board mutations are best-effort and never gate the launch, cleanup, or merge.
 
+Structured agent commitments and ownership/graph/progress checks use the [accountability contract](propel.md#task-accountability-and-committed-deadlines), not a moving `updated_at` deadline.
+The owning home's `fm-bead-accountability-check.sh` reuses `config/beads-board`, the check registrar and its existing Inbox; activation is separate from source delivery.
+
 ### Automatic dispatch and completion
 
 When the automatic transition gate applies, dispatch and completion each move the work item in the same run that creates or removes its task record.
