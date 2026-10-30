@@ -85,6 +85,26 @@ class Accountability(unittest.TestCase):
                          [('invalid', 'malformed-parked')])
         self.assertEqual(observed, {})
 
+    def test_undated_explicit_approval_is_not_a_dated_person_follow_up(self):
+        rows = [
+            issue('approval-null', status='blocked', labels=['waiting'], metadata=dict(
+                eta=None, etaby='worker', waitingon='operator',
+                wait=dict(kind='approval', reason='Await scope decision; no deadline imposed'))),
+            issue('approval-absent', status='blocked', labels=['waiting'], metadata=dict(
+                etaby='worker', waitingon='operator',
+                wait=dict(kind='approval', reason='Await scope decision; no deadline imposed'))),
+            issue('malformed-eta', status='blocked', labels=['waiting'], metadata=dict(
+                eta='not-a-timestamp', etaby='worker', waitingon='operator',
+                wait=dict(kind='approval', reason='Await scope decision'))),
+            issue('malformed-date', status='blocked', labels=['waiting'], due_at='not-a-timestamp',
+                  metadata=dict(waitingon='operator', wait=dict(kind='approval', reason='Await scope decision'))),
+        ]
+        findings, observed = inspect(rows, [row['id'] for row in rows])
+        self.assertEqual({f['id'] for f in findings if f['kind'] == 'invalid'},
+                         {'malformed-eta', 'malformed-date'})
+        self.assertFalse(any(f['kind'] in ('follow-up', 'overdue', 'stalled-ready') for f in findings))
+        self.assertEqual(observed, {})
+
     def test_expired_or_unnamed_wait_is_not_a_permanent_suppression(self):
         rows = [issue('expired', status='blocked', metadata=dict(wait=dict(
                     kind='external', reason='result pending', until=PAST))),
