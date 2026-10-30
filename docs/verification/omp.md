@@ -64,3 +64,12 @@ investigative work, with `bin/fm-spawn.sh` reserved for work that changes a
 project, needs an isolated worktree or branch, must outlive the turn, or runs
 long (`.agents/skills/harness-adapters/references/harness/omp.md`).
 This posture became safe once the subagent-session stand-down above landed, including the factory-bind rule that keeps the primary's generation active across a subagent rebind (the earlier 2026-10-08 and 2026-10-13 incidents are recorded in the home's `data/learnings.md`).
+
+## Steering inbox dropped-delivery recovery
+
+The listener header in `.omp/extensions/fm-inbox-listener.ts` owns its consumption, bounded idle retry and at-least-once contract.
+`bash tests/fm-inbox-listener.test.sh` exercises a dropped queued follow-up without skipping the first record, busy and `willContinue` suppression, exact-consumption acknowledgement, late duplicate consumption and synchronous consumption during send.
+On 2026-10-30 with Node26.7.0, the new dropped-delivery regression failed before the change with `idle dropped delivery did not recover in order`, then the complete changed file passed.
+A separate real-interval Node host of the actual extension delivered two durable records with three sends after deliberately dropping the first send, and moved both records only on exact consumption.
+That smoke did not rerun a native omp interrupt or launch a worker; it is extension/timer/filesystem evidence, not a fresh vendor-runtime cancellation result.
+

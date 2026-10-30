@@ -34,6 +34,11 @@
 //     later poll or the doorbell fallback. A delivery still unconsumed at a
 //     replacement shutdown (/new, /resume, /fork) is re-delivered by the
 //     successor session's listener, which loads in the same process.
+//     Within a live session, five consecutive idle polls without consumption
+//     release only the in-memory send claim and retry the same durable record.
+//     Busy/continuing turns reset that idle count; expiry never acknowledges
+//     or skips a record. This remains at-least-once if the host delays rather
+//     than drops a queued message. The default poll makes that idle grace 15s.
 //   - Dedupe and restart safety: records are listed in numeric order and one
 //     delivery is in flight at a time; a record already in handled/ is never
 //     delivered. A listener restarted after a crash finds no live heartbeat
@@ -74,6 +79,7 @@ function positiveInteger(name: string, fallback: number): number {
 }
 
 const pollMs = positiveInteger("FM_INBOX_LISTENER_POLL_MS", 3000);
+const idlePollLimit = 5;
 const inboxDir = process.env.FM_TASK_INBOX || "";
 const heartbeatPath = inboxDir ? join(inboxDir, ".listener") : "";
 
@@ -179,9 +185,9 @@ export default function (pi: ExtensionAPI): void {
   // already proved reads false at a natural TUI agent_end.
   let busy = false;
   let timer: NodeJS.Timeout | null = null;
-  // One in-flight delivery: its exact sent text and the record it came from.
-  // Consumption acks and clears it; nothing else polls past it.
-  let pending: { record: string; content: string } | null = null;
+  // Only exact consumption acknowledges a record. A dropped host queue entry
+  // may be retried after bounded idle polls, but never while a turn is busy.
+  let pending: { record: string; content: string; idlePolls: number } | null = null;
 
   function ack(record: string): void {
     try {
@@ -205,23 +211,34 @@ export default function (pi: ExtensionAPI): void {
     }
   }
 
-  function deliverOne(): void {
-    if (pending) return;
+  function deliverOne(polling = false): void {
+    if (pending) {
+      if (!existsSync(pending.record)) {
+        pending = null; // the resident acknowledged it independently
+      } else if (!busy && polling && ++pending.idlePolls >= idlePollLimit) {
+        pending = null; // unconsumed stays durable; retry the same first record
+      } else {
+        if (busy) pending.idlePolls = 0;
+        return;
+      }
+    }
     const next = listRecords()[0];
     if (!next) return;
     const path = join(inboxDir, next);
     const body = readBody(path);
     if (body === null) return; // unreadable or mid-write; retry next poll
     const content = `Firstmate instruction from your steering inbox (record ${next}):\n\n${body}\n\nDelivered in-session by the inbox listener, which acknowledged the record once the run accepted it.`;
+    const delivery = { record: path, content, idlePolls: 0 };
+    pending = delivery; // consumption may be synchronous with sendUserMessage
     try {
       // Idle: a follow-up opens its own turn. Mid-turn: "steer" queues the
       // message into the running run's steering lane, injected at its next
       // safe boundary instead of failing the busy send.
       pi.sendUserMessage(content, { deliverAs: busy ? "steer" : "followUp" });
     } catch {
+      if (pending === delivery) pending = null;
       return; // rejected send: nothing consumed, record stays put
     }
-    pending = { record: path, content };
   }
   function startPolling(): void {
     if (timer) return;
@@ -229,7 +246,7 @@ export default function (pi: ExtensionAPI): void {
     writeHeartbeat();
     timer = setInterval(() => {
       writeHeartbeat();
-      deliverOne();
+      deliverOne(true);
     }, pollMs);
     timer.unref();
   }
@@ -246,8 +263,9 @@ export default function (pi: ExtensionAPI): void {
   pi.on?.("agent_start", () => {
     busy = true;
   });
-  pi.on?.("agent_end", () => {
-    busy = false;
+  pi.on?.("agent_end", (event: unknown) => {
+    busy = (event as { willContinue?: unknown } | null)?.willContinue === true;
+    if (busy) return;
     deliverOne();
   });
   pi.on?.("before_agent_start", (event: unknown) => {

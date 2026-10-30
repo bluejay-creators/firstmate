@@ -39,6 +39,13 @@ globalThis.fire = (name, event) => {
   const list = handlers.get(name) ?? [];
   for (const h of list) h(event, {});
 };
+if (process.env.MANUAL_POLLS === "1") {
+  globalThis.setInterval = (callback) => {
+    globalThis.pollListener = callback;
+    return { unref() {} };
+  };
+  globalThis.clearInterval = () => {};
+}
 const pi = {
   on(name, handler) {
     handlers.set(name, [...(handlers.get(name) ?? []), handler]);
@@ -46,6 +53,7 @@ const pi = {
   sendUserMessage(content, options) {
     if (process.env.REJECT_SENDS === "1") throw new Error("fixture: busy send rejected");
     sent.push({ content, options: options ?? {} });
+    if (process.env.SYNC_CONSUME === "1") fire("message_start", { message: { role: "user", content } });
     return undefined; // omp sendUserMessage returns synchronously (no promise)
   },
 };
@@ -306,10 +314,56 @@ EOF
   pass "fm-send reports in-session delivery with a live listener and falls back to the doorbell without one"
 }
 
+test_dropped_delivery_recovers_without_skipping_or_busy_replay() {
+  local inbox="$TMP_ROOT/dropped.inbox" body="$TMP_ROOT/driver-dropped.mjs" out
+  write_record "$inbox" 001.msg "interrupted queued follow-up"
+  write_record "$inbox" 002.msg "next instruction"
+  cat > "$body" <<'JS'
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+const first = sent[0].content;
+fire("agent_start", {});
+for (let n = 0; n < 50; n++) pollListener();
+if (sent.length !== 1) throw new Error("busy turn must not replay an unconsumed steer");
+fire("agent_end", { willContinue: true });
+for (let n = 0; n < 50; n++) pollListener();
+if (sent.length !== 1) throw new Error("continuing turn must not be treated as idle");
+fire("agent_end", {}); // the host dropped the queued delivery; no consume event
+if (!existsSync(join(process.env.FM_TASK_INBOX, "001.msg"))) throw new Error("unconsumed delivery was acknowledged");
+for (let n = 0; n < 20 && sent.length < 2; n++) pollListener();
+if (sent.length !== 2 || sent[1].content !== first) throw new Error("idle dropped delivery did not recover in order");
+fire("before_agent_start", { prompt: first });
+pollListener();
+if (sent.length !== 3 || !sent[2].content.includes("record 002.msg")) throw new Error("consumed retry did not unblock next record");
+fire("message_start", { message: { role: "user", content: first } });
+if (!existsSync(join(process.env.FM_TASK_INBOX, "002.msg"))) throw new Error("late duplicate consumption acknowledged another record");
+fire("before_agent_start", { prompt: sent[2].content });
+fire("session_shutdown", {});
+JS
+  out=$(DRIVER_BODY="$body" run_listener_driver "$inbox" "$body" MANUAL_POLLS=1) || fail "dropped-delivery driver failed: $out"
+  [ -f "$inbox/handled/001.msg" ] && [ -f "$inbox/handled/002.msg" ] || fail "both consumed records must be handled"
+  pass "dropped idle delivery recovers without busy replay, skipping or premature acknowledgement"
+}
+
+test_synchronous_consumption_is_not_lost() {
+  local inbox="$TMP_ROOT/synchronous.inbox" body="$TMP_ROOT/driver-synchronous.mjs" out
+  write_record "$inbox" 001.msg "accepted during send"
+  cat > "$body" <<'JS'
+for (let n = 0; n < 20; n++) pollListener();
+if (sent.length !== 1) throw new Error("synchronously consumed delivery was replayed");
+fire("session_shutdown", {});
+JS
+  out=$(DRIVER_BODY="$body" run_listener_driver "$inbox" "$body" MANUAL_POLLS=1 SYNC_CONSUME=1) || fail "synchronous-consume driver failed: $out"
+  [ -f "$inbox/handled/001.msg" ] || fail "synchronous consumption must acknowledge the record"
+  pass "consumption during send acknowledges the record without replay"
+}
+
 test_idle_delivery_acks_once
 test_mid_turn_steering_and_ack_once
 test_restart_no_redelivery
 test_rejected_send_and_heartbeat
+test_dropped_delivery_recovers_without_skipping_or_busy_replay
+test_synchronous_consumption_is_not_lost
 test_inert_without_inbox_env
 test_shell_live_check_and_delivery_selection
 test_fm_send_chooses_listener
