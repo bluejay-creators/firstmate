@@ -68,6 +68,23 @@ class Accountability(unittest.TestCase):
         self.assertEqual(findings, [])
         self.assertEqual(observed, {})
 
+    def test_nullable_eta_does_not_reactivate_retained_owner_history(self):
+        history = [dict(eta=FUTURE, etaby='worker',
+                        previous=dict(eta=PAST, etaby='worker'),
+                        recorded_at=NOW.isoformat(), reason='Owner-authored revision')]
+        rows = [
+            issue('cleared-deferred', status='deferred',
+                  metadata=dict(eta=None, etaby='worker', eta_history=history)),
+            issue('absent-parked', labels=['parked'],
+                  metadata=dict(etaby='worker', eta_history=history)),
+            issue('malformed-parked', labels=['parked'],
+                  metadata=dict(eta='not-a-timestamp', etaby='worker')),
+        ]
+        findings, observed = inspect(rows, [row['id'] for row in rows])
+        self.assertEqual([(f['kind'], f['id']) for f in findings],
+                         [('invalid', 'malformed-parked')])
+        self.assertEqual(observed, {})
+
     def test_expired_or_unnamed_wait_is_not_a_permanent_suppression(self):
         rows = [issue('expired', status='blocked', metadata=dict(wait=dict(
                     kind='external', reason='result pending', until=PAST))),
