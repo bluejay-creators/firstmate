@@ -24,7 +24,7 @@
 #   fm-inbox.sh note [--request-id <id>] [--json] -   (body from stdin)
 #   fm-inbox.sh announce [--json] <id>
 #   fm-inbox.sh reply [--json] <id> <text>... | reply [--json] <id> -
-#   fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]
+#   fm-inbox.sh receipts [--id <note-id>] [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]
 #   fm-inbox.sh ready
 #   fm-inbox.sh say  [<file.wav>]       (default: audio on stdin)
 #   fm-inbox.sh status
@@ -58,6 +58,7 @@
 # acknowledgement, announcement, and any recorded reply. Default bounds omit
 # rather than implying the first page is everything; omitted[] names the
 # surface and how to reveal it, the same convention as fm-bearings-snapshot.sh.
+# `--id` reads only that note and its reply, independent of unrelated history.
 # `reply` is how the primary publishes its actual answer against a note id.
 # Each reply is stamped with a durable per-home sequence, so the receipts cursor
 # is a strict total order and two replies recorded in the same second are both
@@ -652,27 +653,33 @@ PY
 }
 
 cmd_receipts() {
-  local after="" all_pending=0 all_handled=0 all_replies=0
+  local after="" id="" all_pending=0 all_handled=0 all_replies=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --id)
+        [ "$#" -ge 2 ] || die "receipts --id requires a note id"
+        valid_note_id "$2" || die "invalid note id"
+        id=$2
+        shift 2
+        ;;
       --after)
-        [ "$#" -ge 2 ] || die "usage: fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]"
+        [ "$#" -ge 2 ] || die "usage: fm-inbox.sh receipts [--id <note-id>] [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]"
         after=$2
         shift 2
         ;;
       --all-pending) all_pending=1; shift ;;
       --all-handled) all_handled=1; shift ;;
       --all-replies) all_replies=1; shift ;;
-      -h|--help) die "usage: fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]" ;;
+      -h|--help) die "usage: fm-inbox.sh receipts [--id <note-id>] [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]" ;;
       --*) die "unknown option for receipts: $1" ;;
-      *) die "usage: fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]" ;;
+      *) die "usage: fm-inbox.sh receipts [--id <note-id>] [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]" ;;
     esac
   done
   need_python
   python3 - "$INBOX" "$ANNOUNCED_DIR" "$REPLIES" "$FM_HOME" \
     "$RECEIPTS_PENDING_BOUND" "$RECEIPTS_HANDLED_BOUND" "$RECEIPTS_REPLIES_BOUND" \
     "$all_pending" "$all_handled" "$all_replies" "$after" \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" <<'PY'
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$id" <<'PY'
 import json, os, sys
 from pathlib import Path
 
@@ -685,6 +692,7 @@ all_handled = sys.argv[9] == "1"
 all_replies = sys.argv[10] == "1"
 after = sys.argv[11]
 generated = sys.argv[12]
+selected_id = sys.argv[13]
 
 # A record that vanishes between listing and reading - drain --ack moving a
 # note to handled/ - is skipped, and undecodable bytes are replaced, so one bad
@@ -715,7 +723,9 @@ def list_notes(folder):
     if not folder.is_dir():
         return []
     notes = []
-    for path in sorted(folder.glob("*.note"), key=lambda p: p.name, reverse=True):
+    paths = ((folder / (selected_id + ".note"),) if selected_id
+             else sorted(folder.glob("*.note"), key=lambda p: p.name, reverse=True))
+    for path in paths:
         if path.name.startswith("."):
             continue
         record = parse_record(path)
