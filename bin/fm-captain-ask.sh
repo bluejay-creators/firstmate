@@ -5,6 +5,14 @@
 # Usage:
 #   fm-captain-ask.sh "<title>" [--tldr <one-line-detail>]
 #   fm-captain-ask.sh --answer <ask-id> "<answer-text>"
+#   fm-captain-ask.sh --approval-event FILE [--dry-run]
+#   fm-captain-ask.sh --approval-reconcile
+#   fm-captain-ask.sh --approval-check
+#   fm-captain-ask.sh --approval-protocol
+#
+# Native mutation modes require explicit FM_HOME; --approval-protocol is read-only.
+# The native snapshot contract, durable identity, reconciliation and permission-only
+# result semantics belong to bin/fm-approval-prompt.py and the same captain board.
 #
 # `fm-captain-ask.sh "<title>"` creates one `captain`-label bead on the board
 # this home names in `config/beads-board` (contract: bin/fm-bead-board-lib.sh),
@@ -25,6 +33,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_APPROVAL_HOME_EXPLICIT=${FM_HOME:-}
 FM_HOME="${FM_HOME:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 # shellcheck source=bin/fm-bead-board-lib.sh
 # shellcheck disable=SC1091
@@ -108,6 +117,24 @@ command_create() {  # <title> [--tldr <text>]
 }
 
 case "${1:-}" in
+  --approval-protocol)
+    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    exec python3 "$SCRIPT_DIR/fm-approval-prompt.py" --protocol
+    ;;
+  --approval-event)
+    [ -n "$FM_APPROVAL_HOME_EXPLICIT" ] || fail "FM_HOME is required for native approval routing"
+    [ "$#" -eq 2 ] || { [ "$#" -eq 3 ] && [ "$3" = --dry-run ]; } || { usage >&2; exit 2; }
+    export FM_HOME
+    shift
+    exec python3 "$SCRIPT_DIR/fm-approval-prompt.py" --event "$@"
+    ;;
+  --approval-reconcile|--approval-check)
+    [ -n "$FM_APPROVAL_HOME_EXPLICIT" ] || fail "FM_HOME is required for native approval routing"
+    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    export FM_HOME
+    mode=${1#--approval-}
+    exec python3 "$SCRIPT_DIR/fm-approval-prompt.py" "--$mode"
+    ;;
   --answer)
     [ "$#" -eq 3 ] || { usage >&2; exit 2; }
     command_answer "$2" "$3"

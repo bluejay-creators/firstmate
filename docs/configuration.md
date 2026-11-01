@@ -404,6 +404,38 @@ With the config in place, [`bin/fm-captain-hold.sh`](../bin/fm-captain-hold.sh) 
 [`bin/fm-captain-beads-check.sh`](../bin/fm-captain-beads-check.sh) delivers each closed captain bead's close reason to the requester it names (`requester:<name>` label or the `fm-requester:` body line the mirroring writes), deduped once per bead; its `install` subcommand hash-binds it as this home's watcher check.
 Bead mirroring never gates the hold or the answer: a broken board surfaces one explicit warning while the backlog record stands.
 
+Native permission snapshots use the same board through
+`fm-captain-ask.sh --approval-event FILE`; `--approval-protocol` reports
+`firstmate.omp-approval.v1` without requiring a home. Mutation modes require an
+explicit `FM_HOME`. The JSON contract and validation belong to
+[`bin/fm-approval-prompt.py`](../bin/fm-approval-prompt.py): final native prompt,
+offered choices, dialog/session identity, origin, optional final command, and
+the actual native resolution. Do not substitute earlier tool-call arguments.
+
+One deterministic board id and an immutable request fingerprint bind each dialog.
+Retries recover a lost create receipt rather than minting another question.
+`state/captain-asks/omp/{outbox,pending,handled}` preserves captured and published
+observations across process loss; `--approval-reconcile` acknowledges outbox files
+only after durable publication. The existing supervision check calls
+`--approval-check` when this store exists, with a bounded check window and
+deduplicated error/recovery notices. No second daemon or board is introduced.
+
+Native cards name the original agent tab as the answer location and remain
+view-only on the phone. Only the observed native UI result closes their question;
+permission is never recorded as command completion. Native cancellation and
+timeout are not denial. Requests surface immediately as presentation-unchecked;
+an idempotent existing-Inbox notice asks for wording review without delaying
+delivery or changing request identity, choices, or execution authority.
+Native display text is never a requester protocol: the generic closed-bead
+delivery loop excludes native cards by their reserved label or structured kind,
+even when their quoted command contains a literal `fm-requester:` line.
+
+Deployment is separate from source delivery: install compatible native event
+support and the producer only after the phone service enforces view-only native
+cards. An old binary approval service must not consume these cards. Do not activate
+this path by merging a source change alone.
+
+
 ### Bead time expectations and overdue wakes (config/bead-eta-defaults)
 
 Every bead on the joined board carries an expected duration, resolved by [`bin/fm-bead-eta-lib.sh`](../bin/fm-bead-eta-lib.sh): a carryable `eta:<N>m` or `eta:<N>h` label wins; otherwise the home's `config/bead-eta-defaults` lines (`key=minutes`, `#` comments allowed) match the bead's non-eta labels in board order, then its `issue_type`; unmatched beads fall back to 120 minutes.

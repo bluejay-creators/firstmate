@@ -2943,6 +2943,15 @@ while :; do
     triage_log "inactive-outcome reconciliation unavailable"
   fi
 
+  # Native permission snapshots cover this home too: no peer/self-name filter.
+  # Reuse this bounded check process, never create a second polling cycle.
+  if [ -d "$STATE/captain-asks/omp" ]; then
+    FM_HOME="$FM_HOME" run_check_capture "$SCRIPT_DIR/fm-captain-ask.sh" --approval-check || exit 1
+    if [ -n "$FM_CHECK_RESULT" ]; then
+      wake "check: $FM_CHECK_RESULT"
+    fi
+  fi
+
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based so the cadence survives watcher restarts: the shared
   # .last-check gate spaces sweeps by the min interval in the set

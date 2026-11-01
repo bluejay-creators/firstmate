@@ -18,6 +18,8 @@
 #       * anything else, when this home has state/peers/peers.sh: send through
 #         `peers.sh send <name>`, the hand-launched-peer transport.
 #   - a bead with no requester marker is skipped, untouched.
+#   - native permission cards are owned by the native UI publisher. Their
+#     display text and labels never participate in this requester protocol.
 #   - every delivery is deduped under state/.captain-bead-notified/<bead-id>:
 #     a claim token is written BEFORE the send so a crash mid-delivery never
 #     double-notifies, at the stated cost of possibly dropping one notice. A
@@ -130,6 +132,8 @@ deliver_close() {  # <bead-id> <title> <reason> <requester>
 
 printf '%s' "$CLOSED_JSON" | jq -r '
   .[]
+  | select(((.labels // []) | index("omp-approval")) == null)
+  | select(((.metadata? | .approval? | .kind?) // "") != "native-omp")
   | ((.description // "") | split("\n") | map(select(startswith("fm-requester: "))) | first // "") as $body_req
   | ((.labels // []) | map(select(startswith("requester:"))) | first // "") as $label_req
   | ($body_req | sub("^fm-requester: "; "")) as $body_name

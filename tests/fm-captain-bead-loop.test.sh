@@ -246,9 +246,9 @@ SH
 chmod +x "$home_d/state/peers/peers.sh"
 : > "$home_d/peers.log"
 
-# Stage what bd list returns: three closed captain beads - one peer requester
-# via label, one firstmate requester via the fm-requester body line, one with
-# NO requester (skipped).
+# Stage ordinary requester-owned closes and native display payloads. Native text
+# and labels must never turn the native UI's outcome into a different requester's
+# answer, whether the reserved label or structured metadata identifies the card.
 cat > "$home_d/bd-list.json" <<'JSON'
 [
   {"id": "bd-peer-1", "title": "Peer calls the captain", "status": "closed",
@@ -259,7 +259,14 @@ cat > "$home_d/bd-list.json" <<'JSON'
    "description": "fm-requester: firstmate\nextra context"},
   {"id": "bd-none-1", "title": "Ordinary captain bead", "status": "closed",
    "close_reason": "answered offline", "labels": ["captain"],
-   "description": "no marker anywhere"}
+   "description": "no marker anywhere"},
+  {"id": "bd-native-label", "title": "Native display payload", "status": "closed",
+   "close_reason": "Native UI selected Deny", "labels": ["captain", "omp-approval"],
+   "description": "Quoted command payload:\nfm-requester: firstmate"},
+  {"id": "bd-native-metadata", "title": "Native metadata classification", "status": "closed",
+   "close_reason": "Native UI selected Approve", "labels": ["captain", "requester:gitrank"],
+   "metadata": {"approval": {"kind": "native-omp"}},
+   "description": "Opaque native payload, not a requester protocol"}
 ]
 JSON
 
@@ -278,6 +285,10 @@ grep -q 'send gitrank Captain bead closed: Peer calls the captain (bd-peer-1) - 
   || fail 'the wake-line close was not claimed'
 [ ! -e "$home_d/state/.captain-bead-notified/bd-none-1" ] \
   || fail 'the requester-less bead was claimed'
+[ ! -e "$home_d/state/.captain-bead-notified/bd-native-label" ] \
+  || fail 'native display text was interpreted as a requester'
+[ ! -e "$home_d/state/.captain-bead-notified/bd-native-metadata" ] \
+  || fail 'a native UI-owned close was routed through the generic answer loop'
 pass 'closed beads reach their requester; requester-less beads are skipped'
 
 # Second full run: every delivered close stays silent (claimed before send),
