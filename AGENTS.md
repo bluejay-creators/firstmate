@@ -396,6 +396,7 @@ The generated Herdr contract must use a named non-`default` isolated lab and its
 Load `secondmate-provisioning` before creating or using a charter brief and preserve its idle-by-default and marked-return-channel contracts.
 Status appends are sparse supervisor-actionable events - the phase changes and parked named waits the Working posture names - not routine progress; `bin/fm-classify-lib.sh` owns keyed open and resolved semantics.
 The scaffold's Working posture section (act-and-note, park-with-named-wait, phase-status freshness, lane-affecting decisions only) is the worker-side standing contract; never override it in a brief except on an explicit captain instruction for that task.
+The scaffold's Approval prompts paragraph (card before any prompt-requiring step; never park in-tab; send Inbox the exact command bundle under the stopgap) is a standing captain rule (2026-11-02).
 The scaffold is a safety contract, not a suggestion.
 
 ## 12. Self-update

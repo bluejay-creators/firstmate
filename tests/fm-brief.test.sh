@@ -1575,6 +1575,16 @@ test_ship_scaffold_renders_all_four_working_posture_principles() {
     "ship brief lost the lane-affecting-decisions-only principle"
   assert_grep "keep advancing other in-scope work" "$brief" \
     "ship brief let a pending question freeze unrelated in-scope work"
+  assert_grep "Approval prompts:" "$brief" \
+    "ship brief lost the approval-prompts paragraph"
+  assert_grep "Before a step that requires approval, prepare its decision card before executing the step." "$brief" \
+    "ship brief lost the card-before-prompt rule"
+  assert_grep "send Inbox the exact single approved command bundle before running it" "$brief" \
+    "ship brief lost the Inbox stopgap command bundle"
+  assert_grep "Never park work waiting for the user to press a key in an agent tab." "$brief" \
+    "ship brief still allows waiting for in-tab approval"
+  assert_grep "record the original prompt's release or cancellation and the actual action result separately." "$brief" \
+    "ship brief conflates phone acknowledgement with execution"
 
   # One shared string: the scout's Working posture must be byte-identical.
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-posture-scout alpha --scout >/dev/null 2>&1 \

@@ -613,6 +613,22 @@ That named wait is firstmate's signal to stop waiting-too-long alerts; it replac
 Status freshness: append exactly one \`working [at=<epoch>]: <phase> - <short detail>\` status line at every phase change (setup, read-only exploration, deciding, implementing, testing, validating, PR-published, cleanup, done) so the status file alone tells firstmate where you are.
 Firstmate watches the status file and peers into your pane only as an exception, to diagnose a genuinely stuck or halting state; pane reads are not routine supervision.
 Lane-affecting decisions only: a pending captain question freezes only the specific scope that question targets; keep advancing other in-scope work whose progress doesn't depend on that answer.
+Approval prompts:
+Before a step that requires approval, prepare its decision card before executing the step.
+Bind the card to the exact action, account, affected resource, working directory, current source head or artifact hash, expected impact and the smallest complete command bundle.
+Obtain the required approval through the shared phone/Inbox decision flow, then run only that approved scope.
+A prior approval is not permission to widen the command, substitute another head, change accounts, or retry an action whose acceptance is uncertain.
+Do not deliberately open a permission prompt to discover or obtain approval, and do not ask the user to visit an agent tab.
+If an unexpected native prompt appears, stop the dependent operation, preserve its original identity and exact command, and route it to the same decision flow.
+If approval already covers that exact action, consume that existing approval against the original prompt; do not create another human approval or invent a grant.
+Only Inbox may handle that original prompt under the explicit stopgap in the next paragraph; otherwise the native signed-release mechanism must consume the approved decision without approval keystrokes.
+Cancel an unapproved pending operation safely when possible; never replay a possibly accepted operation.
+Until the single-gate release is adopted, send Inbox the exact single approved command bundle before running it and let Inbox handle the one original native prompt under Main's explicit stopgap authority.
+Never park work waiting for the user to press a key in an agent tab.
+If the shared flow cannot complete, report the concrete missing requirement to Main and keep independent approved work moving.
+An OS credential, TouchID, security or destructive-operation approval remains a separate boundary; do not provoke a popup or treat a general task approval as permission for it.
+The user may choose to interact directly with an agent; agents must never require that interaction.
+A phone acknowledgement is not proof of execution: record the original prompt's release or cancellation and the actual action result separately.
 EOF
 WORKING_POSTURE=${WORKING_POSTURE%$'\n'}
 
