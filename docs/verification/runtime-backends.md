@@ -1801,6 +1801,34 @@ ok - real herdr: a drifted agent-free shell returns to its worktree and reuses t
 `tests/fm-control-relaunch.test.sh` drives a tmux stub and proves that tmux retains its prior refusal without sending `cd` or any other input to the pane.
 The Herdr refusal when a shell accepts the command but does not move is not exercised in this change.
 
+### Secondmate pane loss during relaunch
+
+Verified 2026-11-03 by driving the real control and spawn executables through the hermetic Herdr transport in `tests/fm-control-relaunch.test.sh`.
+This is lifecycle-logic evidence, not a live OMP shutdown or pane-restart result.
+No existing agent or real Herdr pane was controlled.
+The [transactional relaunch owner](../agent-control.md#transactional-relaunch) defines the recovery boundary.
+
+Refresh the portable coverage with:
+
+```sh
+bash tests/fm-control-relaunch.test.sh
+```
+
+The changed-file run exited 0 and included these consumer-visible outcomes:
+
+```text
+ok - secondmate endpoint gone preserves work and permits no duplicate
+ok - secondmate endpoint gone-after-launch preserves work and permits no duplicate
+ok - secondmate endpoint gone-twice preserves work and permits no duplicate
+ok - secondmate endpoint idle preserves work and permits no duplicate
+ok - secondmate endpoint unreadable preserves work and permits no duplicate
+ok - secondmate endpoint initial-gone preserves work and permits no duplicate
+ok - secondmate endpoint survives preserves work and permits no duplicate
+```
+
+The same file retains the existing tmux absence refusals, profile-switch checks, metadata-publication checks, child-work preservation, direct unowned secondmate-reclaim refusal, and registered-Pi-session selection cases.
+No harness signal, supported-kind table or non-Herdr recovery capability changed.
+
 ### Stale agent registration
 
 Measured 2026-09-10 on macOS aarch64 against Herdr 0.9.0 (protocol 22) and Pi 0.85.1 in an isolated `fm-lab-` session (upstream issue #4115, duplicates #3639, #3487, #2908, #3545).

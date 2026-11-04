@@ -1108,7 +1108,7 @@ record_note() {
 
 do_relaunch() {
   relocate_herdr_endpoint
-  local exit_result state note_line
+  local exit_result state note_line attempt launch_failure absence
   local -a spawn_args
 
   require_state_verified_backend relaunch
@@ -1156,35 +1156,41 @@ do_relaunch() {
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS")
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
-  if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
-      "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
-    RELAUNCH_META_PUBLISHED=1
-    # $T was resolved from the record before the launch. When the recorded
-    # endpoint was gone, the launch owner created a fresh one and republished
-    # the record pointing at it, so every postcondition below must be read from
-    # the endpoint the task now HAS, not the one it had. Re-resolving through
-    # the same shared validation is what makes that safe: a record that no
-    # longer passes it refuses here rather than leaving this transaction
-    # polling an address nothing owns.
-    # stdout is dropped (it is only the resolved target), but the refusal on
-    # stderr names the exact row that failed - and in this one branch the record
-    # was just rewritten by the launch owner, so that row is the whole
-    # diagnostic. Let it through rather than dying with nothing to act on.
-    if fm_backend_validate_task_endpoint "$META" "$ID" >/dev/null \
-       && [ -n "$FM_BACKEND_VALIDATED_TARGET" ]; then
-      T=$FM_BACKEND_VALIDATED_TARGET
+  for attempt in 1 2; do
+    if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
+        "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
+      RELAUNCH_META_PUBLISHED=1
+      # Confirm the validated address the replacement record now names.
+      if fm_backend_validate_task_endpoint "$META" "$ID" >/dev/null \
+         && [ -n "$FM_BACKEND_VALIDATED_TARGET" ]; then
+        T=$FM_BACKEND_VALIDATED_TARGET
+      else
+        die "the replacement agent for $ID was launched, but task $ID's republished record no longer passes endpoint validation (the refusal above names the row), so this transaction cannot say which endpoint to confirm it on; reconcile $META before any further control action"
+      fi
+      state=$(wait_agent_state "$LAUNCH_WAIT" alive) || true
+      [ "$state" != alive ] || break
+      launch_failure="the replacement agent for $ID did not come up within ${LAUNCH_WAIT}s (endpoint reads '$state')"
     else
-      die "the replacement agent for $ID was launched, but task $ID's republished record no longer passes endpoint validation (the refusal above names the row), so this transaction cannot say which endpoint to confirm it on; reconcile $META before any further control action"
+      [ "$(fm_meta_get "$META" control_relaunch_tx)" != "$RELAUNCH_TX" ] \
+        || RELAUNCH_META_PUBLISHED=1
+      launch_failure="the replacement agent for $ID could not be launched on $TARGET_HARNESS"
     fi
-  else
-    [ "$(fm_meta_get "$META" control_relaunch_tx)" != "$RELAUNCH_TX" ] \
-      || RELAUNCH_META_PUBLISHED=1
-    die "the replacement agent for $ID could not be launched on $TARGET_HARNESS"
-  fi
-
-  state=$(wait_agent_state "$LAUNCH_WAIT" alive) || {
-    die "the replacement agent for $ID did not come up within ${LAUNCH_WAIT}s (endpoint reads '$state')"
-  }
+    # A secondmate's pane can disappear after exit, including during delivery.
+    # Re-enter the same launch owner once, only with proof this exact recorded
+    # endpoint is gone. A failed read never licenses another agent.
+    if [ "$attempt" = 1 ] && [ "$KIND" = secondmate ] && [ "$BACKEND" = herdr ] \
+       && fm_backend_validate_task_endpoint "$META" "$ID" >/dev/null \
+       && [ "$FM_BACKEND_VALIDATED_BACKEND" = "$BACKEND" ] \
+       && [ "$FM_BACKEND_VALIDATED_TARGET" = "$T" ]; then
+      absence=$(fm_control_endpoint_absence_verdict "$BACKEND" "$T")
+      if [ "${absence%%$'\t'*}" = gone ]; then
+        journal_write launching "${CHECKPOINT_LINES[@]}" "$note_line" \
+          "relaunch_tx=$RELAUNCH_TX" "endpoint_recovery=secondmate"
+        continue
+      fi
+    fi
+    die "$launch_failure"
+  done
   RELAUNCH_AGENT_CONFIRMED=1
 
   journal_write complete "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"

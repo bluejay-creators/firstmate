@@ -42,6 +42,7 @@ TASK_TMPS=()
 
 relaunch_cleanup() {
   local d
+  find "$TMP_ROOT" -type d -name '*.git-hooks' -exec chmod u+w {} + 2>/dev/null || true
   for d in "${TASK_TMPS[@]:-}"; do
     [ -n "$d" ] && rm -rf "$d"
   done
@@ -2062,6 +2063,10 @@ if [ -f "$D/herdr-stopped" ]; then
   echo 'error: could not connect to the herdr server' >&2
   exit 1
 fi
+if [ -f "$D/herdr-unreadable" ]; then
+  echo 'error: unavailable endpoint read' >&2
+  exit 1
+fi
 case "${1:-} ${2:-}" in
   'pane get')
     if [ "${3:-}" = "$(cat "$D/herdr-pane")" ]; then
@@ -2095,6 +2100,17 @@ case "${1:-} ${2:-}" in
         "$(cat "$D/herdr-pane")"
     fi
     exit 0 ;;
+  'pane run')
+    if [ -f "$D/herdr-delivery-failure" ]; then
+      mode=$(cat "$D/herdr-delivery-failure")
+      [ "$mode" = gone-twice ] || rm -f "$D/herdr-delivery-failure"
+      case "$mode" in
+        gone|gone-twice) printf 'gone' > "$D/herdr-pane" ;;
+        unreadable) : > "$D/herdr-unreadable" ;;
+      esac
+      exit 1
+    fi
+    exit 0 ;;
   'pane send-text')
     # Mirrors the tmux fake's `becomes`: delivering the launch brief is what
     # makes an agent exist on this pane, so the control plane's alive-wait can
@@ -2109,7 +2125,12 @@ case "${1:-} ${2:-}" in
     case "$payload" in
       *'encode launch-brief'* | *'Firstmate operational input waiting: read'*)
         printf '%s\n' "$payload" > "$D/launched-command"
-        : > "$D/herdr-agent-live" ;;
+        if [ -f "$D/herdr-loss-after-launch" ]; then
+          rm -f "$D/herdr-loss-after-launch"
+          printf 'gone' > "$D/herdr-pane"
+        else
+          : > "$D/herdr-agent-live"
+        fi ;;
     esac
     exit 0 ;;
   'workspace list')
@@ -2219,7 +2240,10 @@ test_herdr_relaunch_resumes_only_the_registered_pi_session() {
     }
     dir=$HERDR_CASE_DIR
     rm -f "$dir/fake/herdr-stopped"
-    sed -i 's/^harness=claude$/harness=pi/' "$dir/home/state/resume-$registered.meta"
+    sed 's/^harness=claude$/harness=pi/' "$dir/home/state/resume-$registered.meta" \
+      > "$dir/pi-record.meta" || fail "could not prepare the recorded Pi harness"
+    mv "$dir/pi-record.meta" "$dir/home/state/resume-$registered.meta" \
+      || fail "could not publish the recorded Pi harness"
     # Keep the pane's status authority registered to an existing Pi session,
     # while process-info proves that its previous agent has exited.
     printf '{"result":{"agent":{"agent":"%s","agent_status":"idle","agent_session":{"kind":"path","value":"/tmp/pi-bound-session.jsonl"}}}}\n' \
@@ -2437,6 +2461,83 @@ test_herdr_reclaim_of_a_secondmate_names_its_own_owner() {
   pass "reclaim: a herdr secondmate whose endpoint is gone is sent to its own respawn owner"
 }
 
+test_secondmate_relaunch_handles_endpoint_loss_without_duplicating_an_agent() {
+  local dir out rc mode id
+  for mode in gone gone-after-launch gone-twice idle unreadable initial-gone survives; do
+    id="mate-$mode"
+    herdr_case_or_skip "$id" "$id" || return 0
+    dir=$HERDR_CASE_DIR
+    mkdir -p "$dir/wt/state" "$dir/wt/data" "$dir/wt/bin"
+    printf '%s\n' "$id" > "$dir/wt/.fm-secondmate-home"
+    printf 'standing charter\n' > "$dir/wt/data/charter.md"
+    printf 'fixture instructions\n' > "$dir/wt/AGENTS.md"
+    printf 'uncommitted work\n' > "$dir/wt/dirty.txt"
+    cat > "$dir/home/state/$id.meta" <<EOF
+window=fmlab:%7
+endpoint_task_id=$id
+worktree=$dir/wt
+project=$dir/wt
+harness=omp
+kind=secondmate
+mode=secondmate
+yolo=off
+model=default
+effort=default
+home=$dir/wt
+backend=herdr
+herdr_session=fmlab
+herdr_workspace_id=ws1
+herdr_tab_id=tab1
+herdr_pane_id=%7
+EOF
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/fakebin/omp"
+    chmod +x "$dir/fakebin/omp"
+    case "$mode" in
+      initial-gone) printf 'gone' > "$dir/fake/herdr-pane" ;;
+      gone-after-launch) : > "$dir/fake/herdr-loss-after-launch" ;;
+      survives) ;;
+      *) printf '%s\n' "$mode" > "$dir/fake/herdr-delivery-failure" ;;
+    esac
+    rc=0
+    out=$(run_control "$dir" "$id" relaunch) || rc=$?
+    case "$mode" in
+      gone|gone-after-launch|initial-gone)
+        expect_code 0 "$rc" "a proven-gone secondmate should be rebound"$'\n'"$out"
+        [ "$(meta_field "$dir" "$id" window)" = 'fmlab:%9' ] \
+          || fail "recovery did not publish the new endpoint"
+        [ "$(journal_field "$dir" "$id" phase)" = complete ] \
+          || fail "recovery did not confirm its replacement"
+        [ "$(wc -l < "$dir/fake/herdr-created-tabs" | tr -d ' ')" = 1 ] \
+          || fail "recovery created more than one replacement"
+        ;;
+      gone-twice)
+        expect_code 1 "$rc" "a second loss must stop bounded recovery"$'\n'"$out"
+        [ "$(wc -l < "$dir/fake/herdr-created-tabs" | tr -d ' ')" = 1 ] \
+          || fail "a second loss triggered another replacement"
+        [ "$(journal_field "$dir" "$id" phase)" = failed:launching ] \
+          || fail "a second loss was falsely reported complete"
+        ;;
+      survives)
+        expect_code 0 "$rc" "a surviving secondmate pane should be reused"$'\n'"$out"
+        [ "$(meta_field "$dir" "$id" window)" = 'fmlab:%7' ] \
+          || fail "a surviving pane was needlessly replaced"
+        assert_absent "$dir/fake/herdr-created-tabs" "surviving pane needs no copy"
+        ;;
+      *)
+        expect_code 1 "$rc" "delivery failure without absence proof must stop"$'\n'"$out"
+        assert_absent "$dir/fake/herdr-created-tabs" "an uncertain or idle pane must not be duplicated"
+        ;;
+    esac
+    [ "$(meta_field "$dir" "$id" worktree)" = "$dir/wt" ] \
+      || fail "recovery moved the secondmate home"
+    [ "$(cat "$dir/wt/dirty.txt")" = 'uncommitted work' ] \
+      || fail "recovery changed uncommitted work"
+    [ "$(cat "$dir/wt/data/charter.md")" = 'standing charter' ] \
+      || fail "recovery rewrote the charter"
+    pass "secondmate endpoint $mode preserves work and permits no duplicate"
+  done
+}
+
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it() {
   local dir out rc=0
   command -v tasks-axi >/dev/null 2>&1 || {
@@ -2603,6 +2704,7 @@ test_herdr_rebind_stays_in_the_recorded_session
 test_herdr_reclaim_refuses_an_agent_that_came_back
 test_herdr_reclaim_keeps_the_task_whole
 test_herdr_reclaim_of_a_secondmate_names_its_own_owner
+test_secondmate_relaunch_handles_endpoint_loss_without_duplicating_an_agent
 test_herdr_rebind_failure_from_a_plain_shell_names_the_real_cause
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight

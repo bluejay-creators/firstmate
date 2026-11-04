@@ -1982,13 +1982,11 @@ if [ "$RELAUNCH" -eq 1 ]; then
   RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
   KIND=$(fm_meta_get "$RELAUNCH_META" kind)
   [ -n "$KIND" ] || KIND=ship
-  # A secondmate whose endpoint is gone already has ONE owner for that
-  # recovery: the session-start liveness sweep respawns it with
-  # `fm-spawn.sh <id> --secondmate`, which stands its home's own workspace back
-  # up (bin/fm-bootstrap.sh; the secondmate-provisioning skill). Rebinding one
-  # here as well would be a second path to the same outcome, so this refuses
-  # and names the one that owns it.
-  if [ "$RELAUNCH_REBIND" -eq 1 ] && [ "$KIND" = secondmate ]; then
+  # Only an owning control transaction may rebind a gone secondmate here.
+  # It uses the ordinary secondmate home-placement branch below; standalone
+  # recovery still belongs to --secondmate.
+  if [ "$RELAUNCH_REBIND" -eq 1 ] && [ "$KIND" = secondmate ] \
+     && [ "$SPAWN_CONTROL_PARENT" != 1 ]; then
     echo "error: secondmate $ID's recorded endpoint is gone; its recovery is owned by the secondmate respawn path, not by relaunch (run bin/fm-spawn.sh $ID --secondmate, or let the session-start liveness sweep do it)" >&2
     exit 1
   fi
@@ -3844,7 +3842,7 @@ if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
 fi
 
 W="fm-$ID"
-if [ "$RELAUNCH" -eq 1 ]; then
+if [ "$RELAUNCH" -eq 1 ] && { [ "$RELAUNCH_REBIND" -eq 0 ] || [ "$KIND" != secondmate ]; }; then
   # A secondmate's home already resolved WT above through the same validation a
   # fresh secondmate spawn uses; every other kind takes the recorded worktree.
   # Either way the worktree is REUSED, never re-created: its branch, commits and
@@ -3869,8 +3867,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
     # Herdr is the ONLY backend that reaches here: the gate above rebinds only
     # on a PROVEN-gone endpoint, and absence is provable only on herdr, whose
     # every read is scoped to the session the record names
-    # (fm_control_endpoint_absence_verdict owns that argument). tmux and every
-    # secondmate were already refused, so there is no dispatch left to make.
+    # (fm_control_endpoint_absence_verdict owns that argument). tmux was already
+    # refused; secondmates use their normal home-placement branch below.
     #
     # This deliberately uses the FLAT container shape rather than Herdr's
     # presentation projection: projection is a presentation-only layout that is
@@ -3950,7 +3948,7 @@ else
     # FM_HOME. For every KIND except secondmate, this process's own FM_HOME is
     # already the right home (the primary spawning its own crewmate/scout, or
     # a secondmate spawning ITS OWN crewmate/scout from its own process's
-    # FM_HOME - the latter needs no glue at all). A --secondmate spawn is the
+    # FM_HOME - the latter needs no glue at all). A secondmate launch is the
     # one case that does: it is the PRIMARY's own fm-spawn.sh process
     # launching a DIFFERENT home (PROJ_ABS, already validated above as the
     # secondmate's home), so FM_HOME here still names the primary. Shadow it
@@ -3961,7 +3959,7 @@ else
     # Placement, separately from labeling: a crewmate/scout belongs in the
     # EXACT herdr workspace this launching process is itself running in, which
     # only its own herdr pane identity can name (a same-labeled sibling
-    # workspace must never be adopted). A --secondmate launch is the exception -
+    # workspace must never be adopted). A secondmate launch is the exception -
     # it stands up a DIFFERENT home's own workspace by design - so it asks for
     # the per-home container instead of inheriting this launcher's.
     HERDR_LABEL_HOME=$FM_HOME
@@ -4102,7 +4100,10 @@ else
       fi
     fi
     if [ "$HERDR_PROJECTED" -ne 1 ]; then
-      HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS" "$HERDR_LAUNCHER_RELATIONSHIP") || exit 1
+      HERDR_CREATE_SESSION=
+      [ "$RELAUNCH" -ne 1 ] || HERDR_CREATE_SESSION=${RELAUNCH_TARGET%%:*}
+      HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure \
+        "$PROJ_ABS" "$HERDR_LAUNCHER_RELATIONSHIP" "$HERDR_CREATE_SESSION") || exit 1
       # fm_backend_herdr_container_ensure echoes "<session>:<workspace_id>\t<seeded_default_tab_id>"
       # (the second field empty when this call ADOPTED a pre-existing workspace
       # rather than creating a fresh one). Split on the guaranteed single tab
