@@ -21,11 +21,28 @@ Observed on omp 18.10.4 (2026-10-14) with `FM_OMP_EXTENSION_DEBUG_LOG` set: the 
 The watch extension's factory therefore activates its generation only when no live generation exists, so a rebind never displaces the primary's.
 Before that rule, the rebind made the subagent's generation the active one: the primary's read as not live, its next actionable close was dropped undelivered with no successor, and `fm_watch_arm_omp` answered `watcher: not armed - omp session is shutting down`.
 The turn-end guard's factory bind touches no shared module state; its active sessionstart generation was unchanged across the same rebind.
-Every lifecycle handler and the arming tool also stand down on a subagent ctx (`kind === "sub"`, defensively `depth > 0` or an ambiguous ctx in a process that does not own the lock), so a subagent session never claims, consumes, retires, or re-arms the supervisor's watcher and never persists the replacement handoff.
+Every lifecycle handler and arming entrypoint stands down on a subagent context.
+Destructive shutdown requires an explicit main identity when an agent property is present; missing, malformed, null or unknown kinds do not gain authority merely because the same process owns the primary lock.
+Older contexts without an agent property retain the lock-owner check.
 
-- Portable regression: `tests/fm-omp-harness.test.sh` `test_watch_extension_subagent_session_never_touches_the_arm` rebinds the factory on the same module the way omp does and asserts the primary's arm tool still answers `watcher: unchanged - omp extension already owns an arm child`; `test_turnend_guard_subagent_session_stands_down`, `test_watch_extension_subagent_gate_recognizes_1810_shapes`, and `test_turnend_guard_subagent_gate_recognizes_1810_shapes` pin the ctx gate.
-- Live guard: `FM_OMP_SUBAGENT_SMOKE=1 tests/fm-omp-subagent-smoke-e2e.test.sh` arms the watcher in a real `omp --mode rpc` session, runs one task-tool subagent whose result must carry a token only the child could read, asserts `/fm-watch-arm-omp` then reports the existing arm, and asserts a queued `.meta` plus `.status` wake reaches the primary's rpc stream with a successor watcher.
-  Latest run: 2026-10-14, omp 18.10.4, model `openai-codex/gpt-6-astra`, all six checks `ok`; with the bind rule reverted the same run stops at `the arm command did not report the primary's existing arm after the subagent` after `"message":"watcher: not armed - omp session is shutting down"`.
+- Portable regression: `tests/fm-omp-harness.test.sh` exercises real child ownership, ambiguous shutdowns, exact worker/secondmate argv consumption, host handoff, acknowledged-wake suppression and genuinely fresh wake delivery.
+- Live guard: `FM_OMP_SUBAGENT_SMOKE=1 tests/fm-omp-subagent-smoke-e2e.test.sh` uses real OMP RPC receipts, a child-only nonce, the same live arm PID across subagent completion, and delivery of a queued wake with a live successor.
+- Latest refresh: 2026-11-05 on macOS arm64, omp18.10.4; all six live checks passed without a production-home update or multiplexer pane.
+
+```sh
+FM_OMP_SUBAGENT_SMOKE=1 FM_OMP_LIVE_MODEL=openai-codex/gpt-6.1-sol bash tests/fm-omp-subagent-smoke-e2e.test.sh
+```
+
+Observed output includes:
+
+```text
+ok - extensions auto-discovered in the lab
+ok - session-start digest reached model context
+ok - after the subagent the arm command retains the same live primary arm
+```
+
+The guard checks parsed RPC fields and kernel PID liveness rather than arming-result prose.
+Process identifiers and complete run receipts remain private task evidence.
 - Debug log: `FM_OMP_EXTENSION_DEBUG_LOG=<absolute file>` before omp starts makes both tracked extensions append one JSON line per factory bind and per lifecycle event they observe (`session_start`, `before_agent_start`, `agent_end`, `session_shutdown`; the watch extension also logs `before_subagent_spawn`, arm calls, and arm child closes) with the ctx agent shape, session id, process ids, and the code path taken; `.pi/extensions/lib/fm-extension-debug.ts` owns the line format.
 
 ## Hidden wake delivery (2026-10-14)

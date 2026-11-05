@@ -2,9 +2,8 @@
 # Opt-in credentialed live regression that pairs with the portable
 # tests/fm-omp-harness.test.sh: a real omp rpc session arms the watcher through
 # the tracked extension, runs one task-tool subagent whose result carries a
-# token only the child could read, then proves the primary still owns its arm
-# (the arm command answers "unchanged", never "shutting down") and that a
-# queued meta+status wake still reaches the primary's rpc stream.
+# token only the child could read, then proves the primary retains the same
+# live arm PID and that a queued meta+status wake still reaches its rpc stream.
 # omp re-binds extension factories per subagent session on the same module
 # (observed on 18.10.4: the rebind runs at task spawn with no ctx); the watch
 # extension's bind must not displace the primary's live generation. Fires
@@ -19,6 +18,7 @@ fm_live_gate opt-in FM_OMP_SUBAGENT_SMOKE omp node jq
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODEL=${FM_OMP_LIVE_MODEL:-openai-codex/gpt-6-astra}
+OMP_VERSION=$(omp --version 2>/dev/null)
 LAB="$ROOT/.omp-subagent-smoke.$$"
 PROJECT="$LAB/project"
 RPC_IN="$LAB/rpc.in"
@@ -77,6 +77,20 @@ EOF
 mkdir -p "$PROJECT/state" "$PROJECT/config" "$PROJECT/data"
 
 rpc_send() { printf '%s\n' "$1" >&3; }
+wait_for_rpc_receipt() {
+  local request=$1 attempts=${2:-120} i=0
+  while [ "$i" -lt "$attempts" ]; do
+    if jq -es --arg id "$request" 'any(.[]; .id == $id and .type == "response" and .command == "prompt" and .success == true)' "$RPC_LOG" >/dev/null 2>&1; then
+      return 0
+    fi
+    if jq -es --arg id "$request" 'any(.[]; .id == $id and .type == "response")' "$RPC_LOG" >/dev/null 2>&1; then
+      return 1
+    fi
+    sleep 0.5
+    i=$((i+1))
+  done
+  return 1
+}
 wait_for_log() { local s=$1 a=${2:-240} i=0; while [ "$i" -lt "$a" ]; do grep -Fq -- "$s" "$RPC_LOG" 2>/dev/null && return 0; sleep 0.5; i=$((i+1)); done; return 1; }
 wait_for_file() { local p=$1 a=${2:-240} i=0; while [ "$i" -lt "$a" ]; do [ -f "$p" ] && return 0; sleep 0.5; i=$((i+1)); done; return 1; }
 pid_live() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
@@ -110,7 +124,6 @@ pass "session-start digest reached model context"
 
 # Arm the watcher.
 rpc_send '{"id":"p2","type":"prompt","message":"Call the fm_watch_arm_omp tool exactly once now, then reply with its result text verbatim and nothing else. Never run bin/fm-watch-arm.sh through bash."}'
-wait_for_log "watcher: started omp extension arm child 1" 360 || { echo "arm failed"; tail -3 "$RPC_ERR"; exit 1; }
 wait_for_settle 360 || { echo "no settle after arm"; exit 1; }
 i=0
 arm_pid=
@@ -131,24 +144,24 @@ token="omp-sub-smoke-$$-$(date +%s)"
 printf '%s\n' "$token" > "$PROJECT/omp-sub-smoke-token.txt"
 # shellcheck disable=SC2016 # the backticks are prompt text for the model, not shell
 rpc_send '{"id":"p3","type":"prompt","message":"Call the task tool exactly once with one task. Required parameters: context set to \"Scratch subagent probe; read one file and report its content.\" and a single task item whose assignment is: run `cat omp-sub-smoke-token.txt` with bash and reply with only the file content. Do not read the file yourself. Wait for the child result, then reply with exactly the token the child returned and nothing else."}'
-sleep 1
-grep -q '"id":"p3","type":"response","command":"prompt","success":true' "$RPC_LOG" || { echo "p3 was refused:"; grep '"id":"p3"' "$RPC_LOG" | head -2; exit 1; }
+wait_for_rpc_receipt p3 60 || { echo "p3 was refused or unacknowledged"; exit 1; }
 wait_for_log "$token" 720 || { echo "subagent never returned the child-only token"; tail -5 "$RPC_LOG"; exit 1; }
 wait_for_settle 360 || true
 sub_pid_before=$(cat "$PROJECT/state/.watch.lock/pid" 2>/dev/null || true)
 pid_live "$sub_pid_before" || { echo "watcher died before wake was queued"; exit 1; }
 pass "subagent completed with its child-only token; watcher still running (pid $sub_pid_before)"
 
-# The primary must still own a live generation: the arm command answers that
-# it already owns an arm child, never that the session is shutting down.
+# A real command receipt plus the unchanged live PID proves retained ownership;
+# presentation wording is not a lifecycle contract.
 rpc_send '{"id":"p4","type":"prompt","message":"/fm-watch-arm-omp"}'
-wait_for_log 'watcher: unchanged - omp extension already owns an arm child' 60 || {
-  echo "the arm command did not report the primary's existing arm after the subagent:"
-  grep -o '"message":"watcher: [^"]*"' "$RPC_LOG" | tail -2
-  exit 1
+wait_for_rpc_receipt p4 120 || {
+  echo "the arm command did not complete after the subagent"; exit 1;
 }
-if grep -q 'omp session is shutting down' "$RPC_LOG"; then echo "the primary read as shutting down after the subagent"; exit 1; fi
-pass "after the subagent the arm command reports the primary's existing arm"
+arm_pid_after=$(cat "$PROJECT/state/.watch.lock/pid" 2>/dev/null || true)
+if [ "$arm_pid_after" != "$sub_pid_before" ] || ! pid_live "$arm_pid_after"; then
+  echo "the primary did not retain the same live arm after the subagent"; exit 1;
+fi
+pass "after the subagent the arm command retains the same live primary arm"
 
 # Queue an actionable wake through the same meta+status record every live e2e
 # uses, then assert the wake reaches the primary's rpc stream (as the hidden
@@ -187,4 +200,4 @@ pid_live "$final_pid" || { echo "watcher gone after the actionable close"; exit 
 exec 3>&-
 kill -TERM "$OMP_PID" 2>/dev/null || true
 sleep 2
-note "smoke model=$MODEL"
+note "smoke omp=$OMP_VERSION model=$MODEL"

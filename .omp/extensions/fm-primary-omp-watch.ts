@@ -78,7 +78,10 @@
 // extension documentation owns the ctx.agent signal shape. A subagent session
 // never claims, consumes, or retires the owner's arm and never persists the
 // replacement handoff: every lifecycle handler and the arming tool stand down
-// on that context. The 2026-10-08, 2026-10-13, and 2026-10-14 incidents were
+// on that context. An explicit but unknown agent shape cannot authorize
+// shutdown merely because its process owns the shared fleet lock; only kind
+// "main" can. Legacy shutdowns without an agent field still use the lock-owner
+// proof. The 2026-10-08, 2026-10-13, and 2026-10-14 incidents were
 // an unconditional activation at bind: the subagent's generation became the
 // active one, the primary's read as not live, its next actionable close was
 // dropped undelivered, and fm_watch_arm_omp answered "watcher: not armed -
@@ -1084,7 +1087,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
   return `${absorbed.length} routine absorbed: ${previews}${extra}`;
 }
   // Run bin/fm-wake-drain.sh --brief --ack and return the one-line summary it
-  // presents, or null when the drain fails or there is nothing to present.
+  // presents, including an empty row set on success; null means drain failure.
   // A routine drain acks itself (its trailing marker is "(acked)"); an
   // actionable drain prints a WAKE_ACK_REQUIRED line naming the exact
   // --ack-through cutoff and recovery generation for what it presented.
@@ -1116,13 +1119,8 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     const markerIndex = lines.findIndex((line) => line === "(acked)" || line.startsWith("WAKE_ACK_REQUIRED:"));
     const ackLine = markerIndex >= 0 ? lines[markerIndex] : undefined;
     const rows = ackLine ? lines.slice(0, markerIndex) : lines;
-    if (rows.length === 0) {
-      if (!ackLine) return null;
-      // A marker with no rows (the empty-queue recovery notice) carries no
-      // wake rows for main; treat it as nothing presented rather than waking
-      // over an empty summary.
-      return null;
-    }
+    // An empty successful presentation is not a failed drain. In particular,
+    // a marker-only recovery notice does not authorize replaying the old close.
     const ackPending = Boolean(ackLine?.startsWith("WAKE_ACK_REQUIRED:"));
     let ackThrough: string | null = null;
     let ackGeneration: string | null = null;
@@ -1228,11 +1226,10 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     owner: SessionGeneration,
     message: string,
     items: PendingActionableClose[],
+    restorationFailure = "",
   ): Promise<boolean> {
     if (items.length === 0) return false;
     if (!generationIsLive(owner)) return false;
-    const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
-    const content = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${formatWakeMessage(message)}`);
     // Hidden wake path: drain the queue first so the model receives the
     // already-digested one-line summary in a hidden custom message the chat
     // never renders; the turn opens on the custom message itself through
@@ -1244,6 +1241,16 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     // Fall back to the visible banner if the drain or hidden send fails,
     // or this omp build has no sendMessage API.
     const drained = drainWakeQueueBriefAck(owner);
+    if (drained && drained.rows.length === 0) {
+      // The intake count predates successor startup. Another consumer may
+      // have drained those rows while readiness was in flight; retire this
+      // close rather than falling back to its now-stale reason text.
+      finishAbsorbedItems(owner, items);
+      if (restorationFailure) return await sendWake(owner, restorationFailure);
+      return generationIsLive(owner);
+    }
+    const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
+    const content = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${formatWakeMessage(message)}`);
     if (drained && pi.sendMessage) {
       const captures: string[] = [];
       // An unknown acknowledgement contract retains the existing loud
@@ -1502,6 +1509,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     owner: SessionGeneration,
     message: string,
     items: PendingActionableClose[],
+    restorationFailure = "",
   ): Promise<boolean> {
     const mode = wakeRoutineMode();
     const decision = deliveryDecision();
@@ -1524,14 +1532,14 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
     // still surfaces through its one-line banner.
     if (mode === "silent" && decision.absorbedNotice && decision.absorbedNotice.length > 0) {
       if (await absorbRoutineSilently(owner, [], decision.absorbedNotice)) {
-        return await sendBatchedWake(owner, message, items);
+        return await sendBatchedWake(owner, message, items, restorationFailure);
       }
     }
     const suffix = decision.absorbedNotice
       ? `\n\n(${formatAbsorbedWakeSummary(decision.absorbedNotice)})`
       : "";
     // No supervision branch on omp: every actionable wake goes to main.
-    return await sendBatchedWake(owner, `${message}${suffix}`, items);
+    return await sendBatchedWake(owner, `${message}${suffix}`, items, restorationFailure);
   }
 
 
@@ -1691,7 +1699,7 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
             return;
           }
           const message = restoration.failure ? `${batch.message}\n\n${restoration.failure}` : batch.message;
-          const delivered = await deliverActionablesWithTriage(owner, message, batch.items);
+          const delivered = await deliverActionablesWithTriage(owner, message, batch.items, restoration.failure);
           if (!delivered) {
             settleClaim("failed");
             releaseClaim();
@@ -2037,9 +2045,8 @@ function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summar
 // ambiguous ctx (absent agent, absent kind, or an unrecognized kind) as a
 // subagent whenever lockOwnership() proves this process is not the fleet's
 // owning primary; a fleet-owning primary keeps main semantics.
-// subagentShutdownContext additionally applies that lock test to a shutdown
-// ctx with no agent at all, where retiring shared primary state is the
-// catastrophic path.
+// The destructive shutdown gate additionally requires an explicit agent to
+// identify as main; the process lock alone cannot distinguish in-process peers.
 function subagentContext(ctx: unknown): boolean {
   if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return false;
   const agent = ctx.agent;
@@ -2053,7 +2060,8 @@ function subagentContext(ctx: unknown): boolean {
 function subagentShutdownContext(ctx: unknown): boolean {
   if (subagentContext(ctx)) return true;
   if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return lockOwnership() !== "owned";
-  return false;
+  const agent = ctx.agent;
+  return !agent || typeof agent !== "object" || !("kind" in agent) || agent.kind !== "main";
 }
 const subagentArmStatus =
   "watcher: not armed - this is a subagent session; the supervisor's omp primary owns watcher continuity, so no action is needed here";

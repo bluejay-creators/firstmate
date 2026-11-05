@@ -12,7 +12,7 @@ run_continuity_case() {
   repo="$TMP_ROOT/$mode/repo"
   home="$TMP_ROOT/$mode/home"
   mkdir -p "$repo/.omp/extensions" "$repo/.pi/extensions/lib" "$repo/bin" \
-    "$repo/node_modules/typebox" "$home/state" "$home/config"
+    "$repo/node_modules/typebox" "$home/state" "$home/config" "$home/data" "$home/projects"
   cp "$ROOT/.omp/extensions/fm-primary-omp-watch.ts" "$repo/.omp/extensions/"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" \
     "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" \
@@ -21,6 +21,7 @@ run_continuity_case() {
   cp "$ROOT/bin/fm-wake-drain.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-classify-lib.sh" \
     "$ROOT/bin/fm-line-cap-lib.sh" "$ROOT/bin/fm-timeout-lib.sh" "$ROOT/bin/fm-lease-lib.sh" \
     "$ROOT/bin/fm-afk-contract.sh" "$ROOT/bin/fm-path-lib.sh" "$repo/bin/"
+  cp "$ROOT/bin/fm-parent-channel-lib.sh" "$ROOT/bin/fm-secondmate-parent-lib.sh" "$repo/bin/"
   printf '{"name":"typebox","type":"module","exports":"./index.js"}\n' > "$repo/node_modules/typebox/package.json"
   printf 'export const Type = { Object(p) { return { type: "object", properties: p }; } };\n' > "$repo/node_modules/typebox/index.js"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -28,8 +29,14 @@ run_continuity_case() {
 [ "${1:-}" = --handling-delivered ] && exit 0
 printf '%s\n' "$$" >> "$FM_HOME/state/arms"
 round=$(( $(wc -l < "$FM_HOME/state/arms") ))
-if [ "$FM_CONTINUITY_CASE" = empty-failure ] && [ "$round" -gt 1 ]; then
+if { [ "$FM_CONTINUITY_CASE" = empty-failure ] || [ "$FM_CONTINUITY_CASE" = drain-race-failure ]; } && [ "$round" -gt 1 ]; then
   exit 1
+fi
+case "$FM_CONTINUITY_CASE:$round" in
+  drain-race:2|drain-race-hidden:2|drain-race-status:2) : > "$FM_HOME/state/.wake-queue" ;;
+esac
+if [ "$FM_CONTINUITY_CASE" = drain-race-status ] && [ "$round" -eq 2 ]; then
+  printf 'needs-decision [key=fixture]: choose a fixture option\nnote: fixture unread detail\n' > "$FM_HOME/state/fixture.status"
 fi
 printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture\n' "$$"
 touch "$FM_HOME/state/.last-watcher-beat"
@@ -45,17 +52,65 @@ else
 fi
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh" "$repo/bin/fm-operational-input.sh" "$repo/bin/fm-wake-drain.sh"
+  case "$mode" in
+    drain-race*)
+      # This Node fixture has no live harness guard; keep the drain's queue
+      # projection real without introducing an unrelated missing-script error.
+      printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-guard.sh"
+      chmod +x "$repo/bin/fm-guard.sh"
+      cp "$repo/bin/fm-wake-drain.sh" "$repo/bin/fm-wake-drain-real.sh"
+      cat > "$repo/bin/fm-wake-drain.sh" <<'SH'
+#!/usr/bin/env bash
+# The real drain remains the queue authority; record its completion so the
+# negative delivery assertion waits for the delivery seam, not a fixed delay.
+if [ "$FM_CONTINUITY_CASE" = drain-race-failure ]; then
+  : > "$FM_HOME/state/.wake-queue"
+fi
+bash "$(dirname "$0")/fm-wake-drain-real.sh" "$@" > "$FM_HOME/state/drain.stdout" 2> "$FM_HOME/state/drain.stderr"
+status=$?
+cat "$FM_HOME/state/drain.stdout"
+cat "$FM_HOME/state/drain.stderr" >&2
+: > "$FM_HOME/state/drain-complete"
+exit "$status"
+SH
+      chmod +x "$repo/bin/fm-wake-drain.sh"
+      ;;
+  esac
   out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" FM_SUPERVISION_ACTOR=main \
+    FM_WAKE_QUEUE_LOCK="$home/state/.wake-queue.lock" FM_OMP_EXTENSION_DEBUG_LOG='' \
     FM_WAKE_QUEUE="$home/state/.wake-queue" FM_ROOT_OVERRIDE="$repo" FM_CONTINUITY_CASE="$mode" \
     FM_WATCH_REARM_RETRY_LIMIT=1 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
     EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'JS'
 import { pathToFileURL } from "node:url";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 const state = `${process.env.FM_HOME}/state`;
 const mode = process.env.FM_CONTINUITY_CASE;
 const queue = `${state}/.wake-queue`;
 const handlers = new Map();
 const sent = [];
+const sentKinds = [];
+const evidence = () => {
+  const summarize = (text) => ({
+    categories: [
+      ["open-decisions", /OPEN DECISIONS/],
+      ["unread-status", /UNREAD STATUS/],
+      ["missing-dependency", /No such file or directory|command not found|cannot open/],
+      ["presentation-warning", /STATUS PRESENTATION|WAKE DRAIN SKIPPED/],
+      ["restoration-failure", /watcher: FAILED/],
+    ].filter(([, pattern]) => pattern.test(text)).map(([category]) => category),
+    bytes: Buffer.byteLength(text),
+    sha256: createHash("sha256").update(text).digest("hex"),
+  });
+  return JSON.stringify({
+    messages: sent.slice(0, 4).map((text, index) => ({ kind: sentKinds[index], ...summarize(text) })),
+    drain: ["stdout", "stderr"].map((stream) => {
+      const file = `${state}/drain.${stream}`;
+      return { stream, ...summarize(existsSync(file) ? readFileSync(file, "utf8") : "") };
+    }),
+  });
+};
 const arms = () => existsSync(`${state}/arms`) ? readFileSync(`${state}/arms`, "utf8").trim().split("\n") : [];
 const until = async (condition, message) => {
   const deadline = Date.now() + 5000;
@@ -67,18 +122,20 @@ writeFileSync(`${state}/.lock`, `${process.pid}\n`);
 const capture = (seq, generation) => row(seq, "check", `procevent herdr-panes fixture ${generation}`, `procevent:fixture:${generation}`);
 const drained = () => readFileSync(queue, "utf8").trim() === "";
 const isCapture = mode.startsWith("capture");
+const isDrainRace = mode.startsWith("drain-race");
 let rejectHidden = mode === "capture-rejected";
-writeFileSync(queue, mode === "stale" ? row(1, "stale", "stale: fixture stopped responding") : isCapture ? capture(1, 40) : "");
+writeFileSync(queue, mode === "stale" ? row(1, "stale", "stale: fixture stopped responding") : isCapture ? capture(1, 40) : isDrainRace ? row(1, "check", "check: already drained") : "");
 const pi = {
   on(name, handler) { handlers.set(name, handler); },
   registerCommand() {}, registerTool() {},
-  sendUserMessage(content) { sent.push(content); },
-  sendMessage: isCapture ? (message) => {
+  sendUserMessage(content) { sentKinds.push("visible"); sent.push(content); },
+  sendMessage: isCapture || mode === "drain-race-hidden" || mode === "drain-race-status" ? (message) => {
     if (rejectHidden) {
       rejectHidden = false;
       throw new Error("fixture rejects the first hidden send before acceptance");
     }
     sent.push(message.content);
+    sentKinds.push("hidden");
   } : undefined,
 };
 const mod = await import(pathToFileURL(process.env.EXT).href);
@@ -141,7 +198,7 @@ try {
     await until(drained, "replacement capture presentation was not acknowledged");
     if (!sent[expected + 2].includes("procevent:fixture:40")) throw new Error("replacement capture missing");
     await consume(sent[expected + 2]);
-  } else if (mode === "empty-failure") {
+  } else if (mode === "empty-failure" || mode === "drain-race-failure") {
     await until(() => sent.length > 0, "suppressed wake lost the bounded restoration failure");
     if (sent.length !== 1 || !sent[0].includes("watcher: FAILED")) {
       throw new Error("continuity failure must be surfaced once, not silently suppressed");
@@ -150,6 +207,12 @@ try {
     if (arms().length !== 3) throw new Error("restoration escaped its configured retry bound");
   } else {
     await until(() => arms().length >= 2, "suppressing a drained close stopped supervision: no successor");
+    if (isDrainRace) {
+      // The row existed at close intake, then another consumer drained it
+      // during successor startup. An empty successful drain must not replay
+      // the old close reason through either the visible or hidden channel.
+      await until(() => existsSync(`${state}/drain-complete`), "the delivery-time drain never completed");
+    }
     let current = 2;
     if (mode === "stale") {
       await until(() => sent.length === 1, "initial stale wake did not arrive");
@@ -159,13 +222,19 @@ try {
       await until(() => arms().length >= 3, "suppressing a repeated stale close stopped supervision: no successor");
       if (sent.length !== 1) throw new Error("an identical stale repeat was delivered twice");
       current = 3;
+    } else if (mode === "drain-race-status") {
+      await until(() => sent.length === 1, "owned status-only presentation never arrived");
+      if (!sent[0].includes("OPEN DECISIONS") || !sent[0].includes("UNREAD STATUS") || sent[0].includes("already drained")) {
+        throw new Error(`owned status-only presentation lost meaningful rows: ${evidence()}`);
+      }
+      await handlers.get("message_start")({ message: { role: "custom", customType: "fm.wake", content: sent[0] } }, {});
     } else if (sent.length !== 0) {
-      throw new Error("a drained wake must remain silent");
+      throw new Error(`a drained wake must remain silent: ${evidence()}`);
     }
     process.kill(Number(arms()[current - 1]), 0);
     writeFileSync(queue, row(3, "check", "check: fresh inbox note"));
     writeFileSync(`${state}/release-${current}`, "");
-    const expected = mode === "stale" ? 2 : 1;
+    const expected = mode === "stale" || mode === "drain-race-status" ? 2 : 1;
     await until(() => sent.length >= expected, "a fresh note after the suppressed close never arrived");
     if (sent.length !== expected || !sent[expected - 1].includes("check: fresh inbox note")) {
       throw new Error(`suppression lost or duplicated the later actionable wake: ${JSON.stringify(sent)}`);
@@ -188,5 +257,9 @@ JS
 run_continuity_case empty
 run_continuity_case stale
 run_continuity_case empty-failure
+run_continuity_case drain-race
+run_continuity_case drain-race-hidden
+run_continuity_case drain-race-status
+run_continuity_case drain-race-failure
 run_continuity_case capture
 run_continuity_case capture-rejected

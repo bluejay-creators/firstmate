@@ -76,6 +76,7 @@ omp's replacement follows its own generation-owner contract in `.omp/extensions/
 - It reports no shutdown reason, so every shutdown with a pending actionable close persists the handoff for the next owning `session_start` to replay.
 - A subagent session (task tool, /tan clone) rebinding the factory is not a replacement: the rebind keeps the primary's live generation active, the session's events carry ctx.agent.kind === "sub" and stand down, and its start, shutdown, and arming calls never touch the supervising session's generation or handoff.
   The supervision-host extension follows the same rule, so an in-process subagent is safe for bounded read-only or short investigative work (`.agents/skills/harness-adapters/references/harness/omp.md` owns when a supervisor prefers one).
+  The watch and turn-end guard use the stricter shutdown-identity proof defined by the watch extension's "Subagent session safety" contract, with behavioral regressions in `tests/fm-omp-harness.test.sh`.
 
 The omp compact-delivery path coalesces an already accepted process-event capture by its `procevent:<source>:<capture-sequence>` identity within the owning session.
 Reconciliation can assign that same unhandled capture a new wake-queue sequence; this does not earn another model notification, including when it rides an unrelated wake.
@@ -173,6 +174,7 @@ When restoration does not succeed, the model is never left blind.
 
 On omp, an already-drained queue or an identical stale reason inside the suppression window suppresses only the follow-up, never successor restoration.
 The owner still verifies a successor within the same retry bound and surfaces a typed restoration failure if that bound is exhausted.
+The queue authority is checked again at delivery: a successful empty drain after successor startup retires the obsolete close rather than replaying its reason through the visible fallback.
 
 ### Claude handling successor
 
@@ -464,6 +466,11 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 
 `tests/fm-omp-watch-continuity.test.sh` drives real arm children through drained-queue and repeated-stale suppression, then proves a later actionable wake still arrives with a live successor.
 It also verifies that a suppressed notification cannot swallow the bounded restoration failure.
+It also drains the predecessor row during successor startup, verifies silence through both delivery channels, and proves that a later fresh wake and an independent restoration failure remain visible.
+A separate owned status-only presentation keeps `OPEN DECISIONS` and `UNREAD STATUS` visible even when the wake queue is empty; fixture failures report only fixed categories, message channels, byte counts, and hashes.
+The portable harness regression checks arming and redundant requests through owned process IDs and durable wake delivery, not status prose, schemas, or registered-handler inventories.
+Host adapter fixtures run a bounded owned CLI through the real engine-turn runner, checking a failed away attempt and quiet pass-through using execution receipts and process liveness; full host orchestration remains covered by `tests/fm-supervision-host.test.sh`.
+Host replacement coverage verifies that an acknowledged wake stays retired while a new durable wake still reaches the model with a live successor, rather than requiring multiline host stdout to survive compact presentation.
 
 ### Arm, recovery, triage, and lock suites
 

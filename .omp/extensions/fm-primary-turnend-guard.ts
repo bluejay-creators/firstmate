@@ -120,7 +120,8 @@ type SessionStartContext = {
 // fm-primary-omp-watch.ts). Beyond the observed kind/depth shape the gate is
 // defensive: depth > 0 means subagent, and an ambiguous ctx (no kind or an
 // unrecognized kind) reads as subagent unless lockOwnership() proves this
-// process is the fleet's owning primary.
+// process is the fleet's owning primary. Shutdown uses the stricter ownership
+// proof in fm-primary-omp-watch.ts's "Subagent session safety" contract.
 function subagentContext(ctx: unknown): boolean {
   if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return false;
   const agent = ctx.agent;
@@ -133,7 +134,8 @@ function subagentContext(ctx: unknown): boolean {
 function subagentShutdownContext(ctx: unknown): boolean {
   if (subagentContext(ctx)) return true;
   if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return lockOwnership() !== "owned";
-  return false;
+  const agent = ctx.agent;
+  return !agent || typeof agent !== "object" || !("kind" in agent) || agent.kind !== "main";
 }
 
 // The launch line is the only resume evidence omp offers an extension: its

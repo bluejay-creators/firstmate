@@ -6,6 +6,8 @@ This record contains reusable version-scoped evidence for active runtime guarant
 The backend guides own current setup, safety boundaries, and limitations.
 Exact task chronology, branch names, temporary homes, local paths, process ids, thread ids, and delivery transcripts remain in private reports or PR evidence.
 
+OMP primary/subagent ownership was refreshed on 2026-11-05 against omp18.10.4; [the OMP verification owner](omp.md#subagent-session-safety) records the live guard, exact invocation and current evidence.
+
 ## Harness detection precedence
 
 Firstmate's own harness comes from two kinds of evidence, and `bin/fm-harness.sh` owns how they combine: an environment marker names its harness, and the nearest harness process in the parent chain proves who owns the process tree.
