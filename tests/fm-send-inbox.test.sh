@@ -630,6 +630,17 @@ test_worker_delivery_replay_is_one_instruction() {
   rc=$?
   [ "$rc" -ne 0 ] || fail "an explicit typed endpoint accepted durable delivery mode"
   [ ! -s "$dir/send.log" ] || fail "a refused explicit endpoint still received keys"
+  run_send "$dir" "$err" -- t1 --delivery-id= "must not enqueue"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an empty delivery ID enqueued a request"
+  [ ! -e "$dir/home/state/t1.inbox/003.msg" ] || fail "empty ID still created an instruction"
+  run_send "$dir" "$err" -- sess:fm-t1 --delivery-id= "must not type"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an empty delivery ID escaped to a typed endpoint"
+  [ ! -s "$dir/send.log" ] || fail "empty ID refusal still typed text"
+  run_send "$dir" "$err" -- t1 --delivery-id "" --key Enter
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an empty delivery ID escaped to the key path"
   pass "worker explicit delivery IDs survive acknowledged replay without collapsing new requests"
 }
 

@@ -17,6 +17,8 @@
 # decision or send a key; unlike that secondmate-only option it also supports
 # workers. Exact same ID/body reuses even an acknowledged record; new IDs
 # remain distinct. Explicit endpoint/typed sends cannot use this mode.
+# An empty --delivery-id refuses before any record, typed text or lifecycle
+# key can be sent.
 # Special keys instead of text: fm-send.sh <target> --key Enter
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
@@ -655,7 +657,7 @@ fm_send_resolve_close_note() { # <key> <excerpt>
   printf 'answered: %s' "$excerpt"
 }
 
-if [ -n "$FIRE_AND_FORGET_ID" ]; then
+if [ -n "$FIRE_AND_FORGET_ID" ] || [ "$DELIVERY_ID_MODE" = 1 ]; then
   printf '%s' "$FIRE_AND_FORGET_ID" | grep -Eq '^[a-f0-9]{16}$' ||
     {
       echo "error: --fire-and-forget delivery id must be 16 lowercase hex characters" >&2
