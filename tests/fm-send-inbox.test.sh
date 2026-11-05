@@ -611,6 +611,29 @@ test_empty_message_refused() {
   pass "fm-send: an empty or whitespace-only text steer refuses before marking, recording, or typing"
 }
 
+test_worker_delivery_replay_is_one_instruction() {
+  local dir err rc
+  dir=$(setup_case worker-faf-replay)
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 --delivery-id 0123456789abcdef "perform the routed ask" ||
+    fail "initial worker delivery failed: $(cat "$err")"
+  mv "$dir/home/state/t1.inbox/001.msg" "$dir/home/state/t1.inbox/handled/"
+  run_send "$dir" "$err" -- t1 --delivery-id 0123456789abcdef "perform the routed ask" ||
+    fail "replay of acknowledged worker delivery failed"
+  [ ! -e "$dir/home/state/t1.inbox/002.msg" ] ||
+    fail "a replay made the worker act on an acknowledged request twice"
+  run_send "$dir" "$err" -- t1 --delivery-id 1123456789abcdef "perform the routed ask" ||
+    fail "distinct logical worker request failed"
+  [ -f "$dir/home/state/t1.inbox/002.msg" ] ||
+    fail "different request IDs collapsed into one instruction"
+  run_send "$dir" "$err" -- sess:fm-t1 --delivery-id 2123456789abcdef "not a durable task"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an explicit typed endpoint accepted durable delivery mode"
+  [ ! -s "$dir/send.log" ] || fail "a refused explicit endpoint still received keys"
+  pass "worker explicit delivery IDs survive acknowledged replay without collapsing new requests"
+}
+
+test_worker_delivery_replay_is_one_instruction
 test_text_steer_rides_inbox
 test_busy_inbox_coalesces_and_idle_ladder_survives
 test_pending_doorbell_stuck_busy_escalates

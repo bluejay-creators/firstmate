@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Steer a task by durable record: write the message into the task's steering
 # inbox and ring a constant doorbell line into its terminal, best-effort.
-# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] <text...>
+# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <id> | --delivery-id <id>] <text...>
 #   <target> may be an exact task id, a legacy fm-<id> task label resolved
 #   through this home's state/<id>.meta, or an explicit well-formed backend
 #   target. fm-send refuses unresolved guesses rather than falling back to a
@@ -11,6 +11,12 @@
 # before anything is marked, recorded, or typed, because an empty marked
 # secondmate request delivers only marker and correlation bytes and leaves the
 # parent waiting on a reply to nothing.
+# --delivery-id is the board-outbox caller's idempotent, inbox-only mode for
+# any recorded task selector. It creates no separate reply expectation.
+# Like --fire-and-forget it needs a stable 16-hex ID and cannot answer a keyed
+# decision or send a key; unlike that secondmate-only option it also supports
+# workers. Exact same ID/body reuses even an acknowledged record; new IDs
+# remain distinct. Explicit endpoint/typed sends cannot use this mode.
 # Special keys instead of text: fm-send.sh <target> --key Enter
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
@@ -500,6 +506,7 @@ fi
 # message exactly as before, so ordinary sends are byte-identical.
 RESOLVE_KEYS=
 FIRE_AND_FORGET_ID=
+DELIVERY_ID_MODE=0
 fm_send_add_resolve_key() { # <key>
   local k=$1
   case "$k" in
@@ -528,6 +535,24 @@ while :; do
     ;;
   --resolve-key=*)
     fm_send_add_resolve_key "${1#--resolve-key=}" || exit 1
+    shift
+    ;;
+  --delivery-id)
+    [ $# -ge 2 ] && [ -z "$FIRE_AND_FORGET_ID" ] || {
+      echo "error: --delivery-id requires one non-duplicate delivery id" >&2
+      exit 1
+    }
+    FIRE_AND_FORGET_ID=$2
+    DELIVERY_ID_MODE=1
+    shift 2
+    ;;
+  --delivery-id=*)
+    [ -z "$FIRE_AND_FORGET_ID" ] || {
+      echo "error: duplicate delivery id" >&2
+      exit 1
+    }
+    FIRE_AND_FORGET_ID=${1#--delivery-id=}
+    DELIVERY_ID_MODE=1
     shift
     ;;
   --fire-and-forget)
@@ -636,11 +661,17 @@ if [ -n "$FIRE_AND_FORGET_ID" ]; then
       echo "error: --fire-and-forget delivery id must be 16 lowercase hex characters" >&2
       exit 1
     }
-  [ "$MARK_FROM_FIRSTMATE" = 1 ] ||
-    {
+  if [ "$DELIVERY_ID_MODE" = 1 ]; then
+    [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] || {
+      echo "error: --delivery-id requires a recorded task selector, never a typed endpoint" >&2
+      exit 1
+    }
+  else
+    [ "$MARK_FROM_FIRSTMATE" = 1 ] || {
       echo "error: --fire-and-forget requires a recorded secondmate task selector" >&2
       exit 1
     }
+  fi
   [ -z "$RESOLVE_KEYS" ] ||
     {
       echo "error: --fire-and-forget cannot accompany --resolve-key" >&2
@@ -897,6 +928,9 @@ else
       echo "error: failed to durably prepare pending-reply delivery for $TARGET_TASK_ID" >&2
       exit 1
     fi
+  elif [ "$DELIVERY_ID_MODE" = 1 ]; then
+    MESSAGE="delivery=${FIRE_AND_FORGET_ID} $MESSAGE"
+    FM_SEND_IDEMPOTENT=1
   fi
   # Data-plane selection (see the header): text addressed to a task selector
   # resolved through this home's metadata rides the inbox plane, unless it is

@@ -56,6 +56,7 @@ An additional `metadata.wait` has a `kind` of `parked`, `deferred`, `consolidati
 A dated wait expires rather than suppressing work indefinitely.
 Waiting does not excuse an ownerless task or a dependency cycle.
 Captain-labelled tasks remain with the captain-request loop, not agent deadline notices.
+Use [`fm_route_ask.py`](../bin/fm_route_ask.py) for a routed captain ask; its `--help` owns durable coupling, replay and orphan-check mechanics.
 
 Ready-but-unstarted work is observed until it leaves `bd ready`.
 Unrelated board edits do not reset that observation clock.
