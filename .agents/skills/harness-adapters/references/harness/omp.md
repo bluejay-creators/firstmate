@@ -9,7 +9,7 @@ Cross-harness provider and credential identity is owned by `references/common/mo
 | Fact | Value |
 |---|---|
 | Binary | `omp`, a single Bun-compiled executable resolved from `PATH` by `../../../bin/fm-spawn.sh`; a missing binary refuses the spawn. |
-| Launch | Foreign markers cleared (`CLAUDECODE`, `PI_CODING_AGENT`, `GROK_AGENT`, `FM_PI_HARNESS`, `GEMINI_CLI`, Cursor's), `FM_OMP_HARNESS=omp OMP_SKIP_SETUP=1`, then `omp --config <.omp/fm-worker-overlay.yml> --auto-approve --cwd <worktree> [--model] [--thinking] -e state/<id>.omp-ext.ts <one positional brief>`; a secondmate passes no `-e` and relies on auto-discovery. |
+| Launch | Foreign markers cleared (`CLAUDECODE`, `PI_CODING_AGENT`, `GROK_AGENT`, `FM_PI_HARNESS`, `GEMINI_CLI`, Cursor's), `FM_OMP_HARNESS=omp OMP_SKIP_SETUP=1`, then `omp --config <.omp/fm-worker-overlay.yml> --auto-approve --cwd <worktree> [--model] [--thinking] -e state/<id>.omp-ext.ts <one positional brief>`; a secondmate passes that same `-e` for the busy extension and still relies on auto-discovery for its primary extensions. |
 | Busy state | `../../../bin/fm-busy-lib.sh` source `omp-ext`: the per-task extension marks busy at `agent_start` and idle at `agent_end` only when `willContinue` is not true; `ctx.isIdle()` is deliberately not consulted because it reads false at a natural TUI `agent_end` (`session_stop` is awaited before settle). |
 | Exit command | `/quit` (`/exit` and `/q` are aliases). |
 | Interrupt | Single Escape; the composer is left empty, no clear key. |
@@ -42,7 +42,8 @@ The captain's own `~/.omp/agent/config.yml` is never written; the tracked `.omp/
 ## Extension loading
 
 omp auto-discovers `<cwd>/.omp/extensions/*.ts` (top level only, cwd only, no ancestor walk, no trust dialog) and the active profile's `agent/extensions/`; `.pi/extensions/` is not a discovery root.
-A file that is both auto-discovered and named with `-e` loads twice, so the per-task worker extension lives in `state/` and a secondmate launch names no `-e` at all.
+A file that is both auto-discovered and named with `-e` loads twice, so the per-task busy extension lives in `state/` and is the only `-e` a secondmate launch names.
+The primary extensions stay auto-discovered and are not named again.
 There is no `agent_settled` event; `agent_end` plus `willContinue` replaces it.
 
 ## Primary integration
@@ -54,3 +55,13 @@ The Pi supervision branch does not run on omp; without the supervision host ever
 Launch a primary with plain `omp` inside the home (`FM_OMP_HARNESS=omp omp` when starting from a Claude pane); `../../../bin/fm-session-start.sh` prints `OMP_WATCH_EXTENSION: not loaded` when the running session has not loaded both tracked extensions.
 `FM_OMP_LIVE_E2E=1 ../../../tests/fm-omp-primary-live-e2e.test.sh` is the opt-in live guard; `../../../tests/fm-omp-harness.test.sh` is the portable regression.
 A secondmate registered with `remote=1` in `data/secondmates.md`, spawned through the ordinary `../../../bin/fm-spawn.sh <id> <home> --secondmate` path, is refused on omp until a remote host verifies it, as is `../../../bin/fm-remote-secondmate-control.sh launch`; there is no `--remote` flag.
+
+## In-process subagents on the omp primary
+
+The omp primary prefers an in-process subagent (the task tool) for bounded read-only or short investigative work: log attribution, key-holder or setting lookup, code reading, report drafting, and similar bounded probes that fit one child turn and return inline to the same conversation.
+It carries no pane, no worktree, no backlog item, and no fleet record, and bounded truth-seeking that stays inside the supervisor's own session supervision is exactly the shape built-in subagents exist for.
+`bin/fm-spawn.sh` remains the dispatch for anything that changes a project, needs an isolated worktree, branch, or PR, must outlive the supervisor's turn, or runs long, and secondmate routing stays a home-scope decision, not a dispatch-size one.
+The tracked `.omp/extensions` extensions stand down under omp's `ctx.agent.kind === "sub"` discriminator, and the watch extension's factory rebind for a subagent keeps the primary's live generation active: a subagent session never claims, consumes, or retires the supervisor's watcher arm, never persists the replacement handoff, and its shutdown leaves the primary generation live.
+`tests/fm-omp-harness.test.sh` owns the portable regression; `FM_OMP_SUBAGENT_SMOKE=1 tests/fm-omp-subagent-smoke-e2e.test.sh` is the live-e2e guard (verifies the primary still owns its arm and a queued wake still reaches it after a real subagent completes); `docs/verification/omp.md` records the dated result.
+The 2026-10-08 and 2026-10-13 incidents before this contract are recorded in `data/learnings.md` of the captain's home.
+

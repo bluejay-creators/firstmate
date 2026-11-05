@@ -21,6 +21,8 @@ It lists channel directives, one per non-empty, non-comment line, and every list
 An absent `config/wedge-alarm` behaves as `auto`, which is default-on on macOS.
 This is deliberate because the alarm fires only after a genuine max-defer wedge and is rate-limited to at most once per max-defer window.
 
+For an optional content-free phone hint independent of these summary-bearing channels (including `off`), see [configuration's phone hook](configuration.md#away-mode-phone-hints-configphone-notify).
+
 Each channel is best-effort.
 A missing binary or non-zero exit logs a warning and continues to the next channel without crashing the daemon loop.
 Every invocation is process-group bounded by `FM_WEDGE_ALARM_TIMEOUT_SECS`, which defaults to 10 seconds, including `command:`, `osascript`, `herdr`, and the test seam.

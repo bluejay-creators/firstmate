@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Steer a task by durable record: write the message into the task's steering
 # inbox and ring a constant doorbell line into its terminal, best-effort.
-# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] <text...>
+# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <id> | --delivery-id <id>] <text...>
 #   <target> may be an exact task id, a legacy fm-<id> task label resolved
 #   through this home's state/<id>.meta, or an explicit well-formed backend
 #   target. fm-send refuses unresolved guesses rather than falling back to a
@@ -11,6 +11,14 @@
 # before anything is marked, recorded, or typed, because an empty marked
 # secondmate request delivers only marker and correlation bytes and leaves the
 # parent waiting on a reply to nothing.
+# --delivery-id is the board-outbox caller's idempotent, inbox-only mode for
+# any recorded task selector. It creates no separate reply expectation.
+# Like --fire-and-forget it needs a stable 16-hex ID and cannot answer a keyed
+# decision or send a key; unlike that secondmate-only option it also supports
+# workers. Exact same ID/body reuses even an acknowledged record; new IDs
+# remain distinct. Explicit endpoint/typed sends cannot use this mode.
+# An empty --delivery-id refuses before any record, typed text or lifecycle
+# key can be sent.
 # Special keys instead of text: fm-send.sh <target> --key Enter
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
@@ -49,7 +57,10 @@
 # "was the message acted on" is, and that is answered asynchronously for an
 # ordinary record by the worker's acknowledgement move into handled/.
 # bin/fm-task-inbox-lib.sh owns the record format, doorbell line, and retry and
-# escalation policy for ordinary and fire-and-forget records.
+# escalation policy for ordinary and fire-and-forget records. When the task's
+# inbox has a live in-session omp listener (bin/fm-task-inbox-listener-lib.sh's
+# verdict; .omp/extensions/fm-inbox-listener.ts), the ring returns 4 and this
+# script types nothing: the record alone delivers through the session.
 # The composer pre-check before the ring is ADVISORY only: when
 # the composer visibly holds pending text the ring is skipped with a notice and
 # the watcher re-rings an ordinary record later; no composer verdict is
@@ -441,6 +452,41 @@ fm_send_resolve_target() { # <raw-target>
 RAW_TARGET=$1
 fm_send_resolve_target "$RAW_TARGET" || exit 1
 T=$RESOLVED_TARGET
+
+# A herdr endpoint whose recorded session:pane no longer answers may have
+# been moved to another workspace (the captain drags the task tab). Re-run
+# the same relocation proof the control plane owns: locate the pane under the
+# task's stable identity (exact tab label + herdr's own agent record), and
+# publish the fresh binding atomically into the task record before the data
+# plane proceeds. A no-op on every non-herdr backend and every reachable pane.
+if [ "$TARGET_BACKEND" = herdr ] && [ -n "$TARGET_META" ]; then
+  TARGET_ID=$(fm_send_id_from_meta "$TARGET_META")
+  if [ -n "$TARGET_ID" ]; then
+    RELOC_STATE=$(fm_backend_agent_state herdr "$T")
+    case "$RELOC_STATE" in
+      unreadable|missing|dead)
+        RELOCATED=$(fm_recorded_herdr_endpoint_relocate "$TARGET_META" "$TARGET_ID" "$STATE") && RELOC_RC=0 || RELOC_RC=$?
+        case "$RELOC_RC" in
+          0)
+            T=$RELOCATED
+            ;;
+          1)
+            # No re-binding was proven: proceed against the recorded target
+            # exactly as if relocation had never run - only an AMBIGUOUS
+            # match (which never reaches here) could mis-route a key.
+            echo "fm-send: recorded herdr endpoint reads '$RELOC_STATE'; relocation lookup found no exact pane under the task's stable identity, so the doorbell goes only to the recorded target" >&2
+            ;;
+          *)
+            # An ambiguous match must never mis-deliver: the DOORBELL is
+            # suppressed, but the durable steer lands anyway, which is what
+            # the inbox contract guarantees.
+            echo "fm-send: recorded herdr endpoint reads '$RELOC_STATE'; relocation lookup could not uniquely prove which live pane serves this task, so the doorbell is suppressed and the steer is delivered durably only" >&2
+            ;;
+        esac
+        ;;
+    esac
+  fi
+fi
 shift
 
 # Supervision lease guard: a steer is overlap territory between the two Pi
@@ -462,6 +508,7 @@ fi
 # message exactly as before, so ordinary sends are byte-identical.
 RESOLVE_KEYS=
 FIRE_AND_FORGET_ID=
+DELIVERY_ID_MODE=0
 fm_send_add_resolve_key() { # <key>
   local k=$1
   case "$k" in
@@ -490,6 +537,24 @@ while :; do
     ;;
   --resolve-key=*)
     fm_send_add_resolve_key "${1#--resolve-key=}" || exit 1
+    shift
+    ;;
+  --delivery-id)
+    [ $# -ge 2 ] && [ -z "$FIRE_AND_FORGET_ID" ] || {
+      echo "error: --delivery-id requires one non-duplicate delivery id" >&2
+      exit 1
+    }
+    FIRE_AND_FORGET_ID=$2
+    DELIVERY_ID_MODE=1
+    shift 2
+    ;;
+  --delivery-id=*)
+    [ -z "$FIRE_AND_FORGET_ID" ] || {
+      echo "error: duplicate delivery id" >&2
+      exit 1
+    }
+    FIRE_AND_FORGET_ID=${1#--delivery-id=}
+    DELIVERY_ID_MODE=1
     shift
     ;;
   --fire-and-forget)
@@ -592,17 +657,23 @@ fm_send_resolve_close_note() { # <key> <excerpt>
   printf 'answered: %s' "$excerpt"
 }
 
-if [ -n "$FIRE_AND_FORGET_ID" ]; then
+if [ -n "$FIRE_AND_FORGET_ID" ] || [ "$DELIVERY_ID_MODE" = 1 ]; then
   printf '%s' "$FIRE_AND_FORGET_ID" | grep -Eq '^[a-f0-9]{16}$' ||
     {
       echo "error: --fire-and-forget delivery id must be 16 lowercase hex characters" >&2
       exit 1
     }
-  [ "$MARK_FROM_FIRSTMATE" = 1 ] ||
-    {
+  if [ "$DELIVERY_ID_MODE" = 1 ]; then
+    [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] || {
+      echo "error: --delivery-id requires a recorded task selector, never a typed endpoint" >&2
+      exit 1
+    }
+  else
+    [ "$MARK_FROM_FIRSTMATE" = 1 ] || {
       echo "error: --fire-and-forget requires a recorded secondmate task selector" >&2
       exit 1
     }
+  fi
   [ -z "$RESOLVE_KEYS" ] ||
     {
       echo "error: --fire-and-forget cannot accompany --resolve-key" >&2
@@ -859,6 +930,9 @@ else
       echo "error: failed to durably prepare pending-reply delivery for $TARGET_TASK_ID" >&2
       exit 1
     fi
+  elif [ "$DELIVERY_ID_MODE" = 1 ]; then
+    MESSAGE="delivery=${FIRE_AND_FORGET_ID} $MESSAGE"
+    FM_SEND_IDEMPOTENT=1
   fi
   # Data-plane selection (see the header): text addressed to a task selector
   # resolved through this home's metadata rides the inbox plane, unless it is
@@ -1096,6 +1170,8 @@ else
       esac
     fi
     case "$ring_rc" in
+    4) echo "fm-send: no doorbell typed: $T runs a live in-session inbox listener; the steer is durably recorded at $INBOX_RECORD and is delivered through the session" >&2 ;;
+    5) echo "fm-send: no new doorbell typed: an outstanding doorbell already covers this inbox; the steer is durably recorded at $INBOX_RECORD" >&2 ;;
     1) echo "fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
     2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
     3) echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2 ;;

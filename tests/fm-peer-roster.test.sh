@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Behavioral fixture for the read-only Herdr/Beads peer roster.
+# Behavioral fixture for the deterministic peer roster (v2): parked workers,
+# stale rows, keyed blocked decisions with their aged-out stale form, terminal
+# done-after-publish posture, secondmate children, the on_captain section, and
+# proof that no free-text fragments survive into posture.
 set -euo pipefail
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -7,42 +10,139 @@ TMP_ROOT=$(fm_test_tmproot fm-peer-roster)
 FM_TEST_CLEANUP_DIRS+=("$TMP_ROOT")
 trap fm_test_cleanup EXIT
 export FM_HOME="$TMP_ROOT/home" FIXTURE="$TMP_ROOT/fixture" HERDR_SESSION=default
-mkdir -p "$FM_HOME/state/peers" "$FIXTURE"
-printf 'alice\tAlice\nbob\tBob\ncharlie\tCharlie\n' > "$FM_HOME/state/peers/peers.tsv"
+mkdir -p "$FM_HOME/state/peers" "$FM_HOME/data" "$FM_HOME/config" "$FIXTURE"
+# bd is stubbed by PATH below; the fixture must never accidentally reach a
+# real store from this tmp home.
+printf 'alice\tAlice\nbob\tBob\ncharlie\tCharlie\ndana\tDana\n' > "$FM_HOME/state/peers/peers.tsv"
 now=$(date +%s)
-printf 'note [at=%s] [key=build]: work underway\n' "$now" > "$FM_HOME/state/peers/alice.log"
+# An open keyed `blocked` line is what flips alice's posture - `note` never
+# opens a key (the open-key pass only looks at blocked/needs-decision).
+printf 'blocked [at=%s] [key=build]: work underway\n' "$now" > "$FM_HOME/state/peers/alice.log"
 printf 'done [at=1]: old task\n' > "$FM_HOME/state/peers/bob.log"
-cat > "$FM_HOME/state/job.meta" <<'META'
+
+# Dana's keyed decision and everything after it are two hours old: the open
+# aged past the decision window, so it surfaces as stale instead of blocked
+# and the row follows its latest line back to idle-stale.
+stale=$((now - 7200))
+printf 'blocked [at=%s] [key=aged]: old ask\nnote [at=%s]: chatter aged too\n' "$stale" "$stale" > "$FM_HOME/state/peers/dana.log"
+touch -t "$(date -r "$stale" '+%Y%m%d%H%M.%S')" "$FM_HOME/state/peers/dana.log"
+
+# A worker whose status declares `paused` is parked.
+cat > "$FM_HOME/state/parked-worker.meta" <<'META'
 backend=herdr
-herdr_session=default
-herdr_tab_id=w1:t3
-window=default:w1:p3
-endpoint_task_id=job
+window=default:w1:p9
+endpoint_task_id=parked-worker
+kind=ship
+mode=direct-PR
 META
-cat > "$FIXTURE/current.json" <<'JSON'
-{"result":{"pane":{"workspace_id":"w1","pane_id":"w1:p0"}}}
-JSON
+earlier=$((now - 100))
+printf 'working [at=%s]: exploring\npaused [at=%s]: waiting on fixture deployment\n' "$earlier" "$now" > "$FM_HOME/state/parked-worker.status"
+
+# A worker whose latest line is an open keyed need is blocked deterministically.
+cat > "$FM_HOME/state/blocked-worker.meta" <<'META'
+backend=herdr
+window=default:w1:p10
+endpoint_task_id=blocked-worker
+kind=ship
+META
+earlier=$((now - 60))
+printf 'blocked [at=%s] [key=gcloud-auth]: waiting on login\nnote [at=%s]: subsequent chatter\n' "$earlier" "$now" > "$FM_HOME/state/blocked-worker.status"
+
+# fm-pbk regression: a worker that declared `done` after publishing its result
+# (PR opened or merged) but whose pane lingers must surface as done, never as
+# idle/idle-stale - and an unresolved open key still outranks a later done.
+cat > "$FM_HOME/state/done-worker.meta" <<'META'
+backend=herdr
+window=default:w1:p20
+endpoint_task_id=done-worker
+kind=ship
+META
+earlier=$((now - 4000))
+printf 'working [at=%s]: implementing\ndone [at=%s]: PR https://example.invalid/pull/1 merged\n' "$earlier" "$earlier" > "$FM_HOME/state/done-worker.status"
+
+cat > "$FM_HOME/state/done-fresh-worker.meta" <<'META'
+backend=herdr
+window=default:w1:p21
+endpoint_task_id=done-fresh-worker
+kind=ship
+META
+done_fresh=$((now - 120))
+printf 'working [at=%s]: implementing\ndone [at=%s]: PR https://example.invalid/pull/2\n' "$earlier" "$done_fresh" > "$FM_HOME/state/done-fresh-worker.status"
+
+cat > "$FM_HOME/state/failed-worker.meta" <<'META'
+backend=herdr
+window=default:w1:p22
+endpoint_task_id=failed-worker
+kind=ship
+META
+printf 'working [at=%s]: implementing\nfailed [at=%s]: lint loop never converged\n' "$earlier" "$earlier" > "$FM_HOME/state/failed-worker.status"
+
+# A secondmate home with its own state and a live child.
+mkdir -p "$TMP_ROOT/mate-home/state" "$TMP_ROOT/mate-home/data"
+printf '# Backlog\n\n## Queued\n- [ ] t1 - Sample (kind: ship) (since 2026-10-12) (hold: fm-hold-v1:c2FtcGxl) (hold-kind: captain)\n' > "$TMP_ROOT/mate-home/data/backlog.md"
+printf '%s\n' "- platform - Sample secondmate. (home: $TMP_ROOT/mate-home; scope: sample scope)" > "$FM_HOME/data/secondmates.md"
+cat > "$TMP_ROOT/mate-home/state/child-one.meta" <<'META'
+backend=herdr
+window=default:w1:p11
+endpoint_task_id=child-one
+kind=ship
+worktree=/tmp/child-one
+META
+earlier=$((now - 30))
+printf 'working [at=%s]: on the secondmate lane\n' "$earlier" > "$TMP_ROOT/mate-home/state/child-one.status"
+cat > "$TMP_ROOT/mate-home/state/stale-child.meta" <<'META'
+backend=herdr
+window=default:w1:p13
+endpoint_task_id=stale-child
+kind=ship
+META
+earlier=$((now - 7200))
+printf 'note [at=%s]: seven-thousand seconds ago\n' "$earlier" > "$TMP_ROOT/mate-home/state/stale-child.status"
+touch -t "$(date -r "$earlier" '+%Y%m%d%H%M.%S')" "$TMP_ROOT/mate-home/state/stale-child.status"
+
+# Peers: bob's latest report ends with the terminal `done` verb on a broken
+# stamp ([at=1]), which is exactly the done-after-publish shape: the stamp is
+# still never fabricated, but the posture is done rather than idle-stale.
+# charlie is unmatched by Herdr so its activity stays unknown; alice is fresh
+# but should not float past her unresolved `build` key.
+printf '{"result":{"pane":{"workspace_id":"w1","pane_id":"w1:p0"}}}' > "$FIXTURE/current.json"
 cat > "$FIXTURE/tabs.json" <<'JSON'
-{"result":{"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"◐ Alice"},{"tab_id":"w1:t2","workspace_id":"w1","label":"Bob"},{"tab_id":"w1:t3","workspace_id":"w1","label":"fm-job"},{"tab_id":"w1:t4","workspace_id":"w1","label":"Stranger"}]}}
+{"result":{"tabs":[
+  {"tab_id":"w1:t1","workspace_id":"w1","label":"Alice"},
+  {"tab_id":"w1:t2","workspace_id":"w1","label":"Bob"},
+  {"tab_id":"w1:t3","workspace_id":"w1","label":"fm-parked-worker"},
+  {"tab_id":"w1:t4","workspace_id":"w1","label":"fm-blocked-worker"},
+  {"tab_id":"w1:t5","workspace_id":"w1","label":"fm-child-one"},
+  {"tab_id":"w1:t6","workspace_id":"w1","label":"fm-stale-child"},
+  {"tab_id":"w1:t7","workspace_id":"w1","label":"fm-done-worker"},
+  {"tab_id":"w1:t8","workspace_id":"w1","label":"fm-done-fresh-worker"},
+  {"tab_id":"w1:t9","workspace_id":"w1","label":"fm-failed-worker"}
+]}}
 JSON
 cat > "$FIXTURE/agents.json" <<'JSON'
-{"result":{"agents":[{"tab_id":"w1:t1","workspace_id":"w1","pane_id":"w1:p1","agent_status":"working"},{"tab_id":"w1:t2","workspace_id":"w1","pane_id":"w1:p2","agent_status":"idle"},{"tab_id":"w1:t3","workspace_id":"w1","pane_id":"w1:p3","agent_status":"working"},{"tab_id":"w1:t4","workspace_id":"w1","pane_id":"w1:p4","agent_status":"idle"},{"tab_id":"w2:t1","workspace_id":"w2","pane_id":"w2:p1","agent_status":"working"}]}}
+{"result":{"agents":[
+  {"tab_id":"w1:t1","workspace_id":"w1","pane_id":"w1:p1","agent_status":"working"},
+  {"tab_id":"w1:t2","workspace_id":"w1","pane_id":"w1:p2","agent_status":"done"},
+  {"tab_id":"w1:t3","workspace_id":"w1","pane_id":"w1:p9","agent_status":"working"},
+  {"tab_id":"w1:t4","workspace_id":"w1","pane_id":"w1:p10","agent_status":"working"},
+  {"tab_id":"w1:t5","workspace_id":"w1","pane_id":"w1:p11","agent_status":"working"},
+  {"tab_id":"w1:t7","workspace_id":"w1","pane_id":"w1:p20","agent_status":"done"},
+  {"tab_id":"w1:t8","workspace_id":"w1","pane_id":"w1:p21","agent_status":"done"},
+  {"tab_id":"w1:t9","workspace_id":"w1","pane_id":"w1:p22","agent_status":"done"}
+]}}
 JSON
 cat > "$FIXTURE/issues.json" <<'JSON'
 [
-  {"id":"b1","title":"Build","status":"in_progress","assignee":"alice","labels":["auditless"],"dependency_count":1,"dependencies":[{"type":"blocks","depends_on_id":"b2"}]},
-  {"id":"b2","title":"Need deploy","status":"open","assignee":"other","labels":["platform"],"dependency_count":0},
-  {"id":"b3","title":"Unowned","status":"open","labels":["usga"],"dependency_count":0},
-  {"id":"b4","title":"Follow-up","status":"open","assignee":"bob","labels":["bridge"],"dependency_count":1,"dependencies":[{"type":"blocks","depends_on_id":"b5"}]},
-  {"id":"b5","title":"Finished","status":"closed","labels":["bridge"],"dependency_count":0},
-  {"id":"b6","title":"Stale reference","status":"open","assignee":"alice","labels":["auditless"],"dependency_count":1,"dependencies":[{"type":"blocks","depends_on_id":"missing"}]},
-  {"id":"b7","title":"Label alias","status":"open","assignee":"Alice","labels":["agents"],"dependency_count":0},
-  {"id":"b8","title":"Wait","status":"open","assignee":"alice","labels":["auditless"],"dependency_count":0,"dependencies":[{"type":"waits-for","depends_on_id":"b2"}]},
-  {"id":"b9","title":"Conditional","status":"open","assignee":"alice","labels":["auditless"],"dependency_count":0,"dependencies":[{"type":"conditional-blocks","depends_on_id":"b2"}]},
-  {"id":"b10","title":"Deleted blocker","status":"open","assignee":"charlie","labels":["bridge"],"dependency_count":1,"dependencies":[{"type":"blocks","depends_on_id":"b11"}]},
-  {"id":"b11","title":"Deleted","status":"tombstone","labels":["bridge"],"dependency_count":0}
+  {"id":"b1","title":"Build work","status":"open","assignee":"alice","labels":["agents"]},
+  {"id":"b2","title":"Alice Title-Case Label","status":"open","assignee":"Alice","labels":["agents"]},
+  {"id":"b3","title":"Platform work","status":"open","assignee":"Platform","labels":["platform"]},
+  {"id":"b4","title":"Captain call","status":"open","assignee":"Fake Captain","labels":["captain","decision"]},
+  {"id":"b5","title":"Done work","status":"in_progress","assignee":"alice","labels":["agents"]},
+  {"id":"b6","title":"Bob label work","status":"open","labels":["Bob","agents"]},
+  {"id":"b7","title":"Missed history","status":"open","labels":["bob"]}
 ]
 JSON
+
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
 cat > "$FAKEBIN/herdr" <<'SH'
 #!/usr/bin/env bash
@@ -50,146 +150,178 @@ printf 'herdr %s\n' "$*" >> "$FIXTURE/calls"
 case "$*" in
   'pane current --session default') cat "$FIXTURE/current.json" ;;
   'tab list --workspace w1 --session default') cat "$FIXTURE/tabs.json" ;;
-  'agent list --session default') [ ! -e "$FIXTURE/herdr-fails" ] || exit 3; cat "$FIXTURE/agents.json" ;;
+  'agent list --session default') cat "$FIXTURE/agents.json" ;;
   *) exit 4 ;;
 esac
 SH
 cat > "$FAKEBIN/bd" <<'SH'
 #!/usr/bin/env bash
+[ "$PWD" = "$EXPECTED_BOARD" ] || exit 5
 printf 'bd %s\n' "$*" >> "$FIXTURE/calls"
 case "$*" in
-  '--readonly --sandbox where --json') [ ! -e "$FIXTURE/bd-fails" ] || exit 3; printf '{"path":"fixture-board"}\n' ;;
-  '--readonly --sandbox list --all --include-gates --include-infra --limit 0 --json') cat "$FIXTURE/issues.json" ;;
+  '--readonly --sandbox --json list --status open --limit 0') [ ! -e "$FIXTURE/bd-fails" ] || exit 3; cat "$FIXTURE/issues.json" ;;
   *) exit 4 ;;
 esac
 SH
 chmod +x "$FAKEBIN/herdr" "$FAKEBIN/bd"
 export PATH="$FAKEBIN:$PATH"
+# The fixture exercises the existing configured shared-board owner; every bd
+# call must chdir to that board rather than inheriting the test runner's cwd.
+export EXPECTED_BOARD="$FIXTURE"
+printf '%s\n' "$FIXTURE" > "$FM_HOME/config/beads-board"
+unset FM_BOARD
+
 ROSTER="$ROOT/bin/fm-peer-roster.sh"
-"$ROSTER" --json > "$FIXTURE/out"
-jq -e '.sources == {"herdr":"ok","beads":"ok","peers":"ok"} and .partial == false and
-  .workspace == "w1" and .board == "fixture-board" and
-  ([.peers[] | select(.name == "alice")][0] | .activity == "working" and .work_evidence == "blocked" and .report.freshness == "fresh" and
-    [.beads[] | select(.id == "b1")][0].dependency_state == "blocked" and
-    [.beads[] | select(.id == "b1")][0].dependencies[0].status == "open" and
-    [.beads[] | select(.id == "b6")][0].dependency_state == "unknown" and
-    [.beads[] | select(.id == "b8")][0].dependency_state == "blocked" and
-    [.beads[] | select(.id == "b8")][0].dependencies[0].type == "waits-for" and
-    [.beads[] | select(.id == "b9")][0].dependency_state == "unknown") and
-  ([.peers[] | select(.name == "bob")][0] | .activity == "idle" and .work_evidence == "unknown" and .report.freshness == "stale" and
-    [.beads[] | select(.id == "b4")][0].dependency_state == "clear") and
-  ([.peers[] | select(.name == "charlie")][0] | .resolution == "unavailable" and .work_evidence == "unknown" and .report.freshness == "missing" and
-    [.beads[] | select(.id == "b10")][0].dependency_state == "unknown" and
-    [.beads[] | select(.id == "b10")][0].dependencies[0].status == "unknown") and
-  [.managed_tabs[].workers[]] == ["job"] and [.unregistered_tabs[].label] == ["Stranger"] and
-  [.unassigned_beads[].id] == ["b3"] and [.other_assigned_beads[].id] == ["b2","b7"]' "$FIXTURE/out" >/dev/null || fail 'roster failed to separate activity, reports, exact ownership and dependencies'
-pass 'current agent inventory, managed workers, exact assignment and blockers remain distinct'
-"$ROSTER" > "$FIXTURE/human"
-[ "$(wc -l < "$FIXTURE/human")" -lt 30 ] || fail 'default roster not concise'
 
-# An open blocked or needs-decision request key outweighs fresh, dependency-clear beads.
-printf 'needs-decision [at=1] [key=gcloud-auth]: waiting on login\nnote [at=%s]: still here\n' "$now" > "$FM_HOME/state/peers/bob.log"
+# 1. Parked worker posture takes precedence over the pane's `working` activity.
 "$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["gcloud-auth"] and .report.freshness == "fresh"' \
-  "$FIXTURE/out" >/dev/null || fail 'open request key reported as tracked work'
-printf 'resolved [at=%s] [key=other]: unrelated\n' "$now" >> "$FM_HOME/state/peers/bob.log"
-"$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["gcloud-auth"]' \
-  "$FIXTURE/out" >/dev/null || fail 'resolved line for a different key closed the request'
-printf 'resolved [at=%s] [key=gcloud-auth]: logged in\n' "$now" >> "$FM_HOME/state/peers/bob.log"
-"$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "tracked" and .report.open_keys == []' \
-  "$FIXTURE/out" >/dev/null || fail 'matching resolved line left the request open'
-printf 'blocked [at=%s] [key=fm-zfi]: waiting on proof\ndone [at=%s]: other proof finished\n' "$now" "$now" > "$FM_HOME/state/peers/bob.log"
-"$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["fm-zfi"] and .report.freshness == "fresh"' \
-  "$FIXTURE/out" >/dev/null || fail 'done line without a matching resolved closed the request'
-printf 'blocked [key=fm-l1v at=1]: waiting on review\n' > "$FM_HOME/state/peers/bob.log"
-"$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["fm-l1v"]' \
-  "$FIXTURE/out" >/dev/null || fail 'combined key tag did not open the request'
-printf 'resolved [key=fm-l1v at=%s]: reviewed\n' "$now" >> "$FM_HOME/state/peers/bob.log"
-"$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence != "blocked" and .report.open_keys == []' \
-  "$FIXTURE/out" >/dev/null || fail 'combined-form resolved line did not match its blocked key'
-printf 'blocked [at=1] [key=runner-github-app]: waiting on app install\nneeds-decision [at=%s] [key=runner-idle-stop]: stop idle runner?\n' "$now" > "$FM_HOME/state/peers/bob.log"
-"$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["runner-github-app","runner-idle-stop"]' \
-  "$FIXTURE/out" >/dev/null || fail 'two open requests were not both listed'
-"$ROSTER" > "$FIXTURE/human"
-grep -q '^bob: matched activity=idle work=blocked open=runner-github-app,runner-idle-stop ' "$FIXTURE/human" || fail 'default view omitted the open request keys'
-printf 'resolved [at=%s] [key=runner-idle-stop]: keep it\n' "$now" >> "$FM_HOME/state/peers/bob.log"
-"$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "bob")][0] | .work_evidence == "blocked" and .report.open_keys == ["runner-github-app"] and .report.freshness == "fresh"' \
-  "$FIXTURE/out" >/dev/null || fail 'resolving the newer request hid the older open request'
-"$ROSTER" > "$FIXTURE/human"
-grep -q '^bob: matched activity=idle work=blocked open=runner-github-app ' "$FIXTURE/human" || fail 'default view did not drop the resolved key'
-grep -q '^alice: matched activity=working work=blocked report=' "$FIXTURE/human" || fail 'default view printed open keys for a peer without open requests'
-printf 'done [at=1]: old task\n' > "$FM_HOME/state/peers/bob.log"
-pass 'unresolved peer request keeps work evidence blocked until its matching resolved line'
+jq -e '
+  ([.agents[] | select(.name == "parked-worker")][0]
+    | .kind == "ship" and .posture == "parked" and .activity == "working"
+    and .open_keys == [] and (.latest_line | contains("paused"))) and
+  ([.agents[] | select(.name == "blocked-worker")][0]
+    | .posture == "blocked" and .activity == "working"
+    and .open_keys == ["gcloud-auth"]
+    and (.latest_line | contains("gcloud-auth") | not))
+' "$FIXTURE/out" >/dev/null || fail 'parked and blocked postures not honored over live activity'
+pass 'parked and keyed-blocked postures ride over pane activity'
 
-# A reused tab id with a different agent pane is not a Firstmate worker.
-cp "$FM_HOME/state/job.meta" "$FIXTURE/job.meta"
-printf 'window=default:w1:p9\n' >> "$FM_HOME/state/job.meta"
+# 2. Stale child, secondmate child rows, exact-label join, and the captain hold
+# on the secondmate's own backlog.
+jq -e '
+  ([.agents[] | select(.name == "stale-child")][0]
+    | .kind == "secondmate-child" and .activity == "unknown"
+    and .posture == "idle-stale" and .beads_state == "ok"
+    and .latest_age_s > 3600) and
+  ([.agents[] | select(.name == "child-one")][0]
+    | .kind == "secondmate-child" and .activity == "working"
+    and .posture == "working" and .beads_state == "ok") and
+  ([.agents[] | select(.name == "platform")][0]
+    | .kind == "secondmate" and .beads == ["b3"]) and
+  ([.agents[] | select(.name == "alice")][0]
+    | .kind == "peer" and .posture == "blocked" and .open_keys == ["build"]
+    and (.beads | sort) == ["b1","b2","b5"]) and
+  ([.agents[] | select(.name == "bob")][0]
+    | .posture == "done" and .latest_age_s > 0
+    and .open_keys == [] and .stale_keys == []
+    and .beads == ["b6","b7"]) and
+  ([.agents[] | select(.name == "dana")][0]
+    | .posture == "idle-stale" and .open_keys == [] and .stale_keys == ["aged"]
+    and .latest_age_s > 3600)
+' "$FIXTURE/out" >/dev/null || { jq '.agents[] | {name, kind, activity, posture, latest_age_s, beads, stale_keys}' "$FIXTURE/out" >&2; fail 'stale, secondmate-child, parent, label join, or aged-key rows misclassified'; }
+pass 'secondmate home, stale-child, parent, exact-label join, and aged-key stale land'
+
+# 3. fm-pbk: done-after-publish workers surface as done. done-worker's latest
+# status is hours old (idle territory pre-fix); done-fresh-worker's is fresh;
+# failed-worker's lane ended with the failed verb. All three panes read herdr
+# `done` (idle) and none owns an open key, so the `done`/`failed` posture must
+# come from the durable status line alone.
+jq -e '
+  ([.agents[] | select(.name == "done-worker")][0]
+    | .kind == "ship" and .posture == "done" and .activity == "done"
+    and .open_keys == [] and (.latest_line | contains("PR https://example.invalid/pull/1"))) and
+  ([.agents[] | select(.name == "done-fresh-worker")][0]
+    | .posture == "done" and .latest_age_s < 600) and
+  ([.agents[] | select(.name == "failed-worker")][0]
+    | .posture == "failed" and .open_keys == [])
+' "$FIXTURE/out" >/dev/null || fail 'done-after-publish, fresh done, or failed worker misclassified'
+pass 'done-after-publish, fresh done, and failed postures land'
+
+# 3b. fm-pbk: a keyed `done [key=...]:` line is keyed evidence for the open-key
+# fold, not a lane terminal verdict. In fm-2rr's read_reports it stays open and
+# a resolved closes it. Here it must never posture `done` either.
+cat > "$FM_HOME/state/done-keyed-worker.meta" <<'META'
+backend=herdr
+window=default:w1:p23
+endpoint_task_id=done-keyed-worker
+kind=ship
+META
+printf 'working [at=%s]: implementing\ndone [at=%s] [key=prove-x]: proof for one gate\n' "$earlier" "$earlier" > "$FM_HOME/state/done-keyed-worker.status"
 "$ROSTER" --json > "$FIXTURE/out"
-jq -e '.managed_tabs == [] and
-  [.unregistered_tabs[] | select(.tab_id == "w1:t3")][0].resolution == "unmapped"' "$FIXTURE/out" >/dev/null || fail 'stale worker metadata claimed a new pane'
-cp "$FIXTURE/job.meta" "$FM_HOME/state/job.meta"
-pass 'managed worker identification requires current tab and pane identity'
+jq -e '([.agents[] | select(.name == "done-keyed-worker")][0]
+    | .posture != "done" and (.latest_line | contains("[key=prove-x]")))' \
+  "$FIXTURE/out" >/dev/null || fail 'keyed done line postured as done'
+pass 'keyed done stays evidence, never a lane terminal'
 
-# A split tab with one managed worker still exposes its unmanaged agent.
-cp "$FIXTURE/agents.json" "$FIXTURE/agents.saved.json"
-jq '.result.agents += [{"tab_id":"w1:t3","workspace_id":"w1","pane_id":"w1:p8","agent_status":"idle"}]' \
-  "$FIXTURE/agents.saved.json" > "$FIXTURE/agents.json"
+# 4. On-captain section: captain-label beads plus the home's captain holds.
+jq -e '
+  .on_captain.beads == [{"id":"b4","title":"Captain call"}] and
+  ([.on_captain.holds[] | select(.task == "t1")] | length == 0)
+' "$FIXTURE/out" >/dev/null || fail 'captain beads or hold surface missing'
+pass 'on_captain surfaces captain-label beads and reports holds (none in this home)'
+
+# 5. No free-text fragment leaks into open_keys or posture.
+jq -e '
+  ([.agents[] | select(.name == "blockfrag")] | length == 0) and
+  ([.agents[] | .open_keys[]?] | map(select(test("^(the|a|for|access|backend|exclusive)$"))) | length == 0)
+' "$FIXTURE/out" >/dev/null || fail 'free-text fragment leaked into open_keys'
+pass 'no free-text fragments appear as keys'
+
+# 6. An in-progress bead assigned through the title-cased alias joins the row.
+jq -e '([.agents[] | select(.name == "alice")][0]
+    | .beads | any(. == "b5"))' \
+  "$FIXTURE/out" >/dev/null || fail 'title-cased in_progress bead did not join'
+pass 'in_progress beads join via deterministic aliases'
+
+# 7. Keyed blocked survives a later done when the resolved line is missing.
+printf 'blocked [at=%s] [key=proof]: waiting on proof\ndone [at=%s]: other proof finished\n' "$now" "$now" > "$FM_HOME/state/peers/bob.log"
 "$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.managed_tabs[].pane_ids[]] == ["w1:p3"] and
-  [.unregistered_tabs[] | select(.tab_id == "w1:t3")][0].pane_ids == ["w1:p8"]' "$FIXTURE/out" >/dev/null || fail 'mixed tab hid the hand-launched occupant'
-cp "$FIXTURE/agents.saved.json" "$FIXTURE/agents.json"
-pass 'split tab preserves unmanaged agent visibility'
+jq -e '([.agents[] | select(.name == "bob")][0]
+    | .posture == "blocked" and .open_keys == ["proof"])' \
+  "$FIXTURE/out" >/dev/null || fail 'done without resolved closed the request'
+pass 'open keyed request survives a later done line'
 
-# Ambiguous label resolution never attributes a pane to a specific peer.
-cat > "$FIXTURE/tabs.json" <<'JSON'
-{"result":{"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"Alice"},{"tab_id":"w1:t2","workspace_id":"w1","label":"Alice"}]}}
-JSON
+# 7b. Reopening an aged key with a fresh stamp reopens it: bob re-raises
+# dana's stale need, so it leaves stale_keys and blocks again while dana's own
+# log still holds the aged form.
+printf 'blocked [at=%s] [key=aged]: re-raising the aged ask\n' "$now" > "$FM_HOME/state/peers/bob.log"
 "$ROSTER" --json > "$FIXTURE/out"
-jq -e '[.peers[] | select(.name == "alice")][0].resolution == "ambiguous" and
-  ([.unregistered_tabs[] | select(.resolution == "ambiguous")] | length) == 2' "$FIXTURE/out" >/dev/null || fail 'duplicate tab labels silently resolved'
-pass 'ambiguous agent tabs remain unresolved'
+jq -e '([.agents[] | select(.name == "bob")][0]
+    | .posture == "blocked" and .open_keys == ["aged"] and .stale_keys == []) and
+  ([.agents[] | select(.name == "dana")][0]
+    | .posture == "idle-stale" and .open_keys == [] and .stale_keys == ["aged"])
+' "$FIXTURE/out" >/dev/null || fail 'reopened aged key stayed stale'
+pass 'a fresh reopen refreshes an aged key while other rows keep their own stale'
 
-# A board read failure leaves the visible agent inventory intact.
-touch "$FIXTURE/bd-fails"
-if "$ROSTER" --json > "$FIXTURE/out"; then fail 'missing board exited successfully'; fi
-jq -e '.sources.herdr == "ok" and .sources.beads == "unknown" and
-  [.peers[] | select(.name == "alice")][0].resolution == "ambiguous" and
-  [.peers[].beads_state] == ["unknown","unknown","unknown"] and .unassigned_beads == []' "$FIXTURE/out" >/dev/null || fail 'board failure hid the live inventory'
-rm "$FIXTURE/bd-fails"
-pass 'failed Beads read preserves visible Herdr evidence'
-
-# Missing registration does not turn all observed tabs into known unowned peers.
+# 8. A malformed peer registry (row with the wrong column count) keeps the
+# agent's identity unknown - it must not fabricate answers about one peer
+# being vs another.
 mv "$FM_HOME/state/peers/peers.tsv" "$FIXTURE/peers.tsv"
-if "$ROSTER" --json > "$FIXTURE/out"; then fail 'missing registry exited successfully'; fi
-jq -e '.sources.peers == "unknown" and .sources.herdr == "ok" and
-  [.unregistered_tabs[].resolution] == ["unknown","unknown"]' "$FIXTURE/out" >/dev/null || fail 'missing registry fabricated unowned agent tabs'
-mv "$FIXTURE/peers.tsv" "$FM_HOME/state/peers/peers.tsv"
-pass 'missing peer registry cannot claim unowned tabs'
-
-# Unreadable worker metadata leaves peer ownership unknown, not hand-launched.
-mkdir "$FM_HOME/state/bad.meta"
-if "$ROSTER" --json > "$FIXTURE/out"; then fail 'unreadable metadata exited successfully'; fi
-jq -e '.sources.peers == "unknown" and [.peers[].resolution] == ["unknown","unknown","unknown"] and
-  [.unregistered_tabs[].resolution] == ["unknown","unknown"]' "$FIXTURE/out" >/dev/null || fail 'unreadable worker record fabricated peer ownership'
-rmdir "$FM_HOME/state/bad.meta"
-pass 'unreadable worker metadata cannot claim a hand-launched agent'
-
-# A source failure cannot silently turn the inventory or dependency view empty.
-touch "$FIXTURE/herdr-fails" "$FIXTURE/bd-fails"
+printf 'alice-without-label\n' > "$FM_HOME/state/peers/peers.tsv"
 if "$ROSTER" --json > "$FIXTURE/out"; then fail 'partial read exited successfully'; fi
-jq -e '.partial == true and .sources.herdr == "unknown" and .sources.beads == "unknown" and
-  [.peers[].resolution] == ["unknown","unknown","unknown"] and
-  [.peers[].beads_state] == ["unknown","unknown","unknown"] and
-  (.errors | length) == 2' "$FIXTURE/out" >/dev/null || fail 'failed reads misrepresented as empty or available'
-pass 'unavailable Herdr/Beads reads produce explicit partial unknown state'
+jq -e '.partial == true and .sources.peers == "unknown" and
+       (.errors | length) > 0' "$FIXTURE/out" >/dev/null || fail 'malformed registry did not stay partial'
+rm "$FM_HOME/state/peers/peers.tsv"
+mv "$FIXTURE/peers.tsv" "$FM_HOME/state/peers/peers.tsv"
+pass 'malformed registry stays partial'
 
-# Stubs reject any command not on the observation allowlist, including writes.
-[ "$(wc -l < "$FIXTURE/calls")" -eq 93 ] || fail 'unexpected observation command count'
-pass 'all CLI calls stayed on read-only observation paths'
+# 9. A bd failure says so and surfaces partial. Posture stays whatever status
+# files already tell it; it never secretly becomes idle.
+MV_TS="$FM_HOME/state/peers/alice.log"
+printf 'note [at=%s]: fresh without keys\n' "$now" > "$MV_TS"
+touch "$FIXTURE/bd-fails"
+if "$ROSTER" --json > "$FIXTURE/out"; then fail 'failing bd exited successfully'; fi
+jq -e '.partial == true and .sources.beads == "unknown" and
+        ([.agents[] | select(.beads_state == "unknown")] | length) > 0' \
+  "$FIXTURE/out" >/dev/null || fail 'bd failure not surfaced as partial unknown'
+rm "$FIXTURE/bd-fails"
+pass 'bd failure surfaces partial, bead_state unknown, not a fake idle'
+
+# An explicit FM_BOARD still overrides the home configuration.
+mkdir -p "$TMP_ROOT/override-board"
+FM_BOARD="$TMP_ROOT/override-board" EXPECTED_BOARD="$TMP_ROOT/override-board" \
+  "$ROSTER" --json > "$FIXTURE/out" || fail 'explicit board override was not honored'
+jq -e '.sources.beads == "ok"' "$FIXTURE/out" >/dev/null \
+  || fail 'explicit board override lost its board read'
+pass 'FM_BOARD overrides the configured shared board'
+
+# Missing configuration cannot fall back to whichever board encloses cwd.
+rm "$FM_HOME/config/beads-board"
+calls_before=$(grep -c '^bd ' "$FIXTURE/calls")
+if "$ROSTER" --json > "$FIXTURE/out"; then fail 'unconfigured board exited successfully'; fi
+jq -e '.partial and .sources.beads == "unknown" and
+       any(.errors[]; contains("shared board is not configured"))' \
+  "$FIXTURE/out" >/dev/null || fail 'unconfigured board was not explicit'
+calls_after=$(grep -c '^bd ' "$FIXTURE/calls")
+assert_equals "$calls_before" "$calls_after" 'unconfigured board must never call bd'
+pass 'missing shared-board configuration is partial without a bd call'

@@ -108,6 +108,8 @@ Untracked files and directories whose names begin with `scratchpad` are also git
 
 - The [`bin/fm-fleet-snapshot.sh` header](../bin/fm-fleet-snapshot.sh) owns the snapshot's event-time and age fields, including secondmate parent-event projections.
 
+- [`bin/fm-pr-merge.sh`'s header and help](../bin/fm-pr-merge.sh) own central private merge-policy configuration, optional private nonproduction-environment extensions, nonproduction and non-deploying feature-target grants, exact-head local-test receipts, repository-owner GitHub account selection, taskless merging, and private decision audits.
+
 - Wake, watcher, away-mode, and Relay-specific state mechanics remain with their named scripts and reference sections rather than being duplicated into one exhaustive state tree here.
 
 ### Session-start references
@@ -338,6 +340,50 @@ The primary-authoritative propagation contract, including removal of a mate's lo
 `config/supervision-host` is local to each home and not inherited, because each home's engine and model are its own choice.
 While the home runs the host, main's lease-checked commands also take the per-task lease lock, so a claim by the host's engine cannot race a mutation main already started (`bin/fm-lease-lib.sh`).
 
+## External Mac watchdog
+
+An optional macOS LaunchAgent protects an omp-on-Herdr primary when no model turn ends to run its normal guard.
+It observes the existing watcher beacon, asks the recorded primary to use its extension-owned repair tool, and escalates prolonged failure through the existing content-free phone bridge.
+[`bin/fm-watchdog.sh`](../bin/fm-watchdog.sh)'s header owns the exact cadence, thresholds, episode format, transport bounds and command interface.
+It does not replace the watcher, bypass its extension owner, or change the turn-end guard's grace.
+
+### Opt-in installation and removal
+
+Install only after the source change is merged and the separate activation is approved.
+Run from the stable Firstmate home, with `state/.firstmate-pane` naming its current Herdr pane.
+The selected pane must have both a native omp registration and a real foreground omp process, with that home as its foreground working directory.
+The existing `fm-notify-phone` configuration and notify-only credential must already work; this job creates no credential.
+Use a PATH on which `herdr`, `fm-notify-phone`, `jq` and `shasum` resolve, and select the correct `HERDR_SESSION` before rendering if it is not `default`.
+The renderer freezes those environment paths and the selected home, not secrets or the contents of `.env`.
+
+First installation, with no existing plist at the chosen destination:
+
+```bash
+plist="$HOME/Library/LaunchAgents/dev.firstmate.watchdog.plist"
+mkdir -p "$HOME/Library/LaunchAgents"
+(set -C; FM_HOME="$PWD" bash bin/fm-watchdog.sh plist > "$plist")
+plutil -lint "$plist"
+launchctl bootstrap "gui/$(id -u)" "$plist"
+```
+
+The renderer only prints configuration; the final command is the explicit activation.
+Diagnostics append to this home's `state/.watchdog.log`, and the existing phone bridge retains its own global rate limits.
+Accepted prompt submission is not proof of recovery: a later fresh watcher beacon is required.
+A rejected or ambiguous transport attempt is reserved for that stale episode rather than repeatedly typing into a busy or blocked primary.
+
+Before intentionally stopping the primary for maintenance, unload this job:
+
+```bash
+launchctl bootout "gui/$(id -u)" "$plist"
+```
+
+Use that same unload before replacing its plist or changing its captured home, PATH or Herdr session.
+Reload the approved rendered plist with `bootstrap` to resume protection.
+The LaunchAgent runs only while the Mac is awake and that user is logged in.
+It has no shell/tmux/other-harness recovery path and never discovers or starts an unrelated Herdr server.
+No omp restart is needed for this standalone job when the primary's existing watch extension is already loaded.
+Current proof and explicit live-delivery limits are in [supervision verification](verification/supervision.md#external-mac-watchdog).
+
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 
 The tracked `.tasks.toml` pins the default `tasks-axi` markdown backend to `data/backlog.md`, with `done_keep = 10` and an archive at `data/done-archive.md`.
@@ -349,6 +395,63 @@ Captain-hold row creation is owned by [`bin/fm-captain-hold.sh`](../bin/fm-capta
 Captain rows have no Beads due semantics, so that create path waives a Beads `due.required` setting rather than passing a synthetic `--due`; `--until` remains the optional hold deferral.
 
 Do not register a Beads `types.custom` `captain` type for this: captain is a hold kind, and the fleet Beads `due.required` policy for ordinary work stays in the federated beads config.
+
+### Captain bead board (config/beads-board)
+
+A home joins the captain-request loop by writing one line - the Beads working directory holding the shared captain board's `.beads` store - into `config/beads-board` (a leading `~` resolves against `$HOME`).
+Absent or empty config is the historical behavior: firstmate makes no `bd` call at all.
+With the config in place, [`bin/fm-captain-hold.sh`](../bin/fm-captain-hold.sh) mirrors every hold into one `captain`-label bead assigned to the captain and closes it with the recorded answer on every resolution path, and [`bin/fm-captain-ask.sh`](../bin/fm-captain-ask.sh) files firstmate's own direct asks on the same board.
+[`bin/fm-captain-beads-check.sh`](../bin/fm-captain-beads-check.sh) delivers each closed captain bead's close reason to the requester it names (`requester:<name>` label or the `fm-requester:` body line the mirroring writes), deduped once per bead; its `install` subcommand hash-binds it as this home's watcher check.
+Bead mirroring never gates the hold or the answer: a broken board surfaces one explicit warning while the backlog record stands.
+The peer roster and propulsion dispatcher use the same private board setting; [propulsion configuration](propel.md#private-configuration) owns their override precedence and required dispatch settings.
+
+Native permission snapshots use the same board through
+`fm-captain-ask.sh --approval-event FILE`; `--approval-protocol` reports
+`firstmate.omp-approval.v1` without requiring a home. Mutation modes require an
+explicit `FM_HOME`. The JSON contract and validation belong to
+[`bin/fm-approval-prompt.py`](../bin/fm-approval-prompt.py): final native prompt,
+offered choices, dialog/session identity, origin, optional final command, and
+the actual native resolution. Do not substitute earlier tool-call arguments.
+
+One deterministic board id and an immutable request fingerprint bind each dialog.
+Retries recover a lost create receipt rather than minting another question.
+`state/captain-asks/omp/{outbox,pending,handled}` preserves captured and published
+observations across process loss; `--approval-reconcile` acknowledges outbox files
+only after durable publication. The existing supervision check calls
+`--approval-check` when this store exists, with a bounded check window and
+deduplicated error/recovery notices. No second daemon or board is introduced.
+
+Native cards name the original agent tab as the answer location and remain
+view-only on the phone. Only the observed native UI result closes their question;
+permission is never recorded as command completion. Native cancellation and
+timeout are not denial. Requests surface immediately as presentation-unchecked;
+an idempotent existing-Inbox notice asks for wording review without delaying
+delivery or changing request identity, choices, or execution authority.
+Native display text is never a requester protocol: the generic closed-bead
+delivery loop excludes native cards by their reserved label or structured kind,
+even when their quoted command contains a literal `fm-requester:` line.
+
+Deployment is separate from source delivery: install compatible native event
+support and the producer only after the phone service enforces view-only native
+cards. An old binary approval service must not consume these cards. Do not activate
+this path by merging a source change alone.
+
+
+### Bead time expectations and overdue wakes (config/bead-eta-defaults)
+
+Every bead on the joined board carries an expected duration, resolved by [`bin/fm-bead-eta-lib.sh`](../bin/fm-bead-eta-lib.sh): a carryable `eta:<N>m` or `eta:<N>h` label wins; otherwise the home's `config/bead-eta-defaults` lines (`key=minutes`, `#` comments allowed) match the bead's non-eta labels in board order, then its `issue_type`; unmatched beads fall back to 120 minutes.
+An absent table means every non-labeled bead takes the fallback; the fallback example profile is `deploy=45`, `ship=60`, `scout=120`, `captain=240`.
+
+[`bin/fm-bead-overdue-check.sh`](../bin/fm-bead-overdue-check.sh) (its `install` subcommand hash-binds it as a watcher check) polls open `in_progress` beads, aging them from the start mark [`bin/fm-spawn.sh`](../bin/fm-spawn.sh) stamps, and open `captain` beads, aging them from creation.
+It prints one wake line per threshold crossing per bead, deduped in `state/.bead-overdue-seen/`: `overdue: <bead-id> <title> (<age>m/<eta>m), owner <assignee>` at 1x the expectation and `escalate: ...` at 2x, with `, blocked by <blocker-id> (owner <owner>)` appended when a still-open blocker belongs to a different assignee; quiet otherwise.
+Re-marking the bead's start re-arms the thresholds.
+An unjoined home (no `config/beads-board`) exits 0 with no `bd` call.
+
+Lifecycle marking is automatic: `bin/fm-spawn.sh --bead <bead-id>` (or a `bead: <bead-id>` line in the backlog item's note, read when the automatic transition gate applies) records the linkage on the task record, marks the bead `in_progress`, and stamps its start at dispatch; [`bin/fm-teardown.sh`](../bin/fm-teardown.sh) and [`bin/fm-pr-merge.sh`](../bin/fm-pr-merge.sh) close the bead on landed completion.
+All board mutations are best-effort and never gate the launch, cleanup, or merge.
+
+Structured agent commitments and ownership/graph/progress checks use the [accountability contract](propel.md#task-accountability-and-committed-deadlines), not a moving `updated_at` deadline.
+The owning home's `fm-bead-accountability-check.sh` reuses `config/beads-board`, the check registrar and its existing Inbox; activation is separate from source delivery.
 
 ### Automatic dispatch and completion
 
@@ -505,6 +608,11 @@ Legacy tmux metadata remains cleanup-compatible when its exact window name is `f
 The local `config/herdr-presentation-spaces` file instead opts a home out of, or explicitly in to, Herdr's default-on disposable single-task visual projection; [Presentation spaces](herdr-backend.md#presentation-spaces) owns its accepted values, default, Herdr version floor, migration, behavior, safety limits, recovery contract, and narrow locked session-start cleanup of exact restored idle-shell children.
 The setting is inherited into secondmate homes under the primary-authoritative contract owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md).
 
+The local `config/herdr-worker-workspace` file names one whitespace-free Herdr workspace label that receives this home's own ship/scout spawns in place of the default launcher-workspace inheritance; [Placement beside the launcher](herdr-backend.md#placement-beside-the-launcher) owns its parsing, fallback, and placement boundaries.
+It never applies to secondmate launches, and it is inherited into secondmate homes by the same primary-authoritative contract, so a secondmate home's own crewmates land beside the primary's workers.
+
+`bin/fm-spawn.sh` refuses launches from seeded second-mate homes regardless of `config/worker-spawn-requires-reason` or `--worker-reason` (captain ruling 2026-10-22); use in-session subagents, or ask primary firstmate to launch a truly necessary pane with the captain's agreement.
+
 For normal herdr operations, `HERDR_SESSION` selects the named session, but destructive test cleanup must not rely on `HERDR_SESSION` alone.
 Use the explicit guarded cleanup path described in [`docs/herdr-backend.md`](herdr-backend.md) instead of `herdr server stop`.
 
@@ -535,6 +643,18 @@ That keeps a tmux pane nested inside herdr on the tmux transport, matching the r
 Target detection uses `FM_SUPERVISOR_TARGET`, then `$TMUX_PANE`, then `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then the legacy `firstmate:0` tmux fallback with a warning.
 
 Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, refuses at daemon startup instead of trying tmux injection primitives against a non-tmux pane.
+
+## Away-mode phone hints (config/phone-notify)
+
+Phone hints are optional and off when the local, gitignored `config/phone-notify` file is absent.
+To opt in, put one executable command name in that file (`fm-notify-phone` by default, also used for an empty file); it must be on the daemon's `PATH`, with no arguments or shell fragments in the file.
+The away daemon sends only `decisions-waiting N` for pending actionable captain holds in the canonical local backlog projection, otherwise `away-digest-ready` for an escalation batch, and `urgent` when its watcher fails or pane delivery wedges.
+No digest, task identity, title, reason, or other free text is passed in argv or stdin.
+Each template is limited locally to one attempt per ten minutes, including failed attempts and daemon restarts; the phone CLI and Jarvis bridge additionally enforce their six-per-hour cap.
+Hold counting and dispatch run asynchronously, each with a five-second process-group bound; missing commands and failures are logged without interrupting supervision.
+This hook covers the daemon's `tmux` and `herdr` paths, not Pi's supervision branch or the supervision host, and is silent in quiet mode.
+Phone hints do not carry answers or release holds: anything requiring the captain still waits for their return.
+The CLI's endpoint and credential setup remain separate; creating this hook does not configure or authorize that destination.
 
 ## Away-mode wedge alarm channels (config/wedge-alarm)
 
@@ -601,6 +721,39 @@ The bound is required rather than cosmetic because churn and pane staleness read
 
 The flag is a home-local supervision-noise preference and is not inherited by secondmate homes, which run their own crew mix.
 [`architecture.md`](architecture.md) owns the triage contract and `bin/fm-watch.sh`'s `signal_turnend_panes_churned` owns the exact evidence and fail-closed boundaries.
+
+## Routine wake absorption (config/wake-routine-mode, config/wake-routine-digest-mins)
+
+The omp primary extension classifies queued wake rows as routine through `bin/fm-ask-mai-coalesce.sh` (PR #11's pre-delivery triage: heartbeat wakes, `signal:` rows whose newest trailing status line is a bare `working:` progress note or a bare `paused:` declared wait, and the MAI `absorb` verdicts that classifier takes).
+The optional local, gitignored `config/wake-routine-mode` file chooses what a fully routine wake-worth does next; the extension re-reads both files on every delivery so a change applies to the next wake without a restart.
+An absent, empty, or unrecognized value is `banner`, the current behavior: one informational banner names the absorbed count.
+`silent` absorbs those rows and acknowledges them in the durable wake queue without any message to the primary at all (their only trace is the triage log and the silent-absorption ledger described below); `off` keeps the classification but never absorbs.
+
+The routine set is exactly what the classifier classifies routine; it never silences needs-decision, blocked, failed, done/PR-ready/merged, captain/inbox/credential work, the first stuck-or-dead report of a pane, watcher failures, or any MAI error, timeout, or uncertain answer, all of which stay on the delivery path the classifier already keeps open.
+Silent absorption deletes only the exact queue sequences the classifier emitted, through `bin/fm-wake-drain.sh --delete-sequences`, and falls back to the banner path whenever a row lacks a usable sequence or the delete fails, so silence never swallows a lost row.
+
+Because silence is invisible by design, `config/wake-routine-digest-mins` keeps a periodic one-line record of what was absorbed: at most one `⚓ digest · <N> routine absorbed since HH:MM (<task>: <last status>…)` line per N minutes (default 30 with the file absent or malformed, `0` to disable), counting absorbed rows since the last digest and naming the most recent one.
+The count and window come from the silent-absorption ledger `state/.fm-routine-absorbed.tsv`, which is cleared after each digest and therefore lists exactly the rows the next digest will cover.
+
+## MAI routing (config/mai-routing)
+
+The optional local, gitignored `config/mai-routing` presence flag opts this home into routing bounded mechanical classifications through its privately configured inference service rather than spending the primary thread on them.
+With the flag absent the only consumer, `bin/fm-ask-mai-wake.sh`, exits 2 and the primary thread handles wakes exactly as before.
+
+Configure the inference service in private `config/mai-gateway.json`; [`bin/fm-ask-mai.sh`'s header and help](../bin/fm-ask-mai.sh) own its required `url`, `token_command`, and `model` fields and exact invocation contract.
+The config directory follows `FM_CONFIG_OVERRIDE`, otherwise the effective home selected by `FM_HOME`, `FM_ROOT_OVERRIDE`, then the tracked code root.
+There is no built-in endpoint, credential helper, or model, and absent or invalid required configuration fails before an inference request.
+The existing `F2_GATEWAY_URL` and `F2_GATEWAY_TOKEN_CMD` environment overrides remain supported for the endpoint and credential helper, but the model comes only from the private file.
+Setting `FM_MAI_MODEL`, even to an empty value, or supplying an extra model argument is refused.
+
+`bin/fm-ask-mai.sh` is the fail-closed one-shot call surface: the model is fixed by private home configuration rather than selected by a call argument or environment, `temperature=0`, `reasoning_effort=low`, stdout carries only the answer, and every non-happy path - transport, HTTP error after bounded retry, empty or null content, or `finish_reason=length` - exits non-zero.
+Escalation is the caller's own thread, never another model.
+
+Privacy tiers: content that must stay local is refused outright by `bin/fm-ask-mai-redacted.sh` - `data/captain*.md`, `data/learnings.md`, `data/*/brief.md`, and `.env` references, plus any line carrying an `@captain`, `@private`, or `@secret` marker.
+Material that may reach the inference service only after redaction passes through that wrapper first: full PR URLs collapse to `#<number>`, `~/Git` and absolute home prefixes collapse to basenames, and any path containing a `state/` component collapses to its basename.
+
+`bin/fm-ask-mai-wake.sh <home> <wake-reason>` classifies one wake reason into `absorb`, `surface`, or `escalate`; an out-of-set or failed answer always resolves to `escalate`, so an inference failure lands the wake back on the primary thread.
+The spend-or-judgment classifications in the design report's routing rubric stay on the primary thread: spend, dispatch, merge, persona, captain-facing text, and multi-artifact judgment.
 
 ## Parked-gate wait deferral (config/wedge-defer-parked-gate)
 
@@ -831,10 +984,19 @@ Kimi continues to use the captain's normal Kimi home, including the existing con
 The Kimi installer requires an existing regular non-symlink `~/.kimi-code/config.toml`, `python3` with `tomllib`, and `jq`; it validates but never serializes the captain's TOML and refuses before writing when the config is missing, malformed, or surprising or when either tool requirement is unavailable.
 
 Its `remove` action excises only the marker-delimited Firstmate region and removes Firstmate's hook files.
-For Pi and pi-signed secondmate launches, `fm-spawn.sh` starts the selected executable with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree.
+For Pi and pi-signed secondmate launches, `fm-spawn.sh` starts the selected executable with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree, plus the parent home's `state/<id>.pi-ext.ts` busy extension.
 Pi-family secondmates can start unattended in Firstmate-seeded homes without accepting project trust manually; [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns the capability requirement, session-only approval scope, and older-version fallback, with [regression evidence](verification/runtime-backends.md#pi-seeded-secondmate-project-trust).
 
-For omp secondmate launches, `fm-spawn.sh` passes no `-e` at all: omp auto-discovers the home's tracked `.omp/extensions/` with no trust gate, and naming a discovered file with `-e` as well loads it twice; every omp launch instead carries the tracked `.omp/fm-worker-overlay.yml` posture overlay through `--config`, which [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns.
+For omp secondmate launches, `fm-spawn.sh` names only the parent home's `state/<id>.omp-ext.ts` busy extension with `-e`: omp auto-discovers the home's tracked `.omp/extensions/` with no trust gate, and naming a discovered file with `-e` as well loads it twice; every omp launch also carries the tracked `.omp/fm-worker-overlay.yml` posture overlay through `--config`, which [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns.
+
+For a Claude secondmate, `fm-spawn.sh` writes the busy hooks into the parent home's `state/<id>.claude-settings.json` and passes that file as Claude Code's one `--settings` value.
+The same file carries `feedbackDrafts` and, unless `config/keep-ai-trailers` is present, the attribution policy every other Claude launch puts in its inline `--settings` JSON.
+Claude Code applies `--settings` for that session and does not write the file into the mate home.
+A key the file sets overrides the same key in user, project, and local settings.
+A key it omits keeps the file-based value, so a `.claude/settings.local.json` already in the home is left untouched.
+Hook entries merge across settings files rather than replacing each other, so the home's tracked Stop guard still runs beside these hooks.
+The CLI reference documents the one file-or-JSON flag, the settings page documents session precedence, and the hooks page documents the hooks merge: <https://code.claude.com/docs/en/cli-reference>, <https://code.claude.com/docs/en/settings>, <https://code.claude.com/docs/en/hooks>.
+[`fm-spawn.sh`](../bin/fm-spawn.sh) owns the file and the flag.
 
 ## Claude permission mode (config/claude-permission-mode)
 
@@ -852,7 +1014,7 @@ The token is the file's whitespace-trimmed content.
 An absent file defaults to bypass, so an unconfigured home launches with the bypass permission flag.
 Auto is Claude Code's classifier-reviewed permission mode, for a captain who refuses to run workers in bypass mode.
 Only the permission flag changes between the two modes.
-The environment prefix, inline settings, model, effort flags, and the task-channel `--add-dir` grant below stay the same in both.
+The environment prefix, session settings, model, effort flags, and the task-channel `--add-dir` grant below stay the same in both.
 
 Every Claude launch, in both modes, also passes `--add-dir` for exactly this task's Firstmate channel directories, resolved to real paths: a secondmate gets the parent home's `state/<id>.inbox` it reads its steers from; a ship or scout worker gets this home's `state/operational-inbox` (its launch record), `state/<id>.inbox` (its steers), `data/<id>` (its brief and report), and the code root's `.agents/skills`.
 The grant exists because Claude Code path-checks the Read/Glob/Grep file tools against cwd plus `--add-dir`, and since 2.1.257 the first outside read in `auto` mode parks the pane on a one-time interactive question, while a "Block" answer there writes `permissions.blockReadsOutsideWorkingDirectories` into user settings and then refuses the same reads under bypass too.
@@ -1408,6 +1570,17 @@ It uses the same live secondmate discovery and propagation helper as bootstrap; 
 - The locked bootstrap inheritance pass uses the same placement-specific behavior; see `secondmate-provisioning` for the single contract owner.
 - That live discovery starts from `state/*.meta` records with `kind=secondmate`; `data/secondmates.md` only backfills `home=` for older or incomplete meta records.
 - Skipped items, such as a destination checkout that does not yet gitignore the item, are visible warnings but not hard failures.
+
+## Forge selection (data/projects.md forge= token)
+
+A project with no `forge=` token is served by the GitHub tooling, `gh` and `gh-axi`, exactly as before the token existed, and the token changes nothing for existing entries.
+A remote-backed project on a Forgejo or Gitea server is registered with `forge=forgejo`, one value of the same closed `forge=` binding that Gerrit uses; `bin/fm-project-mode.sh`'s header owns its grammar, values, and refusals, and `bin/fm-project-mode.sh --forge <name>` reads it back.
+Firstmate passes the binding to `bin/fm-brief.sh --forge` at intake the same way it passes `--mode`, and `bin/fm-spawn.sh` refuses a brief whose forge disagrees with the registry; on `forgejo` the generated ship brief names `tea` instead of `gh-axi`.
+The URL-driven provider dispatch in [`bin/fm-pr-lib.sh`](../bin/fm-pr-lib.sh) recognizes a GitHub, GitLab, Gerrit, or Forgejo PR/MR/change URL once one exists, regardless of this token.
+
+A Forgejo (or Gitea) project needs `tea` on `PATH` plus a `tea login` registered for that project's host (`tea login add`); the login is matched to a PR's host automatically, never configured per project.
+A GitLab project needs no forge token, only `glab` on `PATH`, authenticated via `glab auth login`.
+[`docs/gitlab-merge-watch.md`](gitlab-merge-watch.md) and [`docs/forgejo-tea-integration.md`](forgejo-tea-integration.md) hold the empirically verified CLI behavior each provider's watch and merge path depends on.
 
 ## Watched tool updates (config/watched-tools.json)
 
@@ -2015,6 +2188,11 @@ A repo update that fast-forwards an in-repo action's bytes in place would otherw
 Every failure path - a mutated spec or action executable, a condition error past its budget, an expired deadline, a failed action, or an earlier fire whose outcome was never captured - produces a terminal captured outcome that wakes firstmate rather than a silent retry, and a durable single-fire marker claimed before the action makes restarts and re-polls unable to fire it twice.
 The adapter automates only the exact deterministic subset: anything needing judgment, and anything destructive, irreversible, or security-sensitive, keeps the ordinary check-fires-then-firstmate-decides flow, and the adapter's header and `--help` own its commands, flags, and outcome document.
 
+The `herdr-panes` adapter (`bin/fm-procevent-herdr-panes.sh`) turns this home's 5-minute agent-roster poll into a second-scale roster event on the local herdr session.
+One `bin/fm-procevent-herdr-panes.sh arm` installs a hash-pinned listener pod under `state/herdr-pane-events.sh`, binds one drift fail-safe check the existing watcher already runs, and registers source id `herdr-pane-events`; `status` reports the whole posture and `retire` undoes it while leaving the pod for a future arm.
+The pod watches `$HERDR_SOCKET_PATH` (protocol 22) until one episode is worth a wake - a roster-unaccounted agent pane the home's own `state/agent-roster.check.sh` then auto-registers into `state/roster/adhoc.tsv` exactly like its 5-minute pass, or an agent pane ending a blocked episode it entered after the listener armed, with the pane's visible screen saved under `state/.blocked-captures/` exactly like `state/peer-blocked.check.sh` saves its own - then prints a bounded `herdr-panes-v1` report, and the generic runner captures it and relistens under the same claim so exactly one runner is ever subscribed.
+The pod never starts, stops, or restarts the herdr server, and a pure socket-loss report is classified `socket-lost` and recorded handled without a wake, because the runner's own relisten is the repair; the 5-minute checks stay exactly as they are and remain the fallback whenever the source is unarmed, and the drift check wakes once per listener edit that was never re-armed because the registration otherwise keeps running stale bytes.
+
 **Capture and publish results**
 
 This section is the single owner of the runner's operating contract.
@@ -2350,7 +2528,7 @@ FM_PROC_ROOT_OVERRIDE=   # alternate /proc root for Linux process-identity reads
 FM_BACKEND=             # optional runtime backend override for new spawns; tmux/herdr/zellij/orca/cmux support ship/scout spawns, codex-app is not accepted
 FM_TRACE_CONTEXT=       # optional trace-context override; see "Trace context propagation"
 FM_TASK_ID=             # internal task-worker marker fm-spawn.sh exports into ship and scout panes, never set by hand; bin/fm-test-run.sh refuses to execute in the repository primary checkout while it is set
-FM_TASK_INBOX=          # internal: absolute path of the task's steering inbox (state/<id>.inbox) that fm-spawn.sh exports into every ship, scout, and secondmate launch, never set by hand; the steering doorbell names "$FM_TASK_INBOX"
+FM_TASK_INBOX=          # absolute steering-inbox path exported by fm-spawn; manual omp peer opt-in is owned by the loading header in .omp/extensions/fm-inbox-listener.ts
 HERDR_SESSION=default  # herdr-only: named session for normal backend ops; not enough for destructive cleanup (docs/herdr-backend.md)
 FM_BACKEND_HERDR_SUBMIT_POLLS=6  # herdr-only: agent-state samples spread across each Enter attempt's budget when confirming a submit (docs/herdr-backend.md "Current transport behavior")
 FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0.6  # herdr-only: minimum per-Enter confirmation budget before polling agent-state after an idle baseline
@@ -2381,10 +2559,10 @@ FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartb
 FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap
 FM_INACTIVE_RECONCILE_SECS=900  # 60..1800-second watcher cadence and inactivity threshold; locked session start also requests an immediate scan in the deferred worker
 FM_INACTIVE_RECONCILE_BUDGET_SECS=10  # 1..30-second scan deadline; wedged-scan kill backstop follows one second later
-FM_CHECK_INTERVAL=300   # seconds between slow checks (authenticated merge polls, custom checks, or Relay dispatch)
+FM_CHECK_INTERVAL=300   # default seconds between slow checks (authenticated merge polls, custom checks, or Relay dispatch); a check file whose header carries `# fm-check-interval: <seconds>` runs on that cadence instead, and the sweep ticks at the shortest interval in the set
 FM_TASK_INBOX_GRACE_SECS=90   # seconds an unhandled steering-inbox message may sit before the watcher attempts doorbell delivery on an idle pane; also the minimum spacing between attempts
 FM_TASK_INBOX_RING_MAX=3      # watcher delivery attempts without an acknowledgement before the task surfaces as a stale wake for recovery
-FM_TASK_INBOX_BUSY_MAX=2      # consecutive busy-deferred due polls before a stuck-busy stale wake; 1..999999999, at most 9 decimal digits, otherwise 2; policy: bin/fm-task-inbox-lib.sh
+FM_TASK_INBOX_BUSY_MAX=12     # consecutive busy-deferred due polls before a stuck-busy stale wake; 1..999999999, at most 9 decimal digits, otherwise 12; policy: bin/fm-task-inbox-lib.sh
 FM_CHECK_TIMEOUT=30     # seconds allowed per slow check script
 FM_MAIL_CHECK_BUDGET=15   # seconds allowed for one standing mail poll; valid 5..25, cut to fit FM_CHECK_TIMEOUT
 FM_MAIL_POLL_MAX_WAKES=20   # per-poll wake cap for a mail poll; valid 1..200, keeps a flood from flooding firstmate
@@ -2441,6 +2619,7 @@ FM_WATCH_REARM_RETRY_LIMIT=5   # Pi/OpenCode adapter launch-failure retries befo
 FM_WATCH_CYCLE_LOG_MAX_BYTES=262144   # size cap for the arm-owned watcher lifecycle ledger
 FM_WATCH_CYCLE_LOG_KEEP_LINES=1000   # newest complete lifecycle rows considered when the ledger is capped
 FM_WATCH_EXTENSION_LOG_KEEP_LINES=0   # opt-in Pi extension diagnostic log (state/.watch-extension.log); unset, empty, non-numeric, zero, or negative disables logging, a positive value keeps that many newest rows; logging never changes supervision behavior
+FM_OMP_EXTENSION_DEBUG_LOG=   # opt-in omp primary extension lifecycle log: an absolute file path, set before omp starts, receives one JSON line per factory bind and lifecycle event with the ctx agent shape and code path (.pi/extensions/lib/fm-extension-debug.ts owns the format); unset or empty disables it; logging never changes supervision behavior
 FM_WATCHER_STALE_GRACE=300   # defaults to FM_GUARD_GRACE if set, else the poll-derived grace (docs/turnend-guard.md "Guard grace and the poll cadence"); seconds before a fresh arm refuses a live holder's stale beacon (attached arms: FM_WATCHER_STALL_BOUND)
 FM_WATCHER_STALL_BOUND=       # live-holder stall bound; default and arm/re-arm behavior: docs/turnend-guard.md "Guard grace and the poll cadence"
 FM_SIGNAL_GRACE=30      # seconds to coalesce nearby status and turn-end signals into one wake

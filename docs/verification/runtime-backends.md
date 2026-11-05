@@ -638,6 +638,64 @@ skip-runner: pi-signed is not installed, so its pin check was not exercised
 
 The guard submits no prompt and spends no tokens, so it runs by default wherever a runner is installed; rerun it after every Claude or Pi upgrade.
 
+## Secondmate busy contract
+
+Verified 2026-09-22 on this host with Claude Code 2.1.278, OpenCode 1.18.31, Pi 0.86.1, and Grok 1.0.40.
+
+A tmux-backed secondmate's active-turn gate reads the parent home's semantic busy record.
+Launches of opencode, pi, pi-signed, and omp arm that record and load the same hook or extension an ordinary worker uses, and those hooks do not touch the parent's turn-ended marker.
+A Claude secondmate arms the same record through busy hooks in the parent home's `state/<id>.claude-settings.json`, passed as Claude Code's `--settings` file, and does not write the mate home's `.claude/settings.local.json`.
+That `--settings` load and the merge of its hook entries with the home's own hooks rest on Claude Code's documentation (<https://code.claude.com/docs/en/cli-reference>, <https://code.claude.com/docs/en/hooks>) and not on a live run recorded in this section: the sample output below predates the `--settings` mechanism.
+A Claude secondmate is the one exception on Stop: its home's tracked Stop guard is the only Stop writer, recording idle when it allows the Stop and busy when it blocks it into a continuation, because Claude runs Stop hooks in parallel.
+Claude Code 2.1.278 was probed live in a scratch project with logging `UserPromptSubmit` and `Stop` hooks.
+A synchronous Stop hook that exits 2 forced a continuation with no `UserPromptSubmit`, which is why the guard itself records busy when it blocks.
+An `asyncRewake` Stop hook that exited 2 six seconds after the turn ended woke a new turn, and `UserPromptSubmit` fired 45ms after that hook exited.
+So a secondmate turn started by the Stop auto-arm reopens busy through the same `UserPromptSubmit` hook as a typed prompt, and the auto-arm needs no busy writer of its own.
+
+```text
+# asyncRewake probe                # synchronous block probe
+ups    1790092380.194370578        ups   1790092417.676751768
+stop   1790092380.968402195        stop  1790092418.684176531
+rewake 1790092386.979819188        block 1790092418.692480013
+ups    1790092387.025050498        stop  1790092419.717886938
+stop   1790092388.953108486
+```
+Codex stays unverified.
+Grok keeps its rendered-tail verdict and gets no parent turn-end hook.
+Cursor's transcript sidecar is written for a secondmate the same way it is for an ordinary worker, and this host has no Cursor agent binary, so that path was not started.
+Kimi stays unarmed, and a secondmate still gets no parent turn-end token.
+
+The portable regression is `tests/fm-busy-adapter-wiring.test.sh`.
+It spawns those harnesses through the real `bin/fm-spawn.sh --secondmate` path on a fake tmux pane, drives the generated hook or extension, and runs the stall gate while the record is busy and again after it goes idle.
+
+The live guard is `tests/fm-secondmate-busy-contract-live-e2e.test.sh`.
+It runs by default wherever tmux is installed.
+`FM_SECONDMATE_BUSY_LIVE=1` forces an absent binary to fail rather than skip.
+The spawn pane is a sleeper, so the launch brief is never delivered to a model.
+Each installed armed harness is then started for real, with no prompt and no keystrokes.
+
+```sh
+bash tests/fm-secondmate-busy-contract-live-e2e.test.sh
+```
+
+```text
+# claude 2.1.278 (Claude Code): real process stayed up; pane tail classify=busy fm-spawn
+ok - claude 2.1.278 (Claude Code): a tmux secondmate spawn arms a busy verdict the active-turn gate can see
+# opencode 1.18.31: real process stayed up; pane tail classify=busy fm-spawn
+ok - opencode 1.18.31: a tmux secondmate spawn arms a busy verdict the active-turn gate can see
+# pi 0.86.1: real process stayed up; pane tail classify=unknown launch-prompt
+ok - pi 0.86.1: a tmux secondmate spawn arms a busy verdict the active-turn gate can see
+# skip: pi-signed is not installed on this machine, so its secondmate busy contract is unverified here
+# skip: omp is not installed on this machine, so its secondmate busy contract is unverified here
+ok - grok grok 1.0.40 (eb1a2256660d) [stable]: secondmate spawn stays unarmed and does not emit a parent turn-end
+# skip: codex is not installed on this machine, so its secondmate busy contract is unverified here
+# checked 4 harness(es); absent: pi-signed omp codex
+ok - secondmate busy contract live guard checked every installed harness
+```
+
+Pi's real parked pane classified `unknown launch-prompt`.
+That is the launch-prompt backstop: the same spawn's record classified `busy fm-spawn` for a non-prompt mid-turn tail, which is what the active-turn gate reads while a turn is in progress.
+
 ## Codex hook trust
 
 Verified 2026-09-16 on codex-cli 0.151.0, macOS arm64, in a fresh linked worktree of this repository.
@@ -732,6 +790,26 @@ This closes only #3436's idle-composer-misclassification symptom (Grok/Herdr com
 Cursor is deliberately outside this cursor-anchored empty-composer matrix because its terminal cursor is parked outside the composer; tmux's Cursor-specific, process-identity-gated cursorless fallback is covered by the [Cursor Agent CLI](#cursor-agent-cli) section's separate live evidence and drift guard.
 
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.
+
+### omp 18.10.4 band composer through Herdr
+
+Verified on 2026-10-21 on macOS arm64 against omp 18.10.4 and Herdr 0.9.3 using `herdr pane read <pane> --source visible --format ansi`.
+The band composer places its status row above an unboxed `╰─ ` input gutter, rather than drawing a complete box or a bare agent prompt glyph.
+The version-pinned upstream [band renderer](https://github.com/can1357/oh-my-pi/blob/v18.10.4/packages/tui/src/components/composer/band.ts) owns that geometry.
+The shared classifier recognizes the gutter only directly below a recognized omp status row and retains lower-shell and lower-composer staleness protections.
+An empty-only, right-aligned `←← to see N running agents` hint uses a bright key and a dim label, as defined by upstream [composer hints](https://github.com/can1357/oh-my-pi/blob/v18.10.4/packages/tui/src/prompt/composer-hints.ts).
+The classifier discards that hint only when ANSI ghost stripping removes part of the exact placeholder; identically typed bright text remains pending.
+
+The captured viewport classified `unknown` before this shape was supported and `empty` afterward.
+The sanitized input-band capture is `tests/captures/omp-18.10.4-band-idle.ansi`.
+The focused refresh command is `bash tests/fm-composer-lib.test.sh`; its observed result was exit 0, including `ok - matrix: omp band gutter and styled hint prove empty without discarding drafts`.
+The regression covers pending text, wrapped text, identical bright placeholder text, plain captures, cursor-aware and cursorless reads, and lower dead shells under both the ambient locale and `LC_ALL=C`.
+
+Composer emptiness is not a foreground-busy verdict.
+The same live screen retained a spinner and Herdr `working` state after the assistant's recorded stop.
+Upstream [non-terminal settle handling](https://github.com/can1357/oh-my-pi/blob/v18.10.4/packages/coding-agent/src/modes/controllers/event-controller.ts#L2238-L2331) deliberately retains the loader and run-status `working` while asynchronous work can resume the run.
+Long-lived monitoring jobs can therefore outlive a model turn without making these two busy signals independent.
+This classifier change does not override the delivery busy guard or authorize typing merely because a turn stopped.
 
 ### 2026-09-20 claude 2.1.236 statusLine footer through Herdr
 
@@ -1723,6 +1801,34 @@ ok - real herdr: a drifted agent-free shell returns to its worktree and reuses t
 `tests/fm-control-relaunch.test.sh` drives a tmux stub and proves that tmux retains its prior refusal without sending `cd` or any other input to the pane.
 The Herdr refusal when a shell accepts the command but does not move is not exercised in this change.
 
+### Secondmate pane loss during relaunch
+
+Verified 2026-11-03 by driving the real control and spawn executables through the hermetic Herdr transport in `tests/fm-control-relaunch.test.sh`.
+This is lifecycle-logic evidence, not a live OMP shutdown or pane-restart result.
+No existing agent or real Herdr pane was controlled.
+The [transactional relaunch owner](../agent-control.md#transactional-relaunch) defines the recovery boundary.
+
+Refresh the portable coverage with:
+
+```sh
+bash tests/fm-control-relaunch.test.sh
+```
+
+The changed-file run exited 0 and included these consumer-visible outcomes:
+
+```text
+ok - secondmate endpoint gone preserves work and permits no duplicate
+ok - secondmate endpoint gone-after-launch preserves work and permits no duplicate
+ok - secondmate endpoint gone-twice preserves work and permits no duplicate
+ok - secondmate endpoint idle preserves work and permits no duplicate
+ok - secondmate endpoint unreadable preserves work and permits no duplicate
+ok - secondmate endpoint initial-gone preserves work and permits no duplicate
+ok - secondmate endpoint survives preserves work and permits no duplicate
+```
+
+The same file retains the existing tmux absence refusals, profile-switch checks, metadata-publication checks, child-work preservation, direct unowned secondmate-reclaim refusal, and registered-Pi-session selection cases.
+No harness signal, supported-kind table or non-Herdr recovery capability changed.
+
 ### Stale agent registration
 
 Measured 2026-09-10 on macOS aarch64 against Herdr 0.9.0 (protocol 22) and Pi 0.85.1 in an isolated `fm-lab-` session (upstream issue #4115, duplicates #3639, #3487, #2908, #3545).
@@ -2440,6 +2546,8 @@ The evidence below was produced on 2026-09-05 against omp 18.1.11 (`~/.local/bin
 `ps -o comm=` reports the bare name `omp` for the agent process, from both its `!` bash path and the model's bash tool, so identity is the anchored name; `ompd` and `comp` never match.
 omp publishes no harness marker: `PI_CODING_AGENT` is absent from the binary, and the default profile sets neither `PI_CODING_AGENT_DIR` nor `OMP_PROFILE` in the process environment.
 `FM_OMP_HARNESS=omp` is Firstmate's own launch marker and wins over an inherited `CLAUDECODE` only under a real omp ancestor; `tests/fm-omp-harness.test.sh` pins both directions with real processes.
+
+The external Mac watchdog's 2026-10-23 native identity observation, real-process regression and isolated launchd/notification proof are owned by [supervision verification](supervision.md#external-mac-watchdog), including its explicit live-delivery limits and refresh commands.
 
 ### Composer
 

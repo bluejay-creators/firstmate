@@ -14,7 +14,7 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit> [--shape squash]] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo> [--shape squash]] [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
@@ -73,8 +73,9 @@
 # script never infers a forge and never looks the binding up, and bin/fm-spawn.sh
 # refuses a brief whose forge disagrees with the registry. bin/fm-project-mode.sh's
 # header owns what the binding means, and bin/fm-dod-lib.sh owns what `gerrit`
-# changes for the worker. A forge on --mode local-only is refused, because that
-# mode publishes nothing.
+# and `forgejo` change in the Definition of done. On `forgejo` this script also
+# names tea instead of gh-axi in the ship brief's forge-CLI rule. A forge on
+# --mode local-only is refused, because that mode publishes nothing.
 # --shape names how a forge=gerrit task is published, and only `squash` - one
 # change - is accepted: `stack` is refused until a stack can be watched by its
 # membership pinned when its watch is armed, because the merge watch follows one
@@ -82,9 +83,10 @@
 # It defaults to squash on gerrit and is refused without it.
 # The generated ship brief records the chosen mode as a fixed machine-readable
 # "Delivery contract: mode=<mode>" line, followed by " forge=gerrit shape=squash"
-# on that forge. bin/fm-spawn.sh reads that line and refuses to launch a ship task
-# whose explicit --mode or registered forge disagrees, so an adjusted brief and the
-# recorded task metadata cannot drift apart.
+# on Gerrit or " forge=forgejo" on Forgejo. bin/fm-spawn.sh reads that line and
+# refuses to launch a ship task whose explicit --mode or registered forge
+# disagrees, so an adjusted brief and the recorded task metadata cannot drift
+# apart.
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # Both crewmate scaffolds carry one shared rule against administering the
 # infrastructure every lane shares - the no-mistakes daemon and the worktree pool
@@ -151,16 +153,6 @@ esac
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
-IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
-   Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - when deliberately waiting for work or an external condition expected to clear on its own, including your own validation round.
-   Before ending your turn with your own background shell or monitor still running, or before waiting on your own pipeline run or a long foreground command, append \`$PAUSED_VERB [at=<epoch>]: {job and completion condition}\` to the status file.
-   Name what you are waiting for and what will let you resume; do not repeat the declaration on every poll.
-   Do not declare active implementation or reasoning as a wait.
-   Firstmate may still raise one first-sight alert; the declared wait then uses the existing long recheck cadence instead of repeated possible-wedge alarms.
-   When you know when the wait clears, include \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) for a recheck at that time.
-   Follow the resolution rule below when the wait clears, then resume the task.
-   Use \`blocked:\` when you are stuck and need help.
-EOF
 
 resolve_directory_input() {
   local name=$1 path=$2 resolved
@@ -289,6 +281,13 @@ if [ "$KIND" = ship ]; then
     echo "error: --shape applies only with --forge gerrit, where the worker publishes the change itself" >&2
     exit 1
   fi
+  # A Forgejo project's pull requests are handled with tea, so the ship brief's
+  # forge-CLI rule names it instead of gh-axi; every other forge keeps gh-axi.
+  if [ "$FORGE" = forgejo ]; then
+    FORGE_RULE_LINE="Use tea for Forgejo operations and chrome-devtools-axi for browser operations."
+  else
+    FORGE_RULE_LINE="Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations."
+  fi
 elif [ "$FORGE_SET" -eq 1 ] || [ "$SHAPE_SET" -eq 1 ]; then
   echo "error: --forge and --shape apply only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
   exit 1
@@ -381,6 +380,7 @@ IFS= read -r -d '' INBOX_SECTION <<EOF || true
 Firstmate steers you through durable message files in $INBOX_DIR.
 When a terminal message says an instruction is waiting there - and at any natural checkpoint when you are unsure - list $INBOX_DIR/*.msg, read and act on each message in numeric order, then acknowledge each handled message by moving it: \`mv $INBOX_DIR/NNN.msg $INBOX_DIR/handled/\`.
 The move IS the acknowledgement: without it firstmate rings again and eventually treats you as stuck. An empty or absent inbox needs no action.
+An in-session inbox listener (omp workers load it by default) delivers each new record into the session itself and performs that move once the run accepts the message; no terminal doorbell is typed for it, and reading listed in-session messages still means acting on them in order.
 EOF
 if [ -e "$CONFIG/wait-no-turns" ]; then
   INBOX_SECTION+="Do not poll or list the inbox while waiting; a waiting instruction rings."$'\n'
@@ -405,6 +405,16 @@ The one exception is `respond`: it sent its answer before it began waiting, so r
 A wait your shell can watch this way needs no `paused:` line, except your own pipeline run, a long foreground command, or your own validation round, which you declare once just before its blocking hold: append `paused:` once just before its first blocking command, then stay in the command, and never append it again as you reissue that command.
 EOF
 WAIT_SECTION=${WAIT_SECTION%$'\n'}
+IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
+   Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - when deliberately waiting for work or an external condition expected to clear on its own, including your own validation round.
+   Before ending your turn with your own background shell or monitor still running, or before waiting on your own pipeline run or a long foreground command, append \`$PAUSED_VERB [at=<epoch>]: {job and completion condition}\` to the status file.
+   Name what you are waiting for and what will let you resume; do not repeat the declaration on every poll.
+   Do not declare active implementation or reasoning as a wait.
+   Firstmate may still raise one first-sight alert; the declared wait then uses the existing long recheck cadence instead of repeated possible-wedge alarms.
+   When you know when the wait clears, include \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) for a recheck at that time.
+   Follow the resolution rule below when the wait clears, then resume the task.
+   Use \`blocked:\` when you are stuck and need help.
+EOF
 WAIT_BLOCK=
 if [ -e "$CONFIG/wait-no-turns" ]; then
   WAIT_BLOCK="$WAIT_SECTION"$'\n\n'
@@ -585,6 +595,42 @@ IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
    `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
 EOF
 SHARED_INFRA_RULE=${SHARED_INFRA_RULE%$'\n'}
+# The four working-posture principles (act-and-note, park-with-named-wait,
+# phase-status freshness, lane-affecting decisions only) render once from this
+# shared string into every ship and scout scaffold, so the two crewmate
+# contracts cannot drift. Changes here are behavior-bearing: existing briefs in
+# flight keep their own copy, so this rewrites future scaffolds only and needs
+# no migration. The dispatcher vocabulary (working, note, blocked, the paused
+# verb, done, failed, needs-decision, resolved) is owned by
+# bin/fm-classify-lib.sh and never renamed here; this text decides WHEN each
+# verb is used, not the tokens.
+IFS= read -r -d '' WORKING_POSTURE <<EOF || true
+# Working posture
+Act-and-note: for a bounded reversible step inside this brief's stated scope, make the reasonable call and append a \`note [at=<epoch>]: {call made}\` line to the status file; never write \`blocked\` and park.
+Only ask when the choice is irreversible, destructive, crosses into a lane this brief doesn't own, would need captain credential or merge authority, or is genuinely out of scope.
+Park-with-named-wait: when you must stop, append one \`$PAUSED_VERB [at=<epoch>]: waiting on <external event>\` line - for example \`$PAUSED_VERB [at=<epoch>]: waiting on platform deploying rev 300 to staging\` or \`$PAUSED_VERB [at=<epoch>]: waiting on captain word on PR #N\` - then STOP appending status until that event clears it.
+That named wait is firstmate's signal to stop waiting-too-long alerts; it replaces the old 60-minute quiet-pane alert for a declared wait.
+Status freshness: append exactly one \`working [at=<epoch>]: <phase> - <short detail>\` status line at every phase change (setup, read-only exploration, deciding, implementing, testing, validating, PR-published, cleanup, done) so the status file alone tells firstmate where you are.
+Firstmate watches the status file and peers into your pane only as an exception, to diagnose a genuinely stuck or halting state; pane reads are not routine supervision.
+Lane-affecting decisions only: a pending captain question freezes only the specific scope that question targets; keep advancing other in-scope work whose progress doesn't depend on that answer.
+Approval prompts:
+Before a step that requires approval, prepare its decision card before executing the step.
+Bind the card to the exact action, account, affected resource, working directory, current source head or artifact hash, expected impact and the smallest complete command bundle.
+Obtain the required approval through the shared phone/Inbox decision flow, then run only that approved scope.
+A prior approval is not permission to widen the command, substitute another head, change accounts, or retry an action whose acceptance is uncertain.
+Do not deliberately open a permission prompt to discover or obtain approval, and do not ask the user to visit an agent tab.
+If an unexpected native prompt appears, stop the dependent operation, preserve its original identity and exact command, and route it to the same decision flow.
+If approval already covers that exact action, consume that existing approval against the original prompt; do not create another human approval or invent a grant.
+Only Inbox may handle that original prompt under the explicit stopgap in the next paragraph; otherwise the native signed-release mechanism must consume the approved decision without approval keystrokes.
+Cancel an unapproved pending operation safely when possible; never replay a possibly accepted operation.
+Until the single-gate release is adopted, send Inbox the exact single approved command bundle before running it and let Inbox handle the one original native prompt under Main's explicit stopgap authority.
+Never park work waiting for the user to press a key in an agent tab.
+If the shared flow cannot complete, report the concrete missing requirement to Main and keep independent approved work moving.
+An OS credential, TouchID, security or destructive-operation approval remains a separate boundary; do not provoke a popup or treat a general task approval as permission for it.
+The user may choose to interact directly with an agent; agents must never require that interaction.
+A phone acknowledgement is not proof of execution: record the original prompt's release or cancellation and the actual action result separately.
+EOF
+WORKING_POSTURE=${WORKING_POSTURE%$'\n'}
 
 if [ -n "$BASE_BRANCH" ]; then
   SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean copy of its base branch.
@@ -620,9 +666,8 @@ The report is the only thing that survives, so anything worth keeping must be in
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
-   Each append wakes firstmate, so report sparingly: only phase changes a supervisor
-   would act on and the needs-decision/blocked/paused/done/failed states. No step-by-step
-   FYI progress lines; firstmate reads your pane for that.
+   Only the phase changes named under Working posture below carry status; do not
+   add FYI progress lines in between.
    Whenever you mention a PR anywhere - a status line, your terminal, a summary - write its full
    https:// URL exactly as the forge printed it, never a bare number such as "PR 108"; firstmate
    copies that URL from your line rather than assembling one.
@@ -632,6 +677,9 @@ $CREWMATE_PAUSE_INSTRUCTIONS
    append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+
+$WORKING_POSTURE
+
 $SHARED_INFRA_RULE
 
 $WAIT_BLOCK$INBOX_SECTION
@@ -691,20 +739,18 @@ $RULE1
 2. Keep project edits inside this worktree; keep proof and scratch output outside it, under \`$DATA/$ID/\` or a temporary directory.
    Outside the worktree, write only that task material and the status and steering-inbox records authorized below.
    Leave the worktree clean before reporting done.
-3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+3. $FORGE_RULE_LINE
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
-   Each append wakes firstmate, so report sparingly: only phase changes a supervisor
-   would act on (setup done, bug reproduced, fix implemented, validation passed) and the
-   needs-decision/blocked/paused/done/failed states. No step-by-step FYI progress lines;
-   firstmate reads your pane for that.
    Whenever you mention a PR anywhere - a status line, your terminal, a summary - write its full
    https:// URL exactly as the forge printed it, never a bare number such as "PR 108"; firstmate
    copies that URL from your line rather than assembling one.
    A mid-task \`working:\` line (including setup complete) is nonterminal: do not end the
    turn after it; continue the same stage until a defined \`done:\` gate under Definition of done.
+   Only the phase changes named under Working posture below carry status; do not add
+   FYI progress lines in between.
 $CREWMATE_PAUSE_INSTRUCTIONS
 5. If you hit the same obstacle twice, append \`blocked [at=<epoch>]: {why}\` and stop; firstmate will help.
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
@@ -712,6 +758,9 @@ $CREWMATE_PAUSE_INSTRUCTIONS
 $ASK_USER_BLOCK
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+
+$WORKING_POSTURE
+
 $SHARED_INFRA_RULE
 
 $WAIT_BLOCK$INBOX_SECTION
@@ -725,6 +774,8 @@ EOF
 append_brief_include
 if [ "$FORGE" = none ]; then
   echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC})"
-else
+elif [ "$FORGE" = gerrit ]; then
   echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE shape=$SHAPE; replace {TASK} and {FIRSTMATE_SPEC})"
+else
+  echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE; replace {TASK} and {FIRSTMATE_SPEC})"
 fi

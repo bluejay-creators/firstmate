@@ -372,9 +372,9 @@ test_away_yolo_is_fleet_work() {
     || fail 'could not collect contribution input for away posture'
   out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" snapshot "$home/input.json" --all) \
     || fail 'could not project away delivery'
-  printf '%s' "$out" | jq -e '.checked == 1 and .counts.captain == 0 and .counts.fleet == 1' >/dev/null \
-    || fail 'away yolo delivery requiring a merge remained captain work'
-  pass 'away yolo delivery is fleet work without granting merge authority'
+  printf '%s' "$out" | jq -e '.checked == 1 and .counts.captain == 1 and .counts.fleet == 0' >/dev/null \
+    || fail 'away posture or legacy yolo metadata was mistaken for merge approval'
+  pass 'away posture and legacy yolo metadata do not establish concrete merge approval'
 }
 
 test_away_yolo_cross_home_is_fleet_work() {
@@ -394,10 +394,10 @@ test_away_yolo_cross_home_is_fleet_work() {
   FM_SNAPSHOT_NOW="$NOW" with_home "$child" "$ROOT/bin/fm-fleet-snapshot.sh" --secondmate-home-summary > "$child/state/home-summary.json" \
     || fail 'could not collect child contribution summary'
   printf -- '- child - fixture (home: %s; scope: fixture; projects: sample; added 2026-09-16)\n' "$child" > "$home/data/secondmates.md"
-  bearings "$home" | jq -e '.contributions.checked == 1 and .contributions.counts.captain == 0
-    and .contributions.counts.fleet == 1' >/dev/null \
-    || fail 'cross-home away yolo delivery requiring a merge remained captain work'
-  pass 'cross-home away yolo delivery is fleet work'
+  bearings "$home" | jq -e '.contributions.checked == 1 and .contributions.counts.captain == 1
+    and .contributions.counts.fleet == 0' >/dev/null \
+    || fail 'cross-home away posture was mistaken for merge approval'
+  pass 'cross-home away posture does not establish concrete merge approval'
 }
 
 test_retired_and_unsupported_coverage() {

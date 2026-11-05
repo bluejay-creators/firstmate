@@ -115,6 +115,33 @@ for arg in "$@"; do
   esac
 done
 
+# A Claude secondmate's home carries .fm-busy-stop (bin/fm-spawn.sh), and this
+# guard is then the only Stop writer of the parent home's busy record for that
+# gen: every exit records the Stop's outcome, busy when exit 2 blocks it into a
+# continuation and idle otherwise. Claude runs Stop hooks in parallel, so a
+# second Stop writer could land after this one and flip the verdict.
+# shellcheck disable=SC2329 # Invoked by the EXIT trap below.
+record_parent_stop_state() {
+  local status=$? pointer="$FM_ROOT/.fm-busy-stop" key value writer='' state='' id='' gen='' verdict=idle event=stop
+  [ "$CLAUDE_MODE" -eq 1 ] || return 0
+  [ -f "$pointer" ] && [ ! -L "$pointer" ] || return 0
+  while IFS='=' read -r key value; do
+    case "$key" in
+      writer) writer=$value ;;
+      state) state=$value ;;
+      id) id=$value ;;
+      gen) gen=$value ;;
+    esac
+  done < "$pointer"
+  [ -n "$state" ] && [ -n "$id" ] && [ -n "$gen" ] && [ -x "$writer" ] || return 0
+  if [ "$status" -eq 2 ]; then
+    verdict=busy
+    event=stop-blocked
+  fi
+  "$writer" apply "$state" "$id" "$verdict" --gen "$gen" --source claude-hook --event "$event" >/dev/null 2>&1 || true
+}
+trap record_parent_stop_state EXIT
+
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
 # shellcheck source=bin/fm-primary-scope-lib.sh
@@ -267,6 +294,13 @@ if [ "$CLAUDE_MODE" -eq 1 ] && fm_session_lock_foreign_owner_live "$STATE"; then
 fi
 
 if [ "$CLAUDE_MODE" -eq 0 ]; then
+  # A re-arm publishes the singleton pid before its ownership metadata.
+  # Re-read the full strict proof once after that short publication window.
+  # A fresh beacon alone, a dead pid, or foreign ownership still cannot pass.
+  sleep 0.2
+  if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
+    allow_supervised_stop
+  fi
   block_stop
 fi
 

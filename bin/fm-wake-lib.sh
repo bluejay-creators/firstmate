@@ -141,6 +141,21 @@ fm_poll_derived_grace() {
   printf '%s\n' "$derived"
 }
 
+# fm_watcher_fresh_beat <state> [poll-seconds]
+# The beacon-freshness half of the turn-end guard's health predicate with no
+# process or lock requirement: true while state/.last-watcher-beat is younger
+# than the same grace bin/fm-turnend-guard.sh hands fm_watcher_healthy
+# (FM_GUARD_GRACE, else fm_poll_derived_grace; docs/turnend-guard.md "Guard
+# grace and the poll cadence" owns the derivation). Extension adapters that
+# must not touch the watcher lock use this to answer "is any watcher still
+# beating" without competing with the strict pid- and identity-matched
+# predicate.
+fm_watcher_fresh_beat() {
+  local state=$1 poll=${2:-${FM_POLL:-15}} grace
+  grace=${FM_GUARD_GRACE:-$(fm_poll_derived_grace "$poll")}
+  [ "$(fm_path_age "$state/.last-watcher-beat")" -lt "$grace" ]
+}
+
 # fm_watcher_stall_bound [poll-seconds]
 # Hard bound on a live watcher holder's beacon age: FM_WATCHER_STALL_BOUND,
 # defaulting to 3x the watcher's stale grace (FM_WATCHER_STALE_GRACE, else
@@ -620,12 +635,20 @@ fm_lock_remove_path() {
   rmdir "$lockdir" 2>/dev/null
 }
 
+# fm_lock_mid_acquire_is_fresh <lockdir> <pid>: true when the lock dir has no
+# pid yet and its mtime is younger than the mid-acquire freshness floor. That
+# floor protects an acquirer that is still publishing its pid file; it defaults
+# to max(2, FM_LOCK_STALE_AFTER) and is overridable with
+# FM_LOCK_MID_ACQUIRE_FRESH_SECS for test fixtures (a floor of 0 restores the
+# bare FM_LOCK_STALE_AFTER window). Production keeps the default.
 fm_lock_mid_acquire_is_fresh() {
-  local lockdir=$1 pid=$2 mid_acquire_stale
+  local lockdir=$1 pid=$2 mid_acquire_stale floor
   case "$pid" in
     ''|*[!0-9]*)
       mid_acquire_stale=$FM_LOCK_STALE_AFTER
-      [ "$mid_acquire_stale" -lt 2 ] && mid_acquire_stale=2
+      floor=${FM_LOCK_MID_ACQUIRE_FRESH_SECS:-2}
+      case "$floor" in ''|*[!0-9]*) floor=2 ;; esac
+      [ "$mid_acquire_stale" -lt "$floor" ] && mid_acquire_stale=$floor
       [ "$(fm_path_age "$lockdir")" -lt "$mid_acquire_stale" ]
       return
       ;;
@@ -954,7 +977,8 @@ _fm_recovery_marker_arm_check() {
 }
 
 # Apply the owner-documented announced-episode arm transition atomically with
-# the queue read. Handling successors must not call this transition.
+# the queue read. Handling successors and foreground checkpoints must not call
+# this transition.
 _fm_recovery_marker_reopen_announced() {
   local marker=$1 lock
   lock="${marker}.lock"

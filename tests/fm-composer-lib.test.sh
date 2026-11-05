@@ -423,6 +423,38 @@ test_matrix_herdr_halfblock_rule_bounds_bare_wrap() {
   pass "matrix: herdr half-block rules bound a bare composer's wrap region"
 }
 
+test_matrix_omp_band_composer() {
+  # Captured read-only on omp 18.10.4 / Herdr 0.9.3 after the parent's
+  # assistant stop. The spinner may remain while background jobs are armed;
+  # it is independent of whether this input band contains a draft.
+  local screen status typed wrapped plain hint
+  screen=$(cat "$ROOT/tests/captures/omp-18.10.4-band-idle.ansi")
+  status=${screen%%$'\n'*}
+  assert_screen "real omp band with styled empty-only hint" empty "$CAPS_STYLED" "$screen"
+  assert_screen "cursor-anchored omp band" empty "$CAPS_TMUX" "$screen" 1
+  [ -z "$(fm_composer_extract_selected_content "$CAPS_STYLED" "$screen")" ] \
+    || fail "the omp band hint is not typed content"
+  typed="$status"$'\n╰─ keep this draft'
+  assert_screen "omp band draft under the same spinner" pending "$CAPS_STYLED" "$typed"
+  assert_screen "cursor-anchored omp band draft" pending "$CAPS_TMUX" "$typed" 1
+  [ "$(fm_composer_extract_selected_content "$CAPS_STYLED" "$typed")" = 'keep this draft' ] \
+    || fail "band content extraction must preserve the draft"
+  wrapped="$typed"$'\n   and its wrapped continuation'
+  assert_screen "wrapped omp band draft" pending "$CAPS_STYLED" "$wrapped"
+  assert_screen "cursor on wrapped omp band draft" pending "$CAPS_TMUX" "$wrapped" 2
+  hint="$status"$'\n╰─ ←← to see 1 running agent'
+  assert_screen "identical brightly typed band hint" pending "$CAPS_STYLED" "$hint"
+  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  assert_screen "unstyled band hint cannot prove emptiness" pending "$CAPS_PLAIN" "$plain"
+  assert_screen "band gutter without its status proof" unknown "$CAPS_STYLED" '╰─ '
+  assert_screen "status band without its input gutter" unknown "$CAPS_STYLED" "$status"
+  assert_screen "lower dead shell invalidates a band" unknown "$CAPS_STYLED" "$screen"$'\n$ '
+  assert_screen "ordinary lower prompt still wins" pending "$CAPS_STYLED" "$screen"$'\n❯ another draft'
+  assert_screen "zero-agent idle band without a hint" empty "$CAPS_STYLED" $'π > model > workspace\n╰─ '
+  assert_screen "zero-agent band preserves prompt-like typed text" pending "$CAPS_STYLED" $'π > model > workspace\n╰─ $'
+  pass "matrix: omp band gutter and styled hint prove empty without discarding drafts"
+}
+
 test_matrix_omp_status_row_bounds_bare_composer() {
   # omp (Oh My Pi) draws its status line directly BELOW the borderless `❯`
   # composer. Captured live through Herdr on omp 18.1.11 under the captain's
@@ -1030,6 +1062,7 @@ test_matrix_muse_truecolor_glyph_survives_signal_loss
 test_matrix_cursor_reverse_video_placeholder_remnant
 test_matrix_herdr_halfblock_rule_bounds_bare_wrap
 test_matrix_omp_status_row_bounds_bare_composer
+test_matrix_omp_band_composer
 test_matrix_codex_idle_starfield_furniture
 test_matrix_pi_separated_needs_identity
 test_matrix_pi_dollar_status_footer_is_empty

@@ -10,6 +10,8 @@
 # "{<harness>,...} " render only for the listed harnesses), and Grok's arm
 # command becomes the host; on a home that does not run it the output is
 # unchanged.
+# An omp secondmate is identified by fm-parent-channel-lib.sh's home identity
+# resolver and receives inbox-first instructions, not a mandatory primary tool.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -100,11 +102,30 @@ if [ -z "$HARNESS" ]; then
   HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 fi
 
+OMP_SECONDMATE=0
+if [ "$HARNESS" = omp ]; then
+  # shellcheck source=bin/fm-parent-channel-lib.sh
+  . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+  secondmate_status=0
+  fm_parent_channel_home_id "$FM_HOME" >/dev/null || secondmate_status=$?
+  case "$secondmate_status" in
+    0) OMP_SECONDMATE=1 ;;
+    1) ;;
+    *)
+      printf '%s\n' 'error: unusable secondmate identity; refusing primary omp instructions' >&2
+      exit 2
+      ;;
+  esac
+fi
+
 case "$HARNESS" in
   claude|codex|opencode|pi|grok|cursor|omp) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
   pi-signed) SNIPPET="$DOC_DIR/pi.md" ;;
   *) HARNESS=unknown; SNIPPET="$DOC_DIR/unknown.md" ;;
 esac
+if [ "$OMP_SECONDMATE" -eq 1 ]; then
+  SNIPPET="$DOC_DIR/omp-secondmate.md"
+fi
 [ -f "$SNIPPET" ] || SNIPPET="$DOC_DIR/unknown.md"
 HOST_SNIPPET=
 grok_arm='bin/fm-watch-arm.sh'
@@ -165,6 +186,13 @@ repair_line() {
     printf '%s\n' 'Watcher repair belongs to the session holding the fleet lock; do not drain, arm, or repair from this read-only session.'
     return 0
   fi
+  if [ "$OMP_SECONDMATE" -eq 1 ]; then
+    if [ "$QUEUE_PENDING" -eq 1 ]; then
+      printf '%s' 'After draining queued wakes, '
+    fi
+    printf '%s\n' 'continue through the durable instruction inbox and docs/secondmate-parent-channel.md; do not wait for missing primary watcher tools or relaunch just to obtain them. Use docs/supervision-protocols/omp.md for local watcher ownership only when its tool is actually exposed.'
+    return 0
+  fi
   if [ "$AFK" -eq 1 ]; then
     if [ "$AFK_MODE" = quiet ]; then
       printf '%s\n' 'Quiet mode owns watcher supervision; load /quiet and ensure the daemon is running instead of starting normal supervision directly.'
@@ -222,7 +250,11 @@ ordinary_wake_line() {
       printf '%s\n' '- Ordinary wake: the Pi extension already owns watcher continuity; do not arm another cycle.'
       ;;
     omp)
-      printf '%s\n' '- Ordinary wake: the omp extension already owns watcher continuity; do not arm another cycle.'
+      if [ "$OMP_SECONDMATE" -eq 1 ]; then
+        printf '%s\n' '- Ordinary wake: handle delivered instruction-inbox records and use the charter parent channel; inbox steering has no watcher-arming prerequisite.'
+      else
+        printf '%s\n' '- Ordinary wake: the omp extension already owns watcher continuity; do not arm another cycle.'
+      fi
       ;;
     opencode)
       printf '%s\n' '- Ordinary wake: the OpenCode TUI plugin already owns watcher continuity; do not arm manually.'

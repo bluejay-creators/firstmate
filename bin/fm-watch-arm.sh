@@ -300,7 +300,10 @@ clear_stale_recorded_watcher_lock() {
 # home's watcher (the identity match guards against a recycled/reused pid) AND the
 # liveness beacon is fresh within GRACE. Sets HEALTHY_PID on success. This is the
 # single honesty gate: a dead pid, a reused pid, or a stale beacon all fail it, so
-# this script can never report a watcher that is not really there.
+# this script can never report a watcher that is not really there. The freshness
+# half is fm_watcher_fresh_beat (bin/fm-wake-lib.sh), the same grace
+# bin/fm-turnend-guard.sh applies, so extension adapters asking only "is any
+# watcher still beating" read the identical threshold without the lock checks.
 HEALTHY_PID=
 HEALTHY_IDENTITY=
 healthy_watcher() {

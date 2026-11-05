@@ -221,6 +221,83 @@ test_ship_modes_generate_clean_briefs() {
   pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"
 }
 
+# --forge forgejo is the Forgejo value of the project's registered forge binding
+# (bin/fm-project-mode.sh --forge), passed at intake exactly like --mode. It
+# names tea instead of gh-axi in the ship brief's forge-CLI rule and in the
+# direct-PR Definition of done's own open-a-PR line, and it marks the delivery
+# contract line so bin/fm-spawn.sh can check it against the registry. A brief
+# with no --forge renders the unchanged gh-axi wording. The forge is a ship
+# input only, and the closed set refuses anything else.
+test_forge_selection_renders_correct_cli() {
+  local home brief out rc
+  home="$TMP_ROOT/forge-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-default some-proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "a ship brief with no --forge should still scaffold"
+  brief="$home/data/brief-forge-default/brief.md"
+  assert_grep "3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations." "$brief" \
+    "a brief with no --forge must render the exact pre-existing gh-axi Rule 3 line"
+  # shellcheck disable=SC2016 # Backticks are literal generated brief text.
+  assert_grep 'open a PR with `gh-axi`' "$brief" \
+    "a direct-PR brief with no --forge must still tell the worker to open the PR with gh-axi"
+  grep -qx "Delivery contract: mode=direct-PR" "$brief" \
+    || fail "a brief with no --forge must keep the bare delivery contract line"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-forgejo some-proj --mode direct-PR --forge forgejo >/dev/null 2>&1 \
+    || fail "--forge forgejo should scaffold a direct-PR ship brief"
+  brief="$home/data/brief-forge-forgejo/brief.md"
+  assert_grep "3. Use tea for Forgejo operations and chrome-devtools-axi for browser operations." "$brief" \
+    "--forge forgejo must render the tea Rule 3 line"
+  # shellcheck disable=SC2016 # Backticks are literal generated brief text.
+  assert_grep 'open a PR with `tea`' "$brief" \
+    "--forge forgejo's direct-PR DOD must tell the worker to open the PR with tea"
+  grep -qx "Delivery contract: mode=direct-PR forge=forgejo" "$brief" \
+    || fail "--forge forgejo must mark the delivery contract line for the spawn's registry check"
+  # shellcheck disable=SC2016 # Backticks and braces are literal generated brief text.
+  assert_grep 'confirm it is not a draft (`tea api --repo <owner>/<repo> /repos/{owner}/{repo}/pulls/<number>` must show `draft` as false' "$brief" \
+    "--forge forgejo's direct-PR DOD must read the draft state back with tea"
+  # shellcheck disable=SC2016 # Backticks are literal generated brief text.
+  assert_grep 'remove that prefix with `tea pulls edit <number>' "$brief" \
+    "--forge forgejo's direct-PR DOD must clear a draft with tea"
+  assert_no_grep 'gh-axi pr view' "$brief" \
+    "--forge forgejo's direct-PR DOD must not send the worker to gh-axi for the draft read-back"
+  assert_no_grep 'gh-axi pr ready' "$brief" \
+    "--forge forgejo's direct-PR DOD must not send the worker to gh-axi to clear a draft"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-nm some-proj --mode no-mistakes --forge forgejo >/dev/null 2>&1 \
+    || fail "--forge forgejo should scaffold a no-mistakes ship brief"
+  brief="$home/data/brief-forge-nm/brief.md"
+  assert_grep "3. Use tea for Forgejo operations and chrome-devtools-axi for browser operations." "$brief" \
+    "a no-mistakes --forge forgejo brief must render the tea Rule 3 line"
+  grep -qx "Delivery contract: mode=no-mistakes forge=forgejo" "$brief" \
+    || fail "a no-mistakes --forge forgejo brief must mark the delivery contract line"
+  # shellcheck disable=SC2016 # Backticks and braces are literal generated brief text.
+  assert_grep 'confirm it is not a draft (`tea api --repo <owner>/<repo> /repos/{owner}/{repo}/pulls/<number>` must show `draft` as false' "$brief" \
+    "a no-mistakes --forge forgejo DOD must read the draft state back with tea"
+  assert_no_grep 'gh-axi pr view' "$brief" \
+    "a no-mistakes --forge forgejo DOD must not send the worker to gh-axi for the draft read-back"
+  assert_no_grep 'gh-axi pr ready' "$brief" \
+    "a no-mistakes --forge forgejo DOD must not send the worker to gh-axi to clear a draft"
+
+  while IFS='|' read -r label args expect; do
+    [ -n "$label" ] || continue
+    # shellcheck disable=SC2086 # The row's arguments must split into words.
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-bad some-proj $args 2>&1); rc=$?
+    expect_code 1 "$rc" "$label must be refused"
+    assert_contains "$out" "$expect" "$label was refused without its reason"
+    [ ! -e "$home/data/brief-forge-bad/brief.md" ] || fail "$label left a brief behind"
+  done <<'ROWS'
+a value outside the closed set|--mode direct-PR --forge gitlab|expected none, gerrit, or forgejo
+the removed github value|--mode direct-PR --forge github|expected none, gerrit, or forgejo
+forgejo on local-only|--mode local-only --forge forgejo|cannot ship mode=local-only
+a shape on forgejo|--mode direct-PR --forge forgejo --shape squash|--shape applies only with --forge gerrit
+forgejo on a scout|--scout --forge forgejo|apply only to ship briefs
+ROWS
+
+  pass "fm-brief.sh: --forge forgejo names tea in Rule 3, the direct-PR DOD, and the draft read-back, marks the delivery contract, and the closed set refuses everything else"
+}
+
 # A ship task's delivery mode is firstmate's per-task decision, so a missing or
 # unusable value must stop the scaffold instead of silently defaulting. The
 # no-mistakes-prod-only row is the conditional registry policy: it is never a task
@@ -1465,10 +1542,75 @@ test_crewmate_scaffolds_forbid_pool_administration() {
   pass "fm-brief.sh: every crewmate scaffold forbids administering the shared worktree pool"
 }
 
+# The Working posture section carries the four onboarding principles into every
+# future ship scaffold: bounded reversible decisions are made and noted, named
+# waits park without waiting-too-long alerts, phase changes keep the status
+# file fresh so firstmate stops peering into panes, and a pending captain
+# question freezes only the scope it targets. Rendered from one shared string,
+# so the scout copy is byte-identical and the secondmate charter never takes it.
+test_ship_scaffold_renders_all_four_working_posture_principles() {
+  local home brief posture scout_brief scout_posture
+  home="$TMP_ROOT/working-posture-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-posture-w1 alpha --mode direct-PR >/dev/null 2>&1 \
+    || fail "fm-brief.sh --mode direct-PR exited non-zero"
+  brief="$home/data/brief-posture-w1/brief.md"
+  assert_grep "# Working posture" "$brief" \
+    "ship brief emitted no Working posture section"
+  assert_grep "Act-and-note: for a bounded reversible step" "$brief" \
+    "ship brief lost the act-and-note principle"
+  # shellcheck disable=SC2016 # Literal status-line syntax must remain unexpanded.
+  assert_grep 'never write `blocked` and park' "$brief" \
+    "ship brief still defaults to block-first on a bounded reversible step"
+  assert_grep "Park-with-named-wait: when you must stop" "$brief" \
+    "ship brief lost the park-with-named-wait principle"
+  assert_grep "then STOP appending status until that event clears it" "$brief" \
+    "ship brief did not bind a parked wait to silence until the named event"
+  assert_grep "Status freshness: append exactly one" "$brief" \
+    "ship brief lost the status-freshness principle"
+  assert_grep "pane reads are not routine supervision" "$brief" \
+    "ship brief left pane-peering as routine supervision"
+  assert_grep "Lane-affecting decisions only: a pending captain question" "$brief" \
+    "ship brief lost the lane-affecting-decisions-only principle"
+  assert_grep "keep advancing other in-scope work" "$brief" \
+    "ship brief let a pending question freeze unrelated in-scope work"
+  assert_grep "Approval prompts:" "$brief" \
+    "ship brief lost the approval-prompts paragraph"
+  assert_grep "Before a step that requires approval, prepare its decision card before executing the step." "$brief" \
+    "ship brief lost the card-before-prompt rule"
+  assert_grep "send Inbox the exact single approved command bundle before running it" "$brief" \
+    "ship brief lost the Inbox stopgap command bundle"
+  assert_grep "Never park work waiting for the user to press a key in an agent tab." "$brief" \
+    "ship brief still allows waiting for in-tab approval"
+  assert_grep "record the original prompt's release or cancellation and the actual action result separately." "$brief" \
+    "ship brief conflates phone acknowledgement with execution"
+
+  # One shared string: the scout's Working posture must be byte-identical.
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-posture-scout alpha --scout >/dev/null 2>&1 \
+    || fail "fm-brief.sh --scout exited non-zero"
+  scout_brief="$home/data/brief-posture-scout/brief.md"
+  posture=$(awk '/^# Working posture/,/^$/' "$brief")
+  scout_posture=$(awk '/^# Working posture/,/^$/' "$scout_brief")
+  [ -n "$posture" ] || fail "ship brief emitted no Working posture section to compare"
+  [ "$posture" = "$scout_posture" ] \
+    || fail "ship and scout Working posture sections have drifted apart"
+
+  # A secondmate charter takes no crewmate rules, so the posture stays out.
+  FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-posture-mate --secondmate alpha >/dev/null 2>&1 \
+    || fail "fm-brief.sh --secondmate exited non-zero"
+  assert_no_grep "# Working posture" "$home/data/brief-posture-mate/brief.md" \
+    "secondmate charter must not inherit the crewmate Working posture"
+
+  pass "fm-brief.sh: ship scaffold renders all four Working posture principles"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
+test_forge_selection_renders_correct_cli
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
@@ -1502,3 +1644,4 @@ test_branch_prefix_is_refused_where_it_does_not_apply
 test_branch_prefix_value_is_validated
 test_branch_prefix_command_is_shell_safe
 test_crewmate_scaffolds_forbid_pool_administration
+test_ship_scaffold_renders_all_four_working_posture_principles

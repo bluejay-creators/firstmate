@@ -235,6 +235,12 @@ WATCH_HOME_EXISTED=0
 # shellcheck source=/dev/null # Analyzed separately as a canonical lint root.
 . "$SCRIPT_DIR/fm-secondmate-liveness-lib.sh"
 
+# Control-plane helpers shared with bin/fm-control.sh and bin/fm-send.sh.
+# fm-control-lib.sh is where the pane-relocation hook lives; the backend
+# library beneath it is already present via fm-task-inbox-lib.sh.
+# shellcheck source=bin/fm-control-lib.sh
+. "$SCRIPT_DIR/fm-control-lib.sh"
+
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
 WATCHER_DOWNTIME_MARKER="$STATE/.watcher-down"
@@ -526,6 +532,9 @@ inbox_steer_check() {  # <window> <task>
   action=$(fm_task_inbox_due_action "$STATE" "$task") || return 0
   verb=${action%% *}
   [ "$verb" != quiet ] || return 0
+  # A live in-session listener owns delivery: no re-ring, no busy bookkeeping,
+  # no escalation - and never a typed doorbell. The library's own vote said so.
+  [ "$verb" != listener ] || return 0
   if [ "$verb" = retry ] && [ -n "$(status_own_open_decisions "$STATE/$task.status")" ]; then
     return 0
   fi
@@ -569,7 +578,12 @@ inbox_steer_check() {  # <window> <task>
   case "$verb" in
     ring)
       ring_rc=0
-      fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
+      fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" retry || ring_rc=$?
+      if [ "$ring_rc" -eq 4 ]; then
+        # Live-listener verdicts arrive through the library ring path when the
+        # pane is known listener-owned; the ladder stays out of its way.
+        return 0
+      fi
       if [ "$ring_rc" -eq 3 ]; then
         inbox_steer_escalate_unavailable "$w" "$task" "$rec"
         return 0
@@ -589,7 +603,12 @@ inbox_steer_check() {  # <window> <task>
       ;;
     retry)
       ring_rc=0
-      fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
+      fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" retry || ring_rc=$?
+      if [ "$ring_rc" -eq 4 ]; then
+        # Live-listener retry: no ring is owed; spend the mark quietly.
+        fm_task_inbox_clear_retry "$STATE" "$task" "$rec" || true
+        return 0
+      fi
       if ! fm_task_inbox_clear_retry "$STATE" "$task" "$rec" && [ -f "$rec" ]; then
         reason="stale: $w (steering-inbox retry mark unremovable: ${rec%/*}/.retry-ring cannot be removed, so $rec would ring on every poll - inspect the inbox directory)"
         fm_wake_append stale "$w" "$reason" || exit 1
@@ -929,7 +948,7 @@ secondmate_ring_to_drain() {  # <task> <window>
   rec=$(fm_task_inbox_write "$STATE" "$task" \
     "${FM_FROMFIRST_MARK}delivery=${delivery_id} Drain pending rows in this home's wake queue, then resume idle supervision." \
     fire-and-forget) || return 1
-  fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")"
+  fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" retry
 }
 
 # Surface one durable parent check when the foreign queue's drain position has
@@ -1469,10 +1488,32 @@ clear_write_tracking() {  # <window-key>
 # display absorbs on every threshold either way.
 # Returns 0 when it has handled the window, 1 to escalate on the unchanged path.
 wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-hash> <task>
-  local win=$1 since_file=$2 label=$3 age=$4 hash=$5 task=$6 key marker agent_state detail reason gen id
+  local win=$1 since_file=$2 label=$3 age=$4 hash=$5 task=$6 key marker agent_state detail reason gen id resolved
   key=$(window_key "$win")
   marker="$STATE/.dead-reported-$key"
   agent_state=$(fm_backend_agent_state "$(window_backend "$win")" "$win" 2>/dev/null) || agent_state=unreadable
+  case "$(window_backend "$win")" in
+    herdr)
+      case "$agent_state" in
+        unreadable|missing|dead)
+          if resolved=$(fm_recorded_herdr_endpoint_relocate "$STATE/$task.meta" "$task" "$STATE" 2>/dev/null); then
+            # The registered endpoint survived a captain move: the meta now
+            # names the fresh binding, so every later watch iteration reads
+            # it directly from the meta; this call's answer already reflects
+            # the re-classified pane's first post-move read.
+            win=$resolved
+            agent_state=$(fm_backend_agent_state herdr "$win" 2>/dev/null) || agent_state=unreadable
+            # The wedge marker is keyed by window: a moved pane's old
+            # window-keyed marker must never bank this verdict for the
+            # fresh binding's own tracking.
+            key=$(window_key "$win")
+            marker="$STATE/.dead-reported-$key"
+            rm -f "$marker"
+          fi
+          ;;
+      esac
+      ;;
+  esac
   case "$agent_state" in
     dead) detail='the endpoint is still there with no agent running in it' ;;
     missing) detail='the recorded endpoint is gone' ;;
@@ -1499,7 +1540,6 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
   clear_write_tracking "$key"
   wake "$reason"
 }
-
 # Repeat-poll wedge-timer bookkeeping for an already-classified stale hash
 # absorbed as provably-working - repairs a missing/corrupt timer (self-heals a
 # watcher restart between recording the hash and recording the timer), or
@@ -1976,6 +2016,45 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
   fm_epoch_seconds_to now
   [ "$m" -le "$now" ] || { echo 999999; return; }
   echo $(( now - m ))
+}
+
+# Per-check cadence: a state/<id>.check.sh may carry the header line
+# `# fm-check-interval: <seconds>` to run on a faster or slower cycle than
+# CHECK_INTERVAL. Per-check stamps live in .last-check/<id> (mtime = last
+# run), so each cadence survives watcher restarts exactly as the shared
+# marker did. Intervals are resolved once at watcher start; a marker added
+# later takes effect on the next watcher start, and a malformed or
+# non-positive value falls back to CHECK_INTERVAL.
+check_interval_read() {  # <check-file> - header seconds, or CHECK_INTERVAL
+  local line raw secs=
+  if line=$(grep -m1 '^# fm-check-interval:' "$1" 2>/dev/null); then
+    # Normal form is `# fm-check-interval: 60`: strip the marker, then any
+    # surrounding whitespace, before the digits guard.
+    raw=${line#*# fm-check-interval:}
+    raw=${raw#"${raw%%[![:space:]]*}"}
+    raw=${raw%%[[:space:]]*}
+    case "$raw" in ''|*[!0-9]*) ;; *) secs=$((10#$raw)) ;; esac
+  fi
+  case "$secs" in ''|0) echo "$CHECK_INTERVAL" ;; *) echo "$secs" ;; esac
+}
+CHECK_SWEEP_INTERVAL=$CHECK_INTERVAL
+# shellcheck disable=SC2034 # Dynamic CHECKIVL_<id> slots are read back through eval below and in check_interval_for.
+for c in "$STATE"/*.check.sh; do
+  [ -f "$c" ] || continue
+  ivl_key=${c##*/}; ivl_key=${ivl_key%.check.sh}; ivl_key=${ivl_key//-/_}
+  eval "CHECKIVL_${ivl_key}=\"\$(check_interval_read \"\$c\")\""
+  ivl_secs=$(eval "echo \"\${CHECKIVL_${ivl_key}}\"")
+  [ "$ivl_secs" -lt "$CHECK_SWEEP_INTERVAL" ] && CHECK_SWEEP_INTERVAL=$ivl_secs
+done
+unset ivl_secs ivl_key
+check_interval_for() {  # <check-file> - the precomputed seconds for this check
+  local _k=${1##*/}; _k=${_k%.check.sh}; _k=${_k//-/_}
+  eval "echo \"\${CHECKIVL_${_k}:-\$CHECK_INTERVAL}\""
+}
+check_stamp_touch() {  # <stamp-file> - best effort; a state foreign to this check's id is left alone
+  [ ! -L "$1" ] || return 0
+  mkdir -p "$STATE/.last-check" 2>/dev/null || return 0
+  touch "$1" 2>/dev/null || true
 }
 
 # Layer 2 + 3 signal scan: status files and turn-end markers.
@@ -2492,7 +2571,26 @@ WATCHER_RECOVERY_PENDING=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
 fi
-if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ]; then
+# Only rows already queued at this locked startup boundary belong to the
+# predecessor. Snapshot before the arm check so an append during startup is
+# still fresh even if that check announces its recovery marker.
+WATCHER_SUCCESSOR_QUEUE_SEQ=0
+if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || exit 1
+  if [ -s "$FM_WAKE_QUEUE" ]; then
+    WATCHER_SUCCESSOR_QUEUE_SEQ=$(awk -F '\t' '
+      NF >= 5 && $2 ~ /^[0-9]+$/ && $2 > newest { newest=$2 }
+      END { printf "%.0f\n", newest }
+    ' "$FM_WAKE_QUEUE") || {
+      fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+      echo "watcher: successor queue boundary could not be read safely" >&2
+      exit 1
+    }
+  fi
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+fi
+if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ] \
+  && [ "${FM_WATCH_FOREGROUND_CHECKPOINT:-0}" != 1 ]; then
   if ! fm_recovery_marker_reopen_announced "$WATCHER_DOWNTIME_MARKER"; then
     echo "watcher: recovery state could not be reopened safely; retaining stale lock evidence" >&2
     exit 1
@@ -2615,13 +2713,47 @@ printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK/pid-identity" 2>/dev/
 
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
 
+# Per-check stamps live under .last-check/<file> (see the cadence block
+# below). A legacy plain-file marker from an older watcher is renamed into
+# that directory now so the sweep's own first run cannot race the
+# conversion; any other shape (a symlink) is refuse-loud rather than fallen
+# into.
+if [ -L "$STATE/.last-check" ]; then
+  echo "watcher: state/.last-check is a symlink; refusing to supervise" >&2
+  exit 1
+fi
+if [ -e "$STATE/.last-check" ] && [ ! -d "$STATE/.last-check" ]; then
+  # Rename atomically: the directory form appears only after the marker is
+  # gone from its legacy slot.
+  mkdir -p "$STATE/.last-check.dir-tmp" 2>/dev/null || true
+  mv -f "$STATE/.last-check" "$STATE/.last-check.dir-tmp/.gate.stamp" 2>/dev/null \
+    && mv -f "$STATE/.last-check.dir-tmp" "$STATE/.last-check" 2>/dev/null
+  rmdir "$STATE/.last-check.dir-tmp" 2>/dev/null || true
+fi
+if [ -e "$STATE/.last-check" ] && [ ! -d "$STATE/.last-check" ]; then
+  echo "watcher: state/.last-check could not be migrated to the per-check stamp directory; refusing to supervise" >&2
+  exit 1
+fi
+
+check_gate_touch() {  # the sweep's shared marker, carried as a stamp inside the per-check dir
+  touch "$STATE/.last-check/.gate.stamp" 2>/dev/null \
+    || touch "$STATE/.last-check" 2>/dev/null || true
+}
+check_gate_age() {  # seconds since the sweep last ran; due immediately when no marker exists
+  if [ -d "$STATE/.last-check" ]; then
+    age_of "$STATE/.last-check/.gate.stamp"
+  else
+    age_of "$STATE/.last-check"
+  fi
+}
+
 # A merged poll may have queued its terminal wake and then lost the process
 # between receipt publication and fixed-path removal.
 # Finish only identity-bound retirement receipts before any check can run.
 if ! fm_pr_poll_retirement_recover_all "$STATE" "$SCRIPT_DIR/fm-pr-poll.sh"; then
   reason="check: rejected unauthenticated PR poll retirement receipts:$FM_PR_POLL_RETIREMENT_REJECTED"
   fm_wake_append check pr-poll-retirement "$reason" || exit 1
-  touch "$STATE/.last-check"
+  check_gate_touch
   wake "$reason"
 fi
 
@@ -2661,18 +2793,47 @@ rerecord_device_shifted_pr_poll() {  # <id>
 }
 
 resurface_after_downtime() {
-  # Handling successors already have a predecessor-delivered wake on the way.
-  # Re-announcing from this cycle is what turned a lost handshake into an
-  # unbounded recovery loop; stay in the poll loop and supervise instead.
+  local successor_queued='' fresh_rows row_kind row_key
   if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
-    return 0
+    # Keep the failed-handshake suppression for predecessor rows, not for
+    # durable work appended after this successor began supervising. An append
+    # counter alone is insufficient: newer rows may already have been consumed.
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || exit 1
+    if [ -s "$FM_WAKE_QUEUE" ]; then
+      fresh_rows=$(awk -F '\t' -v cutoff="$WATCHER_SUCCESSOR_QUEUE_SEQ" '
+        NF >= 5 && $2 ~ /^[0-9]+$/ && $2 > cutoff && !seen[$3 SUBSEP $4]++ { print $3 "\t" $4 }
+      ' "$FM_WAKE_QUEUE") || {
+        fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+        echo "watcher: successor queue could not be read safely" >&2
+        exit 1
+      }
+      while IFS=$'\t' read -r row_kind row_key; do
+        [ -n "$row_kind" ] || continue
+        case "$row_kind:$row_key" in
+          check:procevent:*)
+            # Reconcile may republish a capture after delivery but before
+            # handling. Its new queue sequence is not a new notification.
+            [ ! -e "$(procevent_surfaced_marker "$row_key")" ] || continue
+            ;;
+        esac
+        successor_queued=1
+        break
+      done <<< "$fresh_rows"
+    fi
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+    [ "$successor_queued" = 1 ] || return 0
   fi
   if [ "$WATCHER_RECOVERY_PENDING" -ne 1 ]; then
     if ! fm_recovery_marker_arm_check "$WATCHER_DOWNTIME_MARKER"; then
       echo "watcher: recovery state could not be consumed safely" >&2
       exit 1
     fi
-    [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
+    # A late predecessor confirmation can put the same generation into
+    # handling after the fresh append. That is not proof its new row surfaced.
+    [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || [ "$successor_queued" = 1 ] || return 0
+  fi
+  if [ "$successor_queued" = 1 ]; then
+    WATCHER_RECOVERY_PENDING=1
   fi
   wake "check: rearm-resurface"
 }
@@ -2782,18 +2943,40 @@ while :; do
     triage_log "inactive-outcome reconciliation unavailable"
   fi
 
+  # Native permission snapshots cover this home too: no peer/self-name filter.
+  # Reuse this bounded check process, never create a second polling cycle.
+  if [ -d "$STATE/captain-asks/omp" ]; then
+    FM_HOME="$FM_HOME" run_check_capture "$SCRIPT_DIR/fm-captain-ask.sh" --approval-check || exit 1
+    if [ -n "$FM_CHECK_RESULT" ]; then
+      wake "check: $FM_CHECK_RESULT"
+    fi
+  fi
+
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
-  # Time-based via .last-check mtime so the cadence survives watcher restarts.
+  # Time-based so the cadence survives watcher restarts: the shared
+  # .last-check gate spaces sweeps by the min interval in the set
+  # (CHECK_SWEEP_INTERVAL, resolved once at watcher start), while each
+  # check's own stamp in .last-check/<id> spaces its runs by its resolved
+  # interval (header `# fm-check-interval: <seconds>`, optional whitespace
+  # after the colon, else CHECK_INTERVAL). Every due check runs and stamps
+  # before any wake, so a mid-sweep wake cannot starve trailing checks.
   # Evaluated BEFORE the signal scan: wake() exits the cycle, so a check placed
   # after the signal scan would be starved whenever a chatty sibling crewmate
   # keeps producing signals - the slow poll (e.g. merge detection) would then
   # never run until the fleet went quiet. Checks are due only every
-  # CHECK_INTERVAL, so most cycles skip this block and fall straight through.
-  if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
+  # CHECK_SWEEP_INTERVAL or slower, so most cycles skip this block and fall
+  # straight through.
+  if [ "$(check_gate_age)" -ge "$CHECK_SWEEP_INTERVAL" ]; then
     rejected_checks=
     contribution_check_output=
+    collected_wakes=
     for c in "$STATE"/*.check.sh; do
       [ -e "$c" ] || continue
+      id=$(basename "$c" .check.sh)
+      check_stamp=$STATE/.last-check/${c##*/}
+      if [ "$(age_of "$check_stamp")" -lt "$(check_interval_for "$c")" ]; then
+        continue
+      fi
       is_pr_poll=0
       if [ "$(basename "$c")" = x-watch.check.sh ]; then
         if fmx_poll_shim_valid "$c" "$FM_HOME" "$FM_ROOT" \
@@ -2802,10 +2985,10 @@ while :; do
           out=$FM_CHECK_RESULT
         else
           rejected_checks="$rejected_checks $c"
+          check_stamp_touch "$check_stamp"
           continue
         fi
       else
-        id=$(basename "$c" .check.sh)
         if fm_pr_poll_snapshot_capture "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
           || { rerecord_device_shifted_pr_poll "$id" \
             && fm_pr_poll_snapshot_capture "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; }; then
@@ -2820,6 +3003,7 @@ while :; do
           if ! fm_pr_poll_snapshot_matches "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; then
             pr_poll_control_release || exit 1
             triage_log "PR poll for $id changed before its validated check; skipping the stale snapshot"
+            check_stamp_touch "$check_stamp"
             continue
           fi
           run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
@@ -2833,9 +3017,11 @@ while :; do
         else
           fm_custom_check_snapshot_cleanup
           rejected_checks="$rejected_checks $c"
+          check_stamp_touch "$check_stamp"
           continue
         fi
       fi
+      check_stamp_touch "$check_stamp"
       if [ -n "$out" ]; then
         if [ "$(basename "$c")" = contributions.check.sh ]; then
           contribution_check_output=
@@ -2853,6 +3039,7 @@ EOF
           if [ -n "$contribution_check_diagnostics" ]; then
             out=${contribution_check_diagnostics%$'\n'}
           elif [ -n "$contribution_check_output" ]; then
+            check_stamp_touch "$check_stamp"
             continue
           fi
         fi
@@ -2865,7 +3052,7 @@ EOF
             # outcome and no wake; bin/fm-pr-check.sh refuses to arm another.
             retire_merged_pr_poll "$id"
             pr_poll_control_release || exit 1
-            touch "$STATE/.last-check"
+            check_gate_touch
             triage_log "retired a merge poll armed on secondmate $id without reporting an outcome"
             continue
           fi
@@ -2891,27 +3078,41 @@ EOF
           fi
           retire_merged_pr_poll "$id"
           pr_poll_control_release || exit 1
-          touch "$STATE/.last-check"
+          check_gate_touch
           if [ "$FM_MERGE_OUTCOME_ALREADY_RECORDED" = true ]; then
             triage_log "absorbed duplicate merged PR poll result for $id"
             continue
           fi
-          wake "$reason"
+          # A merged poll's wake exits here as before, but queues itself:
+          # the sweep must keep running the remaining due checks so their
+          # per-check stamps advance (a mid-sweep exit starves later checks).
+          collected_wakes=${collected_wakes:+"$collected_wakes"$'\n'}$reason
+          continue
         fi
         pr_poll_control_release || exit 1
         fm_wake_append check "$c" "$reason" || exit 1
-        touch "$STATE/.last-check"
-        wake "$reason"
+        check_gate_touch
+        # Collect rather than wake: waking mid-sweep exits the watcher before
+        # later checks get their stamps touched, which starves alphabetically-
+        # later checks (fast-lane slack, propel) whenever an earlier check
+        # emits regularly. One combined wake fires after the sweep.
+        collected_wakes=${collected_wakes:+"$collected_wakes"$'\n'}$reason
+        continue
       fi
       pr_poll_control_release || exit 1
     done
+    if [ -n "$collected_wakes" ]; then
+      # One wake carrying every check that fired this sweep; the per-check
+      # wakes were already queued durably above so drain sees each its own row.
+      wake "$collected_wakes"
+    fi
     if [ -n "$rejected_checks" ]; then
       reason="check: rejected unauthenticated state checks:$rejected_checks"
       fm_wake_append check unauthenticated-state-checks "$reason" || exit 1
-      touch "$STATE/.last-check"
+      check_gate_touch
       wake "$reason"
     fi
-    touch "$STATE/.last-check"
+    check_gate_touch
     if [ -n "$contribution_check_output" ]; then
       wake "$contribution_check_output"
     fi

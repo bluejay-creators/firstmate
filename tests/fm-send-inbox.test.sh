@@ -9,8 +9,8 @@
 #      crosses the terminal, and the send exits 0 at enqueue.
 #      The doorbell names the inbox once and never grows with the home's depth.
 #   2. Multi-line steers are legal and round-trip byte-exact.
-#   3. A re-send enqueues a NEW sequence and still never retypes a payload,
-#      so the terminal can never truncate, garble, or duplicate a steer.
+#   3. A re-send enqueues a NEW sequence but shares the outstanding doorbell
+#      until acknowledgement; busy watcher polls never pile up another copy.
 #   4. The composer pre-check is advisory: visibly pending text skips the ring
 #      with a notice, and the steer is still durably sent (exit 0).
 #   5. A failed doorbell is still a sent steer (exit 0, record durable): the
@@ -197,22 +197,129 @@ test_multiline_steer_is_legal() {
 }
 
 test_resend_enqueues_new_sequence() {
-  local dir err doorbells typed
+  local dir err typed
   dir=$(setup_case resend)
   err="$dir/send.err"
   run_send "$dir" "$err" -- t1 "check the CI result" || fail "first send failed"
+  typed=$(cat "$dir/send.log")
+  assert_contains "$typed" "numeric order" "the first doorbell should request the whole inbox"
   run_send "$dir" "$err" -- t1 "check the CI result" || fail "second send failed"
   [ -f "$dir/home/state/t1.inbox/001.msg" ] && [ -f "$dir/home/state/t1.inbox/002.msg" ] ||
     fail "a re-send should enqueue a new sequence:"$'\n'"$(ls "$dir/home/state/t1.inbox")"
-  doorbells=$(grep -cF 'Firstmate instruction waiting' "$dir/send.log" || true)
-  [ "$doorbells" = 1 ] || fail "each send rings once (the log is truncated per send), got $doorbells"
-  typed=$(cat "$dir/send.log")
-  assert_contains "$typed" "numeric order" \
-    "a newer record's doorbell should preserve inbox sequence ordering"
+  [ ! -s "$dir/send.log" ] || fail "a second unread steer queued another doorbell"
+  assert_contains "$(cat "$err")" "outstanding doorbell" "the send should explain coalescing"
   case "$typed" in
   *"check the CI result"*) fail "a re-send typed the payload" ;;
   esac
-  pass "fm-send inbox: a re-send is a new durable record, never a retyped payload"
+  mv "$dir/home/state/t1.inbox/001.msg" "$dir/home/state/t1.inbox/handled/"
+  run_send "$dir" "$err" -- t1 "continue after acknowledgement" || fail "send after acknowledgement failed"
+  assert_contains "$(cat "$dir/send.log")" "Firstmate instruction waiting" \
+    "a handled/ move should release the outstanding doorbell even with another unread record"
+  pass "fm-send inbox: unread steers share one doorbell until a handled/ move"
+}
+
+# Exercise the real watcher's inbox entry point in fresh processes, with only
+# endpoint observations stubbed. No terminal or live harness is contacted.
+watch_inbox() { # <case-dir> <busy|idle>
+  env PATH="$1/fakebin:$PATH" FM_ROOT_OVERRIDE="$1/home" FM_HOME="$1/home" \
+    FM_STATE_OVERRIDE="$1/home/state" FM_SEND_LOG="$1/send.log" \
+    FM_TASK_INBOX_GRACE_SECS=0 FM_TASK_INBOX_RING_MAX=2 FM_TASK_INBOX_BUSY_MAX=3 \
+    FM_TEST_BUSY="$2" bash -c '
+      . "$1"
+      window_backend() { printf tmux; }
+      window_label() { printf fm-t1; }
+      fm_backend_agent_state() { printf alive; }
+      fm_backend_busy_state() { printf "%s" "$FM_TEST_BUSY"; }
+      watcher_capture() { WATCHER_CAPTURE=; }
+      window_is_busy() { [ "$FM_TEST_BUSY" = busy ]; }
+      triage_log() { :; }
+      wake() { :; }
+      inbox_steer_check sess:fm-t1 t1
+    ' _ "$ROOT/bin/fm-watch.sh" >"$1/watch.out" 2>&1
+}
+
+test_busy_inbox_coalesces_and_idle_ladder_survives() {
+  local dir err n rec wakes
+  dir=$(setup_case pileup)
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 "first instruction" || fail "initial send failed"
+  assert_contains "$(cat "$dir/send.log")" "Firstmate instruction waiting" "initial doorbell missing"
+  n=2
+  while [ "$n" -le 10 ]; do
+    run_send "$dir" "$err" -- t1 "instruction $n" || fail "queued send $n failed"
+    [ -f "$dir/home/state/t1.inbox/$(printf '%03d' "$n").msg" ] || fail "queued send $n lost its record"
+    [ ! -s "$dir/send.log" ] || fail "queued send $n piled up another doorbell"
+    n=$((n + 1))
+  done
+  # A pane can become busy between the watcher's observation and the ring.
+  # The ring's own semantic recheck must preserve the outstanding copy.
+  env PATH="$dir/fakebin:$PATH" FM_SEND_LOG="$dir/send.log" \
+    bash -c '
+      . "$1"
+      fm_backend_busy_state() { printf busy; }
+      rc=0
+      fm_task_inbox_ring tmux sess:fm-t1 "$2" fm-t1 retry || rc=$?
+      [ "$rc" = 5 ]
+    ' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$dir/home/state/t1.inbox/001.msg" \
+    || fail "busy recheck did not coalesce a pending retry"
+  watch_inbox "$dir" busy || fail "first busy poll failed: $(cat "$dir/watch.out")"
+  watch_inbox "$dir" busy || fail "second busy poll failed: $(cat "$dir/watch.out")"
+  [ ! -s "$dir/send.log" ] || fail "the busy watcher piled up a doorbell"
+  [ ! -s "$dir/home/state/.wake-queue" ] || fail "busy pane escalated before its bound"
+  watch_inbox "$dir" idle || fail "idle poll failed: $(cat "$dir/watch.out")"
+  assert_contains "$(cat "$dir/send.log")" "Firstmate instruction waiting" "idle transition failed to re-ring"
+  : > "$dir/send.log"
+  watch_inbox "$dir" busy || fail "busy poll after idle failed"
+  [ ! -s "$dir/send.log" ] || fail "busy poll after idle typed again"
+  [ ! -s "$dir/home/state/.wake-queue" ] || fail "idle delivery did not reset busy budget"
+  watch_inbox "$dir" idle || fail "second idle retry failed"
+  : > "$dir/send.log"
+  watch_inbox "$dir" idle || fail "idle escalation failed"
+  assert_contains "$(cat "$dir/home/state/.wake-queue")" "doorbell delivery attempts" \
+    "genuinely unread idle inbox no longer escalates"
+  [ ! -s "$dir/send.log" ] || fail "exhausted ladder typed another doorbell"
+  wakes=$(cat "$dir/home/state/.wake-queue")
+  watch_inbox "$dir" idle || fail "post-escalation poll failed"
+  [ "$(cat "$dir/home/state/.wake-queue")" = "$wakes" ] || fail "escalation repeated"
+  rec="$dir/home/state/t1.inbox/001.msg"
+  [ -f "$rec" ] || fail "the ladder lost the oldest durable instruction"
+  pass "fm-send/watch: ten unread steers share a doorbell, busy polls defer, idle retries and escalation survive"
+}
+
+test_pending_doorbell_stuck_busy_escalates() {
+  local dir err n
+  dir=$(setup_case stuck-busy)
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 "unread busy instruction" || fail "initial busy steer failed"
+  : > "$dir/send.log"
+  for n in 1 2 3; do
+    watch_inbox "$dir" busy || fail "busy poll $n failed: $(cat "$dir/watch.out")"
+  done
+  [ ! -s "$dir/send.log" ] || fail "stuck-busy recovery typed a duplicate doorbell"
+  assert_contains "$(cat "$dir/home/state/.wake-queue")" "stuck-busy" \
+    "coalescing hid a genuinely stuck busy inbox"
+  pass "fm-send/watch: an outstanding doorbell retains bounded stuck-busy escalation without typing"
+}
+
+test_concurrent_sends_share_doorbell() {
+  local dir n pid pids='' count
+  dir=$(setup_case concurrent-doorbell)
+  : > "$dir/send.log"
+  for n in 1 2 3 4; do
+    env PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/home" FM_HOME="$dir/home" \
+      FM_SEND_LOG="$dir/send.log" FM_SEND_SETTLE=0 \
+      bash "$SEND" t1 "concurrent instruction $n" >"$dir/send-$n.out" 2>&1 &
+    pids="$pids $!"
+  done
+  for pid in $pids; do
+    wait "$pid" || fail "a concurrent send failed"
+  done
+  count=$(grep -cF 'Firstmate instruction waiting' "$dir/send.log" || true)
+  [ "$count" = 1 ] || fail "concurrent sends typed $count doorbells instead of one"
+  for n in 001 002 003 004; do
+    [ -f "$dir/home/state/t1.inbox/$n.msg" ] || fail "concurrent record $n was lost"
+  done
+  pass "fm-send inbox: concurrent sends durably enqueue four records but type one doorbell"
 }
 
 test_pending_composer_skips_ring_advisorily() {
@@ -504,7 +611,44 @@ test_empty_message_refused() {
   pass "fm-send: an empty or whitespace-only text steer refuses before marking, recording, or typing"
 }
 
+test_worker_delivery_replay_is_one_instruction() {
+  local dir err rc
+  dir=$(setup_case worker-faf-replay)
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 --delivery-id 0123456789abcdef "perform the routed ask" ||
+    fail "initial worker delivery failed: $(cat "$err")"
+  mv "$dir/home/state/t1.inbox/001.msg" "$dir/home/state/t1.inbox/handled/"
+  run_send "$dir" "$err" -- t1 --delivery-id 0123456789abcdef "perform the routed ask" ||
+    fail "replay of acknowledged worker delivery failed"
+  [ ! -e "$dir/home/state/t1.inbox/002.msg" ] ||
+    fail "a replay made the worker act on an acknowledged request twice"
+  run_send "$dir" "$err" -- t1 --delivery-id 1123456789abcdef "perform the routed ask" ||
+    fail "distinct logical worker request failed"
+  [ -f "$dir/home/state/t1.inbox/002.msg" ] ||
+    fail "different request IDs collapsed into one instruction"
+  run_send "$dir" "$err" -- sess:fm-t1 --delivery-id 2123456789abcdef "not a durable task"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an explicit typed endpoint accepted durable delivery mode"
+  [ ! -s "$dir/send.log" ] || fail "a refused explicit endpoint still received keys"
+  run_send "$dir" "$err" -- t1 --delivery-id= "must not enqueue"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an empty delivery ID enqueued a request"
+  [ ! -e "$dir/home/state/t1.inbox/003.msg" ] || fail "empty ID still created an instruction"
+  run_send "$dir" "$err" -- sess:fm-t1 --delivery-id= "must not type"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an empty delivery ID escaped to a typed endpoint"
+  [ ! -s "$dir/send.log" ] || fail "empty ID refusal still typed text"
+  run_send "$dir" "$err" -- t1 --delivery-id "" --key Enter
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an empty delivery ID escaped to the key path"
+  pass "worker explicit delivery IDs survive acknowledged replay without collapsing new requests"
+}
+
+test_worker_delivery_replay_is_one_instruction
 test_text_steer_rides_inbox
+test_busy_inbox_coalesces_and_idle_ladder_survives
+test_pending_doorbell_stuck_busy_escalates
+test_concurrent_sends_share_doorbell
 test_deep_home_doorbell_stays_short
 test_multiline_steer_is_legal
 test_resend_enqueues_new_sequence

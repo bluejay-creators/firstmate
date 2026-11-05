@@ -33,6 +33,9 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-backlog-receive.sh`  | Idempotently ingest one confined remote handoff outbox through tasks-axi             |
 | `fm-captain-hold.sh`     | Hold tasks for the captain, record the captain's answers, gate investigation completion, and report record divergence between the status log and the backlog |
 | `fm-decision-hold.sh`    | One-release compatibility shim mapping the retired decision commands onto fm-captain-hold.sh |
+| `fm-captain-ask.sh`      | File firstmate's own direct captain asks on the captain board (config/beads-board) and close them with the captain's answer |
+| `fm-captain-beads-check.sh` | One-shot (or watcher-installed) delivery of closed captain beads' close reasons to their recorded requesters, deduped once per bead |
+| `fm-bead-board-lib.sh`   | Shared config/beads-board resolution and bd surface for the captain-request loop consumers |
 | `fm-brief.sh`            | Scaffold ship (explicit `--mode`, plus the project's registered `--forge`), scout, secondmate-charter, and Herdr-lab briefs, with Captain's intent and Firstmate spec subsections on ship/scout |
 | [`fm-dod-lib.sh`](../bin/fm-dod-lib.sh) | Own ship/scout worker role scope, ship definitions of done, the named-head reachability gate on ship `done:` acceptance, and the no-mistakes `--intent` contract |
 | `fm-brief-heading-lib.sh` | Single owner of reading a brief's sections, shared by the `--intent` contract, spawn and promotion validation, and `fm-dispatch-resolve.sh` |
@@ -136,13 +139,19 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-check-unregister.sh` | Retire a custom watcher check and its trust binding by validated task id            |
 | `fm-check-lib.sh`        | Validate custom-check registrations and prepare private execution snapshots          |
 | `fm-tool-update-check.sh` | Report watched tooling with an update available, and updates installed but left inert by PATH order |
+| `fm-propel.sh`           | Bounded Beads propulsion dispatcher: classifies ready beads, pairs assignees, recurses on blockers, surfaces gates ([propel.md](propel.md)) |
+| `fm-propel-pane-check.sh` | Ask whether the declared machine capacity still admits one more crewmate on the propel path |
+| `fm-bead-accountability-check.sh` | Register and poll board accountability without dispatching work ([contract](propel.md#task-accountability-and-committed-deadlines)) |
+| `fm_bead_accountability.py` | Check ownership/dependencies/readiness/deadlines and record owner-authored ETA revisions through Beads and the existing Inbox |
+| `fm_route_ask.py` | Couple a captain ask's canonical Beads task with idempotent native delivery; project route/waiting state only from the board |
 | `fm-startup-growth-check.sh` | Daily metadata-only growth check for startup memory and tracked startup/instruction surfaces |
 | `fm-pr-lib.sh`           | Own canonical task and PR validation plus private atomic PR-poll publication, merge-notification identity, and retirement |
 | `fm-pr-poll.sh`          | Provide the byte-static watcher program for validated pull-request, merge-request, and Gerrit-change poll sidecars |
 | `fm-contributions.sh`    | Observe owned publications, retain exact-head judgments, measure required actors, and wake on maintainer signals |
 | `fm-pr-check.sh`         | Record validated task `pr=` and `pr_head=` values, then atomically arm a static merge poll; refuses GitHub drafts and persistent secondmate records (see [architecture.md](architecture.md)) |
-| `fm-pr-merge.sh`         | Record PR metadata, merge a task's canonical full GitHub or GitLab URL, refuse a Gerrit change because firstmate never submits one, then refuse an outcome it cannot prove landed or queued |
+| `fm-pr-merge.sh`         | Guard taskful or taskless canonical PR/MR merges with shared live forge checks and central typed policy, audit concrete approval/grants, and report only proved landed outcomes |
 | `fm-pr-state.sh`         | Read-only: print one line per GitHub pull-request blocker it can see, reporting on checks that have reported rather than verdicting merge-readiness |
+| `fm-merged-teardown.check.sh`  | Deterministic lifecycle actuator: arm a watcher check that runs `fm-teardown.sh` once per ship task whose latest status line reports a MERGED PR; one `closed-no-merge:` or `teardown-refused:` wake per id, then stops ([contract](merged-teardown.md)) |
 | `fm-pr-reviewers.sh`     | Read-only: suggest reviewers from GitHub's own author mapping of recent commits on a pull request's changed files, never requesting one |
 | `fm-merge-outcome-lib.sh` | Publish a confirmed merge's durable, role-routed supervision outcome                 |
 | `fm-merge-authority-lib.sh` | Resolve merge authority at the gate, persist it against the accepted canonical PR, and identity-check its later poll consumption |
