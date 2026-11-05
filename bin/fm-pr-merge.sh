@@ -163,13 +163,14 @@
 # explicit captain instruction and never skips the live green check, the
 # away-record read, or a captain hold.
 #
-# Usage: fm-pr-merge.sh <task-id>|--taskless <pr-url> [--captain-approval <reference>] [--kind <kind>] [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
+# Usage: fm-pr-merge.sh <task-id>|--taskless <pr-url> [--captain-approval <reference>] [--kind <kind>] [--local-test-receipt <path>] [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
 # --captain-approval attests a concrete captain instruction for this URL and
 # verified head; the reference is retained in the private decision audit.
 # This is caller-attested provenance, not OS authentication. --attended-override
 # only enables protected forge flags; it does not imply captain approval.
 # --kind may repeat, and only raises sensitivity: keys, iam, dns, destructive,
-# schema-migration, spend. Unknown kinds refuse.
+# schema-migration, spend, production-deploy, customer-data-write, outward-message.
+# Unknown kinds refuse.
 #
 # Central policy: config/merge-policy.json in the local root home resolved by
 # fm_firstmate_root_home, read directly on every merge (never inherited).
@@ -177,12 +178,31 @@
 # requires captain approval; malformed, ambiguous, or unreadable policy refuses.
 # JSON v1 has exactly {version:1,bindings:[],grants:[],sensitive_paths:[]}.
 # A binding has repository (canonical https repository URL), base (exact live
-# target ref, NOT an inferred environment), system, environment (kstage, pilot,
-# prod, other), autonomous_paths (fnmatch path patterns). The operator binding
-# is the authoritative deployment assertion; do not create one from a branch
-# name alone. Only one binding per repository/base is permitted.
-# A grant has id, repository, system:"platform", environment:"kstage",
-# all_checks_green:true, report_after:true. Only one grant may match a binding.
+# target ref, NOT an inferred environment), system, environment (kstage, staging,
+# nonprod, internal, feature, pilot, prod, other), autonomous_paths (fnmatch paths).
+# The operator binding is the authoritative deployment assertion; do not create
+# one from a branch name alone.
+# Only one binding per repository/base is permitted.
+# A grant has id, repository, system (nonempty domain), environment (kstage,
+# staging, nonprod, internal or feature), all_checks_green:true, report_after:true.
+# Only one grant may match a binding. Optional required_proof is forge-checks
+# (default), local-tests or forge-or-local-tests. The latter requires at least one
+# successful reported forge check OR a valid local receipt; no CI and neutral-only
+# checks are not successful CI proof. local-tests always requires a receipt.
+# A feature binding asserts an exact operator-certified NON-DEPLOYING target;
+# it is never inferred from its name and must use forge-or-local-tests.
+# Feature autonomy reads live repository default-branch metadata and refuses
+# unknown/default targets and main, master, staging, kstage, pilot, prod, production.
+# Deployment classification remains the operator's assertion, not a path heuristic.
+# Any grant whose proof needs local evidence uses --local-test-receipt.
+# The receipt is owned regular single-link JSON v1, not writable by others:
+# {version:1,repository:<canonical URL>,number:<positive integer>,base:<live ref>,
+#  head:<exact live SHA>,checks:[{command:<nonempty string>,exit_code:0},...]}.
+# At least one successful check is required. Unknown fields, failed checks and
+# mismatched targets refuse. Commands are recorded, never executed from receipts.
+# This is caller-attested local evidence, not independent runner attestation.
+# Receipt contents and their SHA-256 are retained in the private decision audit.
+# Local evidence never waives a required, red, missing or unreadable forge check.
 # Work-specific grant instances belong in private/work-side config only.
 # sensitive_paths entries have kind (one of --kind's values) and patterns.
 # They add to built-in deterministic sensitive-path signals, never remove them.
@@ -194,7 +214,7 @@
 # while away sensitive/unclassified changes refuse; deterministic sensitivity
 # requires captain approval; pilot/prod always require captain approval; a
 # concrete approval authorizes the remaining attended request; otherwise only
-# an exact platform kstage grant with ALL checks green and every changed path
+# an exact nonproduction grant with ALL checks green and every changed path
 # classified by autonomous_paths permits merging, with mandatory outcome report.
 # A named waiver still waives only that exact check and never an unreadable
 # source; it needs concrete approval and an authoritative non-pilot/prod binding.
@@ -205,6 +225,14 @@
 # code. This confused-agent-grade guard is not a malicious same-UID sandbox.
 # Decision facts/approval/grant and requested/accepted/landed/queued status are
 # retained in private state/.merge-decision.* JSON, independently of task state.
+#
+# GitHub account selection uses the existing generated ghx owner/account API at
+# BLUEJAY_ACCOUNTS_CONFIG (default
+# $HOME/Git/bluejay-creators/bluejay-setup/config/accounts.generated.sh).
+# The exact repository owner selects its configured login and stored gh token.
+# Missing catalog, owner mapping or account refuses before any target read.
+# The selected token scopes this process and its read/merge/outcome helpers;
+# global active auth is never switched. Only account id/login enters the audit.
 # Taskless merges publish through the same role-routed durable outcome transport
 # without inventing a task or arming a task poll; an unconfirmed/queued request
 # must be rechecked by its canonical URL and is never reported as landed.
@@ -284,6 +312,7 @@ ATTENDED_OVERRIDE=false
 ALLOW_RED=()
 ALLOW_MISSING=()
 CAPTAIN_APPROVAL=
+LOCAL_TEST_RECEIPT=
 MERGE_KINDS='[]'
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -292,12 +321,17 @@ while [ "$#" -gt 0 ]; do
       CAPTAIN_APPROVAL=$2
       shift 2
       ;;
+    --local-test-receipt)
+      [ -n "${2:-}" ] && [ -z "$LOCAL_TEST_RECEIPT" ] || { echo "error: --local-test-receipt requires one nonempty path" >&2; exit 2; }
+      LOCAL_TEST_RECEIPT=$2
+      shift 2
+      ;;
     --kind)
-      case "${2:-}" in keys|iam|dns|destructive|schema-migration|spend) ;; *) echo "error: unknown merge change kind" >&2; exit 2 ;; esac
+      case "${2:-}" in keys|iam|dns|destructive|schema-migration|spend|production-deploy|customer-data-write|outward-message) ;; *) echo "error: unknown merge change kind" >&2; exit 2 ;; esac
       MERGE_KINDS=$(printf '%s' "$MERGE_KINDS" | jq -c --arg kind "$2" '. + [$kind] | unique') || exit 2
       shift 2
       ;;
-    --captain-approval=*|--kind=*)
+    --captain-approval=*|--kind=*|--local-test-receipt=*)
       echo "error: policy options require separate arguments" >&2
       exit 2
       ;;
@@ -578,6 +612,7 @@ if [ "$PROVIDER" = github ]; then
     echo "error: merging a GitHub pull request requires $GITHUB_MISSING on PATH" >&2
     exit 1
   fi
+  fm_pr_github_account_configure "$PR_HOST" "$PR_OWNER" || exit 1
 fi
 # tea addresses a repo by slug only; the host comes from a named "tea login"
 # rather than the URL, so the login registered for this exact host is
@@ -614,6 +649,7 @@ fi
 FM_PR_MERGE_HEAD=
 FM_PR_MERGE_BASE=
 FM_PR_ALL_CHECKS_GREEN=false
+FM_PR_FORGE_CHECKS_PASSED=false
 FM_PR_GITLAB_ASYNC_CONFIGURED=false
 gitlab_verify_mergeable() {
   local json fields line
@@ -715,6 +751,7 @@ FIELDS
   FM_PR_GITLAB_ASYNC_CONFIGURED=$async_configured
   FM_PR_MERGE_BASE=$(printf '%s' "$json" | jq -r '.target_branch // ""') || return 1
   FM_PR_ALL_CHECKS_GREEN=true
+  FM_PR_FORGE_CHECKS_PASSED=true
 }
 
 # Pre-merge conditions for a Forgejo pull request, read from one live view of
@@ -846,6 +883,7 @@ FIELDS
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_MERGE_BASE=$(printf '%s' "$pr_json" | jq -r '.base.ref // ""') || return 1
   FM_PR_ALL_CHECKS_GREEN=true
+  FM_PR_FORGE_CHECKS_PASSED=true
 }
 
 # The caller's own extra arguments may only name a merge method, in the same
@@ -1205,6 +1243,10 @@ EOF
   FM_PR_ALL_CHECKS_GREEN=false
   if [ -z "$red" ] && [ -z "$missing" ]; then
     FM_PR_ALL_CHECKS_GREEN=true
+    FM_PR_FORGE_CHECKS_PASSED=$(printf '%s' "$json" | jq -r '
+      any(.statusCheckRollup[];
+        (.__typename == "CheckRun" and .status == "COMPLETED" and .conclusion == "SUCCESS")
+        or (.__typename == "StatusContext" and .state == "SUCCESS"))') || return 1
   fi
 }
 
@@ -1591,7 +1633,10 @@ github_caller_method_is() {
 }
 
 github_report_queue_rules() {
-  local queue_method methods_display request_target approval_arg
+  local queue_method methods_display request_target approval_arg receipt_arg=
+  if [ -n "$LOCAL_TEST_RECEIPT" ]; then
+    printf -v receipt_arg ' --local-test-receipt %q' "$LOCAL_TEST_RECEIPT"
+  fi
   if [ "$FM_PR_AWAY_POSTURE" = true ]; then
     printf 'error: the direct merge did not land while the away-posture record exists; merge-queue retry flags are unavailable because a queued merge would outlive its authority\n' >&2
     return 0
@@ -1614,11 +1659,11 @@ github_report_queue_rules() {
         [ "$TASKLESS" != true ] || request_target=--taskless
         if [ -n "$CAPTAIN_APPROVAL" ]; then
           printf -v approval_arg '%q' "$CAPTAIN_APPROVAL"
-          printf 'error: base branch %s requires the merge queue; retry with: %s %s %s --captain-approval %s --attended-override -- --auto --%s\n' \
-            "$FM_PR_GITHUB_BASE" "$0" "$request_target" "$URL" "$approval_arg" "$queue_method" >&2
+          printf 'error: base branch %s requires the merge queue; retry with: %s %s %s --captain-approval %s%s --attended-override -- --auto --%s\n' \
+            "$FM_PR_GITHUB_BASE" "$0" "$request_target" "$URL" "$approval_arg" "$receipt_arg" "$queue_method" >&2
         else
-          printf 'error: base branch %s requires the merge queue; obtain concrete captain approval before retrying with --captain-approval <reference> --attended-override -- --auto --%s\n' \
-            "$FM_PR_GITHUB_BASE" "$queue_method" >&2
+          printf 'error: base branch %s requires the merge queue; obtain concrete captain approval before retrying with --captain-approval <reference>%s --attended-override -- --auto --%s\n' \
+            "$FM_PR_GITHUB_BASE" "$receipt_arg" "$queue_method" >&2
         fi
       fi
       ;;

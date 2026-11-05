@@ -96,6 +96,52 @@ FM_PR_RETIRE_RECEIPT_IDENTITY=
 FM_PR_RECORD_STATE=
 FM_PR_RECORD_MERGED=
 FM_PR_POLL_RETIREMENT_REJECTED=
+FM_PR_GITHUB_ACCOUNT=
+FM_PR_GITHUB_LOGIN=
+
+# Use the same generated owner/account API as ghx, without switching active auth.
+# The selected token is private to this process and its target-read helpers.
+fm_pr_github_account_configure() { # <host> <repository-owner>
+  local host=$1 owner=$2 profile token traced=false status=0
+  profile="${BLUEJAY_ACCOUNTS_CONFIG:-$HOME/Git/bluejay-creators/bluejay-setup/config/accounts.generated.sh}"
+  if [ ! -r "$profile" ]; then
+    echo 'error: GitHub owner-account catalog is unavailable; configure BLUEJAY_ACCOUNTS_CONFIG' >&2
+    return 1
+  fi
+  # shellcheck disable=SC1090 # Existing generated ghx account API, not policy data.
+  . "$profile" || return 1
+  if ! declare -F bluejay_github_owner_account >/dev/null \
+      || ! declare -F bluejay_github_login >/dev/null; then
+    echo 'error: GitHub owner-account catalog has no supported account API' >&2
+    return 1
+  fi
+  FM_PR_GITHUB_ACCOUNT=$(bluejay_github_owner_account "$owner") || {
+    printf 'error: no GitHub account mapped for repository owner %s\n' "$owner" >&2
+    return 1
+  }
+  FM_PR_GITHUB_LOGIN=$(bluejay_github_login "$FM_PR_GITHUB_ACCOUNT") || {
+    echo 'error: mapped GitHub account has no login' >&2
+    return 1
+  }
+  case "$FM_PR_GITHUB_LOGIN" in ''|-*|*[!A-Za-z0-9_-]*)
+    echo 'error: mapped GitHub account login is invalid' >&2
+    return 1 ;;
+  esac
+  case $- in *x*) traced=true; set +x ;; esac
+  token=$(GHX_INSIDE=1 gh auth token --hostname "$host" --user "$FM_PR_GITHUB_LOGIN" 2>/dev/null) || status=$?
+  if [ "$status" -eq 0 ] && [ -n "$token" ]; then
+    export GH_TOKEN="$token" GITHUB_TOKEN="$token" GH_HOST="$host" GHX_INSIDE=1
+  else
+    status=1
+  fi
+  unset token
+  [ "$traced" != true ] || set -x
+  if [ "$status" -ne 0 ]; then
+    printf 'error: GitHub account %s is unavailable for %s\n' "$FM_PR_GITHUB_LOGIN" "$owner" >&2
+    return 1
+  fi
+  printf 'GitHub account: %s (%s) for %s\n' "$FM_PR_GITHUB_ACCOUNT" "$FM_PR_GITHUB_LOGIN" "$owner" >&2
+}
 
 fm_task_id_path_safe() {
   local id=${1-}

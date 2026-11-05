@@ -28,18 +28,26 @@ fm_merge_policy_require() {
     --arg approval "$CAPTAIN_APPROVAL" --arg login "$FORGEJO_LOGIN" \
     --argjson green "$FM_PR_ALL_CHECKS_GREEN" --argjson away "$FM_PR_AWAY_POSTURE" \
     --argjson kinds "$MERGE_KINDS" \
+    --argjson forge_passed "$FM_PR_FORGE_CHECKS_PASSED" \
     '{version:1,provider:$provider,host:$host,path:$path,number:$number,url:$url,
       repository:("https://"+$host+"/"+$path),head:$head,base:$base,
-      all_checks_green:$green,approval:$approval,away:$away,kinds:$kinds,paths:null,login:$login}') || return 1
+      all_checks_green:$green,forge_checks_passed:$forge_passed,default_branch:null,
+      approval:$approval,away:$away,kinds:$kinds,paths:null,login:$login}') || return 1
+  set -- --config "$config/merge-policy.json" --collect
+  if [ -n "${LOCAL_TEST_RECEIPT:-}" ]; then
+    set -- "$@" --local-test-receipt "$LOCAL_TEST_RECEIPT"
+  fi
   decision=$(printf '%s\n' "$facts" | python3 "$SCRIPT_DIR/fm-merge-policy.py" \
-    --config "$config/merge-policy.json" --collect) || status=$?
+    "$@") || status=$?
   [ -n "$decision" ] || return 1
   # A refused decision is audit evidence too. No forge command is reachable if
   # either policy evaluation or this durable write fails.
   umask 077
   FM_PR_POLICY_RECORD=$(mktemp "$STATE/.merge-decision.XXXXXX") || return 1
   if ! printf '%s\n' "$decision" | jq --arg task "$ID" \
-      '. + {task:(if $task == "" then null else $task end),outcome:"not-requested"}' \
+      --arg account "${FM_PR_GITHUB_ACCOUNT:-}" --arg login "${FM_PR_GITHUB_LOGIN:-}" \
+      '. + {task:(if $task == "" then null else $task end),outcome:"not-requested",
+             github_account:(if $account == "" then null else {id:$account,login:$login} end)}' \
       > "$FM_PR_POLICY_RECORD"; then
     echo 'error: merge policy decision could not be recorded' >&2
     return 1

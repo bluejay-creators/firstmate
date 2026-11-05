@@ -74,6 +74,14 @@ make_case() {
 {"version":1,"bindings":[{"repository":"https://github.com/example/repo","base":"main","system":"fixture","environment":"other","autonomous_paths":[]}],"grants":[],"sensitive_paths":[]}
 JSON
   chmod 0600 "$case_dir/home/config/merge-policy.json"
+  cat > "$case_dir/accounts.sh" <<'SH'
+bluejay_github_owner_account() {
+  case "$1" in example|my-org|right) echo work ;; personal-fixture) echo personal ;; *) return 1 ;; esac
+}
+bluejay_github_login() {
+  case "$1" in work) echo fixture-work ;; personal) echo fixture-personal ;; *) return 1 ;; esac
+}
+SH
   : > "$case_dir/gh.log"
   # The worktree is a git copy whose HEAD is on a remote-tracking ref, as a
   # pushed ship task's is, so fm-pr-check.sh's named-head gate accepts it when
@@ -176,6 +184,11 @@ add_gh_mocks() {
   write_github_live_json "$case_dir" "$head"
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
+if [ -n "${FM_TEST_GH_EXPECT_LOGIN:-}" ] \
+    && [ "${GH_TOKEN:-}" != "fixture-token:$FM_TEST_GH_EXPECT_LOGIN" ]; then
+  echo 'HTTP 403: repository is not accessible to this account' >&2
+  exit 1
+fi
 printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
 case "${1:-} ${2:-}" in
   "pr view")
@@ -187,6 +200,25 @@ exit 0
 SH
   cat > "$case_dir/fakebin/gh" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-} ${2:-}" = 'auth token' ]; then
+  [ "${FM_TEST_GH_ACCOUNT_UNAVAILABLE:-0}" != 1 ] || exit 1
+  case "$*" in
+    *'--user fixture-work') printf 'fixture-token:fixture-work\n' ;;
+    *'--user fixture-personal') printf 'fixture-token:fixture-personal\n' ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+if [ -n "${FM_TEST_GH_EXPECT_LOGIN:-}" ] \
+    && [ "${GH_TOKEN:-}" != "fixture-token:$FM_TEST_GH_EXPECT_LOGIN" ]; then
+  echo 'HTTP 403: repository is not accessible to this account' >&2
+  exit 1
+fi
+if [ "${1:-}" = api ] && [[ ${*: -1} =~ ^repos/[^/]+/[^/]+$ ]]; then
+  [ "${FM_TEST_GH_REPOSITORY_UNREADABLE:-0}" != 1 ] || exit 1
+  printf '{"default_branch":"%s"}\n' "${FM_TEST_GH_DEFAULT_BRANCH:-main}"
+  exit 0
+fi
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-} ${2:-}" in
   "pr view")
@@ -594,6 +626,7 @@ write_forgejo_status_json() {
   if [ "$total" = 0 ]; then
     printf '{"state":"","total_count":0,"statuses":[]}\n' > "$file"
   else
+    # shellcheck disable=SC2016 # These are jq variables, not shell expansions.
     "$JQ_BIN" -cn --arg state "$state" --argjson total "$total" \
       '{state:$state,total_count:$total,statuses:[range(1;$total+1)|{context:("ci-"+tostring),status:$state}]}' \
       > "$file"
@@ -702,6 +735,11 @@ run_pr_merge() {
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_HOME="${FM_TEST_HOME:-$case_dir/home}" \
   FM_STATE_OVERRIDE="$case_dir/state" \
+  BLUEJAY_ACCOUNTS_CONFIG="$case_dir/accounts.sh" \
+  FM_TEST_GH_EXPECT_LOGIN="${FM_TEST_GH_EXPECT_LOGIN:-}" \
+  FM_TEST_GH_ACCOUNT_UNAVAILABLE="${FM_TEST_GH_ACCOUNT_UNAVAILABLE:-0}" \
+  FM_TEST_GH_DEFAULT_BRANCH="${FM_TEST_GH_DEFAULT_BRANCH:-main}" \
+  FM_TEST_GH_REPOSITORY_UNREADABLE="${FM_TEST_GH_REPOSITORY_UNREADABLE:-0}" \
   FM_TEST_GH_AXI_LOG="$case_dir/gh-axi.log" \
   FM_TEST_GH_LOG="$case_dir/gh.log" \
   FM_TEST_GH_OUTCOME="$case_dir/github-outcome" \
@@ -4739,6 +4777,106 @@ test_taskless_other_forges_keep_outcome_proof() {
   pass "taskless GitLab and Forgejo retain their live-head and terminal-proof guards"
 }
 
+test_nonproduction_local_receipt_preserves_required_checks_and_tier3() {
+  local case_dir variant head=abababababababababababababababababababab receipt
+  for variant in accepted missing stale failed red required tier3; do
+    case_dir=$(make_case "local-proof-$variant")
+    add_gh_mocks "$case_dir" "$head"
+    rm "$case_dir/state/task-x1.meta"
+    write_fixture_grant "$case_dir/home/config"
+    jq '.bindings[0] += {system:"internal",environment:"internal"}
+        | .grants[0] += {system:"internal",environment:"internal",required_proof:"local-tests"}' \
+      "$case_dir/home/config/merge-policy.json" > "$case_dir/policy.json"
+    mv "$case_dir/policy.json" "$case_dir/home/config/merge-policy.json"
+    chmod 0600 "$case_dir/home/config/merge-policy.json"
+    # No CI is required or reported in this internal repository.
+    write_github_rollup_json "$case_dir" "$head"
+    receipt="$case_dir/local-tests.json"
+    jq -cn --arg head "$head" \
+      '{version:1,repository:"https://github.com/example/repo",number:130,base:"main",head:$head,
+        checks:[{command:"bash tests/internal-behavior.test.sh",exit_code:0}]}' > "$receipt"
+    chmod 0600 "$receipt"
+    case "$variant" in
+      stale) jq '.head="cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"' "$receipt" > "$case_dir/stale"; mv "$case_dir/stale" "$receipt"; chmod 0600 "$receipt" ;;
+      failed) jq '.checks[0].exit_code=1' "$receipt" > "$case_dir/failed"; mv "$case_dir/failed" "$receipt"; chmod 0600 "$receipt" ;;
+      red) write_github_red_json "$case_dir" "$head" ci ;;
+      required) write_github_required "$case_dir" ruleset:ci ;;
+    esac
+    if [ "$variant" = missing ]; then
+      FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" --taskless https://github.com/example/repo/pull/130
+    elif [ "$variant" = tier3 ]; then
+      FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" --taskless https://github.com/example/repo/pull/130 \
+        --local-test-receipt "$receipt" --kind production-deploy
+    else
+      FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" --taskless https://github.com/example/repo/pull/130 \
+        --local-test-receipt "$receipt"
+    fi
+    if [ "$variant" = accepted ]; then
+      expect_code 0 "$POLICY_RC" "internal local proof: $(cat "$case_dir/stderr")"
+      assert_logged_gh_merge "$case_dir" 130 example/repo --squash
+      assert_policy_outcome "$case_dir" merged
+      jq -e --arg head "$head" '.authority=="grant" and .local_test_receipt.head==$head
+          and .local_test_receipt.checks[0].exit_code==0' "$case_dir/state"/.merge-decision.* >/dev/null \
+        || fail "local proof audit lost the verified result"
+    else
+      expect_code 1 "$POLICY_RC" "local proof must not bypass $variant"
+      assert_no_grep 'pr merge' "$case_dir/gh.log" "local receipt bypassed $variant"
+    fi
+  done
+  pass "internal local-test grants bind exact head and retain red, required-check and tier3 refusals"
+}
+
+test_owner_account_is_used_for_reads_collection_merge_and_publication() {
+  local case_dir variant owner expected repository
+  for variant in work personal wrong missing unavailable; do
+    case_dir=$(make_case "owner-account-$variant")
+    add_gh_mocks "$case_dir" abababababababababababababababababababab
+    rm "$case_dir/state/task-x1.meta"
+    write_fixture_grant "$case_dir/home/config"
+    owner=personal-fixture
+    expected=fixture-personal
+    case "$variant" in
+      work) owner=example; expected=fixture-work ;;
+      missing) owner=unmapped-owner ;;
+      wrong) printf '\nbluejay_github_owner_account() { echo work; }\n' >> "$case_dir/accounts.sh" ;;
+    esac
+    repository="https://github.com/$owner/repo"
+    jq --arg repository "$repository" \
+      '.bindings[0].repository=$repository | .grants[0].repository=$repository' \
+      "$case_dir/home/config/merge-policy.json" > "$case_dir/policy.json"
+    mv "$case_dir/policy.json" "$case_dir/home/config/merge-policy.json"
+    chmod 0600 "$case_dir/home/config/merge-policy.json"
+    # Force terminal publication through gh-axi too, not only gh's GraphQL reader.
+    : > "$case_dir/github-graphql-fail"
+    if [ "$variant" = unavailable ]; then
+      FM_TEST_GH_ACCOUNT_UNAVAILABLE=1 FM_TEST_GH_EXPECT_LOGIN="$expected" FM_TEST_NO_APPROVAL=1 \
+        policy_run "$case_dir" --taskless "$repository/pull/131"
+    else
+      GH_TOKEN=fixture-token:unrelated GITHUB_TOKEN=fixture-token:unrelated \
+        FM_TEST_GH_EXPECT_LOGIN="$expected" FM_TEST_NO_APPROVAL=1 \
+        policy_run "$case_dir" --taskless "$repository/pull/131"
+    fi
+    case "$variant" in
+      work|personal)
+        expect_code 0 "$POLICY_RC" "correct repository account $variant: $(cat "$case_dir/stderr")"
+        assert_logged_gh_merge "$case_dir" 131 "$owner/repo" --squash
+        assert_policy_outcome "$case_dir" merged
+        jq -e --arg login "$expected" '.authority=="grant" and .github_account.login==$login' \
+          "$case_dir/state"/.merge-decision.* >/dev/null || fail "selected account provenance missing"
+        assert_grep 'pr view' "$case_dir/gh-axi.log" "terminal fallback was not exercised"
+        ;;
+      *)
+        expect_code 1 "$POLICY_RC" "unusable or wrong owner account $variant must refuse"
+        assert_no_grep 'pr merge' "$case_dir/gh.log" "wrong owner account reached merge"
+        ;;
+    esac
+    assert_no_grep 'fixture-token:' "$case_dir/stderr" "account selection disclosed a token"
+  done
+  pass "owner-selected accounts isolate work/personal merges and refuse missing or inaccessible credentials"
+}
+
+test_nonproduction_local_receipt_preserves_required_checks_and_tier3
+test_owner_account_is_used_for_reads_collection_merge_and_publication
 test_taskless_needs_real_approval_and_never_creates_a_task
 test_taskless_preserves_required_producer_and_named_waivers
 test_taskless_grant_and_sensitive_precedence
@@ -4746,3 +4884,73 @@ test_taskless_queued_and_unconfirmed_are_not_landed
 test_taskless_role_and_away_controls
 test_policy_reads_root_not_inherited_copies
 test_taskless_other_forges_keep_outcome_proof
+
+test_feature_target_uses_real_ci_or_local_proof_and_live_default_metadata() {
+  local case_dir variant base head=cccccccccccccccccccccccccccccccccccccccc receipt
+  for variant in ci local none neutral default protected unreadable sensitive required red; do
+    case_dir=$(make_case "feature-target-$variant")
+    add_gh_mocks "$case_dir" "$head"
+    rm "$case_dir/state/task-x1.meta"
+    write_fixture_grant "$case_dir/home/config"
+    base=feat
+    [ "$variant" != protected ] || base=staging
+    jq --arg base "$base" \
+      '.bindings[0] += {base:$base,system:"tooling",environment:"feature"}
+       | .grants[0] += {system:"tooling",environment:"feature",required_proof:"forge-or-local-tests"}' \
+      "$case_dir/home/config/merge-policy.json" > "$case_dir/policy.json"
+    mv "$case_dir/policy.json" "$case_dir/home/config/merge-policy.json"
+    chmod 0600 "$case_dir/home/config/merge-policy.json"
+    case "$variant" in
+      local|none|required) write_github_rollup_json "$case_dir" "$head" ;;
+      neutral) write_github_rollup_json "$case_dir" "$head" "$(check_run ci COMPLETED NEUTRAL)" ;;
+      red) write_github_red_json "$case_dir" "$head" ci ;;
+    esac
+    jq --arg base "$base" '.baseRefName=$base' "$case_dir/github-view.json" > "$case_dir/view.json"
+    mv "$case_dir/view.json" "$case_dir/github-view.json"
+    write_github_outcome "$case_dir" MERGED true false "$base"
+    receipt="$case_dir/local test receipt.json"
+    jq -cn --arg head "$head" --arg base "$base" \
+      '{version:1,repository:"https://github.com/example/repo",number:132,base:$base,head:$head,
+        checks:[{command:"bash tests/feature-behavior.test.sh",exit_code:0}]}' > "$receipt"
+    chmod 0600 "$receipt"
+    case "$variant" in
+      local|required)
+        [ "$variant" != required ] || write_github_required "$case_dir" ruleset:ci
+        FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" --taskless https://github.com/example/repo/pull/132 \
+          --local-test-receipt "$receipt"
+        ;;
+      default)
+        FM_TEST_GH_DEFAULT_BRANCH=feat FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" \
+          --taskless https://github.com/example/repo/pull/132
+        ;;
+      unreadable)
+        FM_TEST_GH_REPOSITORY_UNREADABLE=1 FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" \
+          --taskless https://github.com/example/repo/pull/132
+        ;;
+      sensitive)
+        FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" --taskless https://github.com/example/repo/pull/132 \
+          --kind outward-message
+        ;;
+      *)
+        FM_TEST_NO_APPROVAL=1 policy_run "$case_dir" --taskless https://github.com/example/repo/pull/132
+        ;;
+    esac
+    case "$variant" in
+      ci|local)
+        expect_code 0 "$POLICY_RC" "feature $variant proof: $(cat "$case_dir/stderr")"
+        assert_logged_gh_merge "$case_dir" 132 example/repo --squash
+        assert_policy_outcome "$case_dir" merged
+        jq -e '.authority=="grant" and .environment=="feature" and .facts.default_branch=="main"
+               and .report_after==true' "$case_dir/state"/.merge-decision.* >/dev/null \
+          || fail "feature target proof lost its live classification or reporting requirement"
+        ;;
+      *)
+        expect_code 1 "$POLICY_RC" "feature proof must not override $variant"
+        assert_no_grep 'pr merge' "$case_dir/gh.log" "feature grant bypassed $variant"
+        ;;
+    esac
+  done
+  pass "feature grants require successful CI or local proof and refuse default/protected/unknown or sensitive targets"
+}
+
+test_feature_target_uses_real_ci_or_local_proof_and_live_default_metadata

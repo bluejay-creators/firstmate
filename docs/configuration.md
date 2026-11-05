@@ -108,7 +108,7 @@ Untracked files and directories whose names begin with `scratchpad` are also git
 
 - The [`bin/fm-fleet-snapshot.sh` header](../bin/fm-fleet-snapshot.sh) owns the snapshot's event-time and age fields, including secondmate parent-event projections.
 
-- [`bin/fm-pr-merge.sh`'s header and help](../bin/fm-pr-merge.sh) own central private merge-policy configuration, taskless merging, and private decision audits.
+- [`bin/fm-pr-merge.sh`'s header and help](../bin/fm-pr-merge.sh) own central private merge-policy configuration, nonproduction and non-deploying feature-target grants, exact-head local-test receipts, repository-owner GitHub account selection, taskless merging, and private decision audits.
 
 - Wake, watcher, away-mode, and Relay-specific state mechanics remain with their named scripts and reference sections rather than being duplicated into one exhaustive state tree here.
 

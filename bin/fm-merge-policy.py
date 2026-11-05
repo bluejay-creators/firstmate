@@ -7,6 +7,7 @@ Invalid policy/facts fail closed, including duplicate or unknown fields.
 """
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -15,7 +16,11 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-KINDS = {"keys", "iam", "dns", "destructive", "schema-migration", "spend"}
+KINDS = {"keys", "iam", "dns", "destructive", "schema-migration", "spend",
+         "production-deploy", "customer-data-write", "outward-message"}
+NONPROD_ENVIRONMENTS = {"kstage", "staging", "nonprod", "internal", "feature"}
+FEATURE_PROTECTED_REFS = {"main", "master", "staging", "kstage", "pilot", "prod", "production"}
+ENVIRONMENTS = NONPROD_ENVIRONMENTS | {"pilot", "prod", "other"}
 # These signals cannot be removed by a grant or by a configured safe path.
 SENSITIVE = {
     "keys": ["*secret*", "*credential*", "*.pem", "*.key", "*keychain*"],
@@ -44,8 +49,9 @@ def loads(value):
     return json.loads(value, object_pairs_hook=object_pairs)
 
 
-def fields(value, names):
-    require(type(value) is dict and set(value) == set(names), "unknown or missing fields")
+def fields(value, names, optional=()):
+    require(type(value) is dict and set(names) <= set(value)
+            and set(value) <= set(names) | set(optional), "unknown or missing fields")
 
 
 def text(value):
@@ -73,7 +79,7 @@ def policy_read(path):
     for binding in policy["bindings"]:
         fields(binding, ["repository", "base", "system", "environment", "autonomous_paths"])
         require(all(text(binding[key]) for key in ("repository", "base", "system")), "invalid binding")
-        require(binding["environment"] in ("kstage", "pilot", "prod", "other"), "unknown environment")
+        require(binding["environment"] in ENVIRONMENTS, "unknown environment")
         require(strings(binding["autonomous_paths"]), "invalid autonomous paths")
         identity = (binding["repository"], binding["base"])
         require(identity not in seen, "ambiguous repository/base binding")
@@ -81,12 +87,17 @@ def policy_read(path):
     seen = set()
     scopes = set()
     for grant in policy["grants"]:
-        fields(grant, ["id", "repository", "system", "environment", "all_checks_green", "report_after"])
+        fields(grant, ["id", "repository", "system", "environment", "all_checks_green", "report_after"],
+               ["required_proof"])
         require(all(text(grant[key]) for key in ("id", "repository", "system")), "invalid grant")
-        # Only the currently supported finite standing authority is expressible.
-        require(grant["environment"] == "kstage" and grant["system"] == "platform"
+        require(grant["environment"] in NONPROD_ENVIRONMENTS
                 and grant["all_checks_green"] is True and grant["report_after"] is True,
                 "unsupported standing grant")
+        proof = grant.get("required_proof", "forge-checks")
+        require(proof in ("forge-checks", "local-tests", "forge-or-local-tests"),
+                "unknown grant proof requirement")
+        require(grant["environment"] != "feature" or proof == "forge-or-local-tests",
+                "feature grants require green forge checks or local test proof")
         require(grant["id"] not in seen, "duplicate grant id")
         seen.add(grant["id"])
         scope = (grant["repository"], grant["system"], grant["environment"])
@@ -155,9 +166,53 @@ def collect_paths(facts):
     return sorted(set(paths))
 
 
-def decide(policy, facts, collect=False):
+def collect_default_branch(facts):
+    """The default target is live repository metadata, never a name guess."""
+    provider, host, path = (facts[key] for key in ("provider", "host", "path"))
+    if provider == "github":
+        command = ["gh", "api", f"repos/{path}"]
+    elif provider == "gitlab":
+        from urllib.parse import quote
+        command = ["glab", "api", "--hostname", host, f"projects/{quote(path, safe='')}"]
+    else:
+        command = ["tea", "api", "--login", facts["login"], "--repo", path, f"/repos/{path}"]
+    metadata = forge_json(command)
+    require(type(metadata) is dict, "repository metadata is unreadable")
+    branch = metadata.get("default_branch")
+    require(text(branch), "repository default branch is unreadable")
+    return branch
+
+
+def local_test_receipt_read(path, facts):
+    """Read successful local checks; never execute commands supplied by a receipt."""
+    if path is None:
+        return None
+    info = os.lstat(path)
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+            and not info.st_mode & 0o022 and info.st_nlink == 1,
+            "local test receipt must be an owned, non-writable-by-others regular single-link file")
+    with open(path, "rb") as source:
+        raw = source.read()
+    receipt = loads(raw.decode("utf-8"))
+    fields(receipt, ["version", "repository", "number", "base", "head", "checks"])
+    require(type(receipt["version"]) is int and receipt["version"] == 1,
+            "unknown local test receipt version")
+    require(type(receipt["number"]) is int and receipt["number"] > 0
+            and str(receipt["number"]) == facts["number"]
+            and all(receipt[key] == facts[key] for key in ("repository", "base", "head")),
+            "local test receipt does not match the verified repository/PR/base/head")
+    require(type(receipt["checks"]) is list and receipt["checks"], "missing local test results")
+    for check in receipt["checks"]:
+        fields(check, ["command", "exit_code"])
+        require(text(check["command"]) and type(check["exit_code"]) is int and check["exit_code"] == 0,
+                "local test receipt contains an invalid or failed check")
+    return {**receipt, "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def decide(policy, facts, collect=False, local_test_receipt=None):
     fields(facts, ["version", "provider", "host", "path", "number", "url", "repository", "head", "base",
-                   "all_checks_green", "approval", "away", "kinds", "paths", "login"])
+                   "all_checks_green", "forge_checks_passed", "default_branch",
+                   "approval", "away", "kinds", "paths", "login"])
     require(type(facts["version"]) is int and facts["version"] == 1, "unknown facts version")
     require(facts["provider"] in ("github", "gitlab", "forgejo"), "unknown forge")
     require(all(text(facts[key]) for key in ("host", "path", "number", "url", "repository", "head")), "invalid identity facts")
@@ -170,11 +225,15 @@ def decide(policy, facts, collect=False):
     require(isinstance(facts["login"], str) and (not facts["base"] or text(facts["base"])), "invalid base/login facts")
     require(not facts["approval"] or text(facts["approval"]), "invalid approval reference")
     require(type(facts["away"]) is bool and type(facts["all_checks_green"]) is bool, "invalid check/posture facts")
+    require(type(facts["forge_checks_passed"]) is bool, "invalid forge proof facts")
+    require(facts["default_branch"] is None or text(facts["default_branch"]),
+            "invalid repository default branch")
     require(strings(facts["kinds"]) and set(facts["kinds"]) <= KINDS, "unknown change kind")
     require(facts["paths"] is None or strings(facts["paths"]), "invalid path facts")
     require(facts["paths"] is None or all(
         not path.startswith("/") and ".." not in path.split("/") for path in facts["paths"]),
         "invalid changed paths")
+    receipt = local_test_receipt_read(local_test_receipt, facts)
     bindings = [binding for binding in policy["bindings"]
                 if binding["repository"] == facts["repository"] and binding["base"] == facts["base"]]
     binding = bindings[0] if bindings else None
@@ -184,6 +243,8 @@ def decide(policy, facts, collect=False):
     require(len(grants) <= 1, "ambiguous matching grants")
     # Paths need not be read for an attended concrete approval: every possible
     # path kind already requires exactly that approval. Autonomy/away cannot guess.
+    if collect and environment == "feature" and grants and not facts["approval"]:
+        facts["default_branch"] = collect_default_branch(facts)
     if collect and facts["paths"] is None and (facts["away"] or (grants and not facts["approval"])):
         facts["paths"] = collect_paths(facts)
     kinds = set(facts["kinds"])
@@ -208,21 +269,32 @@ def decide(policy, facts, collect=False):
     elif grants and facts["all_checks_green"] and facts["paths"] and all(
             any(fnmatch.fnmatchcase(path, pattern) for pattern in binding["autonomous_paths"])
             for path in facts["paths"]):
-        authority = "grant"
-        reason = "explicit platform kstage green grant"
+        proof = grants[0].get("required_proof", "forge-checks")
+        if environment == "feature" and (not facts["default_branch"]
+                or facts["base"] == facts["default_branch"] or facts["base"] in FEATURE_PROTECTED_REFS):
+            reason = "feature grants cannot authorize default, protected or unclassified targets"
+        elif proof == "local-tests" and receipt is None:
+            reason = "an exact-head successful local test receipt is required"
+        elif proof == "forge-or-local-tests" and not facts["forge_checks_passed"] and receipt is None:
+            reason = "successful forge checks or an exact-head local test receipt are required"
+        else:
+            authority = "grant"
+            reason = "explicit nonproduction green grant"
     return {"version": 1, "allowed": authority is not None, "authority": authority,
             "reason": reason, "environment": environment, "kinds": sorted(kinds),
             "grant": grants[0]["id"] if authority == "grant" else None,
-            "report_after": authority == "grant", "facts": facts}
+            "report_after": authority == "grant", "local_test_receipt": receipt, "facts": facts}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
     parser.add_argument("--collect", action="store_true")
+    parser.add_argument("--local-test-receipt")
     args = parser.parse_args()
     try:
-        decision = decide(policy_read(args.config), loads(sys.stdin.read()), args.collect)
+        decision = decide(policy_read(args.config), loads(sys.stdin.read()), args.collect,
+                          args.local_test_receipt)
         decision["decided_at"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(decision, sort_keys=True))
         return 0 if decision["allowed"] else 1
