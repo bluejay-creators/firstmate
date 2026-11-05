@@ -18,8 +18,8 @@ from datetime import datetime, timezone
 
 KINDS = {"keys", "iam", "dns", "destructive", "schema-migration", "spend",
          "production-deploy", "customer-data-write", "outward-message"}
-NONPROD_ENVIRONMENTS = {"kstage", "staging", "nonprod", "internal", "feature"}
-FEATURE_PROTECTED_REFS = {"main", "master", "staging", "kstage", "pilot", "prod", "production"}
+NONPROD_ENVIRONMENTS = {"staging", "nonprod", "internal", "feature"}
+FEATURE_PROTECTED_REFS = {"main", "master", "staging", "pilot", "prod", "production"}
 ENVIRONMENTS = NONPROD_ENVIRONMENTS | {"pilot", "prod", "other"}
 # These signals cannot be removed by a grant or by a configured safe path.
 SENSITIVE = {
@@ -72,14 +72,21 @@ def policy_read(path):
             "policy must be an owned, non-writable-by-others regular single-link file")
     with open(path, encoding="utf-8") as source:
         policy = loads(source.read())
-    fields(policy, ["version", "bindings", "grants", "sensitive_paths"])
+    fields(policy, ["version", "bindings", "grants", "sensitive_paths"],
+           ["extra_nonproduction_environments"])
     require(type(policy["version"]) is int and policy["version"] == 1, "unknown policy version")
     require(all(type(policy[key]) is list for key in ("bindings", "grants", "sensitive_paths")), "invalid policy lists")
+    extra_environments = policy.get("extra_nonproduction_environments", [])
+    reserved = ENVIRONMENTS | FEATURE_PROTECTED_REFS | {"default"}
+    require(strings(extra_environments)
+            and len({name.casefold() for name in extra_environments}) == len(extra_environments)
+            and all(name == name.strip() and name.casefold() not in reserved
+                    for name in extra_environments), "invalid extra nonproduction environments")
     seen = set()
     for binding in policy["bindings"]:
         fields(binding, ["repository", "base", "system", "environment", "autonomous_paths"])
         require(all(text(binding[key]) for key in ("repository", "base", "system")), "invalid binding")
-        require(binding["environment"] in ENVIRONMENTS, "unknown environment")
+        require(binding["environment"] in ENVIRONMENTS | set(extra_environments), "unknown environment")
         require(strings(binding["autonomous_paths"]), "invalid autonomous paths")
         identity = (binding["repository"], binding["base"])
         require(identity not in seen, "ambiguous repository/base binding")
@@ -90,7 +97,7 @@ def policy_read(path):
         fields(grant, ["id", "repository", "system", "environment", "all_checks_green", "report_after"],
                ["required_proof"])
         require(all(text(grant[key]) for key in ("id", "repository", "system")), "invalid grant")
-        require(grant["environment"] in NONPROD_ENVIRONMENTS
+        require(grant["environment"] in NONPROD_ENVIRONMENTS | set(extra_environments)
                 and grant["all_checks_green"] is True and grant["report_after"] is True,
                 "unsupported standing grant")
         proof = grant.get("required_proof", "forge-checks")
@@ -271,7 +278,9 @@ def decide(policy, facts, collect=False, local_test_receipt=None):
             for path in facts["paths"]):
         proof = grants[0].get("required_proof", "forge-checks")
         if environment == "feature" and (not facts["default_branch"]
-                or facts["base"] == facts["default_branch"] or facts["base"] in FEATURE_PROTECTED_REFS):
+                or facts["base"] == facts["default_branch"]
+                or facts["base"] in FEATURE_PROTECTED_REFS
+                | set(policy.get("extra_nonproduction_environments", []))):
             reason = "feature grants cannot authorize default, protected or unclassified targets"
         elif proof == "forge-checks" and not facts["forge_checks_passed"]:
             reason = "successful forge check evidence is required"

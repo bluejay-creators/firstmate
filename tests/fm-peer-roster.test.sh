@@ -10,7 +10,7 @@ TMP_ROOT=$(fm_test_tmproot fm-peer-roster)
 FM_TEST_CLEANUP_DIRS+=("$TMP_ROOT")
 trap fm_test_cleanup EXIT
 export FM_HOME="$TMP_ROOT/home" FIXTURE="$TMP_ROOT/fixture" HERDR_SESSION=default
-mkdir -p "$FM_HOME/state/peers" "$FM_HOME/data" "$FIXTURE"
+mkdir -p "$FM_HOME/state/peers" "$FM_HOME/data" "$FM_HOME/config" "$FIXTURE"
 # bd is stubbed by PATH below; the fixture must never accidentally reach a
 # real store from this tmp home.
 printf 'alice\tAlice\nbob\tBob\ncharlie\tCharlie\ndana\tDana\n' > "$FM_HOME/state/peers/peers.tsv"
@@ -36,7 +36,7 @@ kind=ship
 mode=direct-PR
 META
 earlier=$((now - 100))
-printf 'working [at=%s]: exploring\npaused [at=%s]: waiting on platform kstage\n' "$earlier" "$now" > "$FM_HOME/state/parked-worker.status"
+printf 'working [at=%s]: exploring\npaused [at=%s]: waiting on fixture deployment\n' "$earlier" "$now" > "$FM_HOME/state/parked-worker.status"
 
 # A worker whose latest line is an open keyed need is blocked deterministically.
 cat > "$FM_HOME/state/blocked-worker.meta" <<'META'
@@ -58,7 +58,7 @@ endpoint_task_id=done-worker
 kind=ship
 META
 earlier=$((now - 4000))
-printf 'working [at=%s]: implementing\ndone [at=%s]: PR https://example.test/pull/1 merged\n' "$earlier" "$earlier" > "$FM_HOME/state/done-worker.status"
+printf 'working [at=%s]: implementing\ndone [at=%s]: PR https://example.invalid/pull/1 merged\n' "$earlier" "$earlier" > "$FM_HOME/state/done-worker.status"
 
 cat > "$FM_HOME/state/done-fresh-worker.meta" <<'META'
 backend=herdr
@@ -67,7 +67,7 @@ endpoint_task_id=done-fresh-worker
 kind=ship
 META
 done_fresh=$((now - 120))
-printf 'working [at=%s]: implementing\ndone [at=%s]: PR https://example.test/pull/2\n' "$earlier" "$done_fresh" > "$FM_HOME/state/done-fresh-worker.status"
+printf 'working [at=%s]: implementing\ndone [at=%s]: PR https://example.invalid/pull/2\n' "$earlier" "$done_fresh" > "$FM_HOME/state/done-fresh-worker.status"
 
 cat > "$FM_HOME/state/failed-worker.meta" <<'META'
 backend=herdr
@@ -136,7 +136,7 @@ cat > "$FIXTURE/issues.json" <<'JSON'
   {"id":"b1","title":"Build work","status":"open","assignee":"alice","labels":["agents"]},
   {"id":"b2","title":"Alice Title-Case Label","status":"open","assignee":"Alice","labels":["agents"]},
   {"id":"b3","title":"Platform work","status":"open","assignee":"Platform","labels":["platform"]},
-  {"id":"b4","title":"Captain call","status":"open","assignee":"Jubin John","labels":["captain","decision"]},
+  {"id":"b4","title":"Captain call","status":"open","assignee":"Fake Captain","labels":["captain","decision"]},
   {"id":"b5","title":"Done work","status":"in_progress","assignee":"alice","labels":["agents"]},
   {"id":"b6","title":"Bob label work","status":"open","labels":["Bob","agents"]},
   {"id":"b7","title":"Missed history","status":"open","labels":["bob"]}
@@ -156,6 +156,7 @@ esac
 SH
 cat > "$FAKEBIN/bd" <<'SH'
 #!/usr/bin/env bash
+[ "$PWD" = "$EXPECTED_BOARD" ] || exit 5
 printf 'bd %s\n' "$*" >> "$FIXTURE/calls"
 case "$*" in
   '--readonly --sandbox --json list --status open --limit 0') [ ! -e "$FIXTURE/bd-fails" ] || exit 3; cat "$FIXTURE/issues.json" ;;
@@ -164,10 +165,11 @@ esac
 SH
 chmod +x "$FAKEBIN/herdr" "$FAKEBIN/bd"
 export PATH="$FAKEBIN:$PATH"
-# The roster chdirs to BD's board when FM_BOARD is set; without it the script
-# inherits the caller's cwd, which points nowhere real. The fixture must give
-# bd an explicit board marker so it cannot accidentally hit a real board.
-export FM_BOARD="$FIXTURE"
+# The fixture exercises the existing configured shared-board owner; every bd
+# call must chdir to that board rather than inheriting the test runner's cwd.
+export EXPECTED_BOARD="$FIXTURE"
+printf '%s\n' "$FIXTURE" > "$FM_HOME/config/beads-board"
+unset FM_BOARD
 
 ROSTER="$ROOT/bin/fm-peer-roster.sh"
 
@@ -217,7 +219,7 @@ pass 'secondmate home, stale-child, parent, exact-label join, and aged-key stale
 jq -e '
   ([.agents[] | select(.name == "done-worker")][0]
     | .kind == "ship" and .posture == "done" and .activity == "done"
-    and .open_keys == [] and (.latest_line | contains("PR https://example.test/pull/1"))) and
+    and .open_keys == [] and (.latest_line | contains("PR https://example.invalid/pull/1"))) and
   ([.agents[] | select(.name == "done-fresh-worker")][0]
     | .posture == "done" and .latest_age_s < 600) and
   ([.agents[] | select(.name == "failed-worker")][0]
@@ -304,3 +306,22 @@ jq -e '.partial == true and .sources.beads == "unknown" and
   "$FIXTURE/out" >/dev/null || fail 'bd failure not surfaced as partial unknown'
 rm "$FIXTURE/bd-fails"
 pass 'bd failure surfaces partial, bead_state unknown, not a fake idle'
+
+# An explicit FM_BOARD still overrides the home configuration.
+mkdir -p "$TMP_ROOT/override-board"
+FM_BOARD="$TMP_ROOT/override-board" EXPECTED_BOARD="$TMP_ROOT/override-board" \
+  "$ROSTER" --json > "$FIXTURE/out" || fail 'explicit board override was not honored'
+jq -e '.sources.beads == "ok"' "$FIXTURE/out" >/dev/null \
+  || fail 'explicit board override lost its board read'
+pass 'FM_BOARD overrides the configured shared board'
+
+# Missing configuration cannot fall back to whichever board encloses cwd.
+rm "$FM_HOME/config/beads-board"
+calls_before=$(grep -c '^bd ' "$FIXTURE/calls")
+if "$ROSTER" --json > "$FIXTURE/out"; then fail 'unconfigured board exited successfully'; fi
+jq -e '.partial and .sources.beads == "unknown" and
+       any(.errors[]; contains("shared board is not configured"))' \
+  "$FIXTURE/out" >/dev/null || fail 'unconfigured board was not explicit'
+calls_after=$(grep -c '^bd ' "$FIXTURE/calls")
+assert_equals "$calls_before" "$calls_after" 'unconfigured board must never call bd'
+pass 'missing shared-board configuration is partial without a bd call'

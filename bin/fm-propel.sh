@@ -5,8 +5,8 @@
 #   DISCOVER -> FILTER -> CLASSIFY -> ASSIGN -> RECURSE -> TIME GATES.
 # DISCOVER: home-ready beads (config/propel-beads-dir names the home's .beads
 # working directory; default: the FM_HOME itself when it holds .beads),
-# intersected with $FM_BOARD (default /Users/jubin/Git/jubin-marut/beads) so the
-# shared board's dependency graph and captain beads stay authoritative.
+# intersected with the shared board from config/beads-board (FM_BOARD overrides)
+# so its dependency graph and captain beads stay authoritative.
 # FILTER: drop beads whose status the board does not call ready (bd ready
 # already excludes blocked/deferred/in-progress), whose title is already In
 # flight in this home's backlog, whose roster pane is known blocked, or that a
@@ -18,9 +18,11 @@
 # ASSIGN: prefer an idle registered roster pane, then a registered secondmate
 # whose scope names the bead's domain (data/secondmates.md), then at most one
 # fresh crewmate spawn per run. Every dispatched worker runs on omp with the
-# default model f2-stage-gateway/marutai/MAI-Pro; codex and claude credits are
-# never spent without an explicit captain decision. Project and machine
-# capacity come from config/project-capacity through bin/fm-project-capacity-lib.sh.
+# concrete operator pin from config/propel-profile.json, independent of global
+# crew-dispatch rules and defaults. Other model requirements need a captain
+# decision. Project and
+# machine capacity come from config/project-capacity through
+# bin/fm-project-capacity-lib.sh. Ordered domain labels live in config/propel-domains.
 # RECURSE: when a bead's board deps name an open blocker, the blocker is the
 # actionable item, never the waiter.
 # TIME GATES: deferred beads (bd status deferred or defer_until) are external
@@ -37,7 +39,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="$FM_HOME/state"
-BOARD="${FM_BOARD:-/Users/jubin/Git/jubin-marut/beads}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+# shellcheck source=bin/fm-bead-board-lib.sh
+. "$SCRIPT_DIR/fm-bead-board-lib.sh"
+BOARD="${FM_BOARD:-$(fm_bead_board_dir || true)}"
 PLAN_TMP=
 
 usage() {
@@ -64,6 +69,7 @@ done
 # explicitly so a run cannot silently target the wrong store.
 unset BEADS_DIR BD_ACTOR BD_DB BD_GOY BEADS_GOY GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 2>/dev/null || true
 
+[ -n "$BOARD" ] || die_unknown 'shared board is not configured; set config/beads-board or FM_BOARD'
 command -v bd >/dev/null 2>&1 || die_unknown 'bd is not on PATH'
 command -v tasks-axi >/dev/null 2>&1 || die_unknown 'tasks-axi is not on PATH'
 command -v jq >/dev/null 2>&1 || die_unknown 'jq is not on PATH'
@@ -77,7 +83,7 @@ PLAN="$STATE/.propel-plan.json"
 run_bd() { # <cwd> <args...> - readonly sandbox read; silent on failure.
   local bd_cwd=$1
   shift
-  (cd "$bd_cwd" && bd --readonly --sandbox "$@" 2>/dev/null)
+  FM_BEAD_BOARD="$bd_cwd" fm_bead_board_bd --readonly --sandbox "$@" 2>/dev/null
 }
 
 # --- Discover ---------------------------------------------------------------
@@ -86,8 +92,8 @@ run_bd() { # <cwd> <args...> - readonly sandbox read; silent on failure.
 # the shared board so tests and scratch runs never touch the live one. When
 # the home has no .beads at all, the shared board IS the discover surface.
 HOME_BEADS_DIR=
-if [ -f "$FM_HOME/config/propel-beads-dir" ]; then
-  HOME_BEADS_DIR=$(head -1 "$FM_HOME/config/propel-beads-dir" 2>/dev/null | tr -d '[:space:]')
+if [ -f "$CONFIG/propel-beads-dir" ]; then
+  HOME_BEADS_DIR=$(head -1 "$CONFIG/propel-beads-dir" 2>/dev/null | tr -d '[:space:]')
 fi
 [ -n "$HOME_BEADS_DIR" ] || { [ -d "$FM_HOME/.beads" ] && HOME_BEADS_DIR=$FM_HOME; }
 
@@ -114,7 +120,7 @@ BACKLOG_TITLES=$(cd "$FM_HOME" && "$FM_ROOT/bin/fm-tasks-axi.sh" list --state in
   && "$FM_ROOT/bin/fm-tasks-axi.sh" list --state queued 2>/dev/null) || BACKLOG_TITLES=
 ROSTER_JSON=
 [ -f "$FM_ROOT/bin/fm-peer-roster.sh" ] \
-  && ROSTER_JSON=$(FM_HOME=$FM_HOME "$FM_ROOT/bin/fm-peer-roster.sh" --json 2>/dev/null)
+  && ROSTER_JSON=$(FM_HOME=$FM_HOME FM_BOARD=$BOARD "$FM_ROOT/bin/fm-peer-roster.sh" --json 2>/dev/null)
 if [ -z "$ROSTER_JSON" ] || ! printf '%s' "$ROSTER_JSON" | jq -e 'type == "object"' >/dev/null 2>&1; then
   ROSTER_JSON='{"peers":[],"sources":{"herdr":"unknown","beads":"unknown","peers":"unknown"}}'
 fi
@@ -128,7 +134,7 @@ SECONDMATE_SCOPES=
 # rules; this script owns the tool reads, the plan publication, and the wakes.
 PLAN_JSON=$(READY_JSON=$READY_JSON OPEN_JSON=$OPEN_JSON DEFERRED_JSON=$DEFERRED_JSON \
   BACKLOG_TITLES=$BACKLOG_TITLES ROSTER_JSON=$ROSTER_JSON \
-  SECONDMATE_SCOPES=$SECONDMATE_SCOPES ONLY_TASKS=$ONLY_TASKS BOARD=$BOARD STATE=$STATE \
+  SECONDMATE_SCOPES=$SECONDMATE_SCOPES ONLY_TASKS=$ONLY_TASKS BOARD=$BOARD STATE=$STATE CONFIG=$CONFIG \
   python3 "$SCRIPT_DIR/fm-propel-policy-lib.py" 2>&1) || die_unknown "policy pass failed: $PLAN_JSON"
 umask 077
 if printf '%s' "$PLAN_JSON" | jq -e 'type == "object" and (.actions | type == "array")' >/dev/null 2>&1; then
@@ -169,8 +175,9 @@ emit_wakes() { # <kind> <jq-expr>
 
 emit_wakes captain '.actions[] | select(.kind == "captain") |
   "propel: captain decision \(.bead): \(.decision)"'
-emit_wakes dispatch '.actions[] | select(.kind != "skip" and .kind != "route-blocker" and .kind != "captain" and .kind != "time-gate") |
-  "propel: dispatch \(.bead) -> \(.assignee) (harness omp, model f2-stage-gateway/marutai/MAI-Pro)"'
+# shellcheck disable=SC2016 # $plan belongs to the jq filter.
+emit_wakes dispatch '. as $plan | .actions[] | select(.kind != "skip" and .kind != "route-blocker" and .kind != "captain" and .kind != "time-gate") |
+  "propel: dispatch \(.bead) -> \(.assignee) (harness \($plan.harness), model \($plan.model))"'
 emit_wakes gate '.time_gates[] |
   "propel: gate \(.bead) clears at \(.until) - \(.title)"'
 exit 0

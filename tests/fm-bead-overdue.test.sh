@@ -159,7 +159,7 @@ printf 'deploy=45\n' > "$home_d/config/bead-eta-defaults"
 stage_d() {  # <minutes>
   cat > "$home_d/bd-list.json" <<EOF
 [
-  {"id":"fm-dep","title":"deploy to kstage","status":"in_progress","issue_type":"task","owner":"stage-worker","created_at":"$(ago 500)","updated_at":"$(ago "$1")","labels":["deploy"]}
+  {"id":"fm-dep","title":"deploy to staging","status":"in_progress","issue_type":"task","owner":"stage-worker","created_at":"$(ago 500)","updated_at":"$(ago "$1")","labels":["deploy"]}
 ]
 EOF
 }
@@ -167,7 +167,7 @@ EOF
 stage_d 50
 out1=$(run_check "$home_d") || fail '1x run failed'
 case "$out1" in
-  'overdue: fm-dep deploy to kstage ('*'m/45m), owner stage-worker') ;;
+  'overdue: fm-dep deploy to staging ('*'m/45m), owner stage-worker') ;;
   *) fail "1x crossing printed the wrong wake: $out1" ;;
 esac
 out2=$(run_check "$home_d") || fail 'deduped run failed'
@@ -177,7 +177,7 @@ pass '1x crossing fires one overdue wake and dedupes'
 stage_d 95
 out3=$(run_check "$home_d") || fail '2x run failed'
 case "$out3" in
-  'escalate: fm-dep deploy to kstage ('*'m/45m), owner stage-worker') ;;
+  'escalate: fm-dep deploy to staging ('*'m/45m), owner stage-worker') ;;
   *) fail "2x crossing printed the wrong wake: $out3" ;;
 esac
 out4=$(run_check "$home_d") || fail 'escalate dedupe run failed'

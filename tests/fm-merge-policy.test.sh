@@ -29,9 +29,9 @@ class MergePolicy(unittest.TestCase):
                           forge_checks_passed=True, default_branch="main",
                           approval="", away=False, kinds=[], paths=["src/feature.py"], login="")
         self.policy = dict(version=1, bindings=[dict(repository=REPOSITORY, base="release-target",
-                           system="platform", environment="kstage", autonomous_paths=["src/*"])],
+                           system="platform", environment="staging", autonomous_paths=["src/*"])],
                            grants=[dict(id="fixture-grant", repository=REPOSITORY, system="platform",
-                           environment="kstage", all_checks_green=True, report_after=True)], sensitive_paths=[])
+                           environment="staging", all_checks_green=True, report_after=True)], sensitive_paths=[])
 
     def invoke(self, facts=None, policy=None, absent=False, receipt=None):
         if not absent:
@@ -74,7 +74,7 @@ class MergePolicy(unittest.TestCase):
 
     def test_nonproduction_grants_match_repository_system_environment_and_live_base(self):
         for repository, system, environment, base in (
-                ("fixture/client", "mbca", "staging", "staging"),
+                ("fixture-org/client", "fixture-service", "staging", "staging"),
                 ("fixture/setup", "setup", "nonprod", "main"),
                 ("fixture/firstmate", "firstmate", "internal", "main")):
             with self.subTest(system=system):
@@ -97,6 +97,41 @@ class MergePolicy(unittest.TestCase):
                 grant["system"] = system
                 grant["repository"] += "-different"
                 self.assertEqual(self.invoke(facts, policy)[0], 1)
+
+    def test_private_nonproduction_environment_requires_explicit_configuration(self):
+        for value in (self.policy["bindings"][0], self.policy["grants"][0]):
+            value["environment"] = "fixture-stage"
+        self.facts["approval"] = "captain-current-instruction"
+        self.assertEqual(self.invoke()[0], 2)
+        self.facts["approval"] = ""
+        self.policy["extra_nonproduction_environments"] = ["fixture-stage"]
+        rc, decision = self.invoke()
+        self.assertEqual(rc, 0)
+        self.assertEqual(decision["authority"], "grant")
+        self.assertEqual(decision["environment"], "fixture-stage")
+        self.facts["forge_checks_passed"] = False
+        self.assertEqual(self.invoke()[0], 1)
+        self.facts["forge_checks_passed"] = True
+        self.facts["kinds"] = ["production-deploy"]
+        self.assertEqual(self.invoke()[0], 1)
+        self.facts["kinds"] = []
+        self.facts["all_checks_green"] = False
+        self.assertEqual(self.invoke()[0], 1)
+        self.facts["approval"] = "captain-named-waiver"
+        self.assertEqual(self.invoke()[0], 0)
+
+    def test_extra_nonproduction_environments_reject_reserved_and_duplicate_names(self):
+        self.facts["approval"] = "captain-current-instruction"
+        invalid = [None, {}, "fixture-stage", [None], [""], [" fixture-stage"],
+                   ["fixture-stage "], ["fixture-stage", "fixture-stage"],
+                   ["fixture-stage", "FIXTURE-STAGE"]]
+        for reserved in ("staging", "nonprod", "internal", "feature", "pilot",
+                         "prod", "production", "other", "default", "main", "master"):
+            invalid.extend(([reserved], [reserved.upper()]))
+        for names in invalid:
+            with self.subTest(names=names):
+                self.policy["extra_nonproduction_environments"] = names
+                self.assertEqual(self.invoke()[0], 2)
 
     def test_local_tests_require_successful_exact_target_receipt(self):
         self.policy["grants"][0]["required_proof"] = "local-tests"
@@ -179,12 +214,21 @@ class MergePolicy(unittest.TestCase):
     def test_feature_grant_cannot_reclassify_default_protected_or_unknown_target(self):
         self.feature_target()
         for base, default in (("feat", "feat"), ("feat", None), ("main", "trunk"),
-                              ("master", "trunk"), ("staging", "trunk"), ("kstage", "trunk"),
+                              ("master", "trunk"), ("staging", "trunk"),
                               ("pilot", "trunk"), ("prod", "trunk"), ("production", "trunk")):
             with self.subTest(base=base, default=default):
                 self.facts.update(base=base, default_branch=default)
                 self.policy["bindings"][0]["base"] = base
                 self.assertEqual(self.invoke(receipt=self.receipt())[0], 1)
+
+    def test_private_nonproduction_refs_cannot_be_feature_targets(self):
+        self.feature_target()
+        self.policy["extra_nonproduction_environments"] = ["fixture-stage"]
+        self.facts["base"] = "fixture-stage"
+        self.policy["bindings"][0]["base"] = "fixture-stage"
+        self.assertEqual(self.invoke()[0], 1)
+        self.facts["forge_checks_passed"] = False
+        self.assertEqual(self.invoke(receipt=self.receipt())[0], 1)
 
     def test_feature_proof_does_not_override_sensitive_changes(self):
         self.feature_target()
@@ -239,14 +283,14 @@ class MergePolicy(unittest.TestCase):
                 self.facts["approval"] = ""
                 self.facts["all_checks_green"] = True
 
-    def test_kstage_red_needs_concrete_approval(self):
+    def test_staging_red_needs_concrete_approval(self):
         self.facts["all_checks_green"] = False
         self.assertEqual(self.invoke()[0], 1)
         self.facts["approval"] = "captain-named-waiver"
         self.assertEqual(self.invoke()[0], 0)
 
     def test_branch_name_is_not_environment_authority(self):
-        self.facts["base"] = "kstage"
+        self.facts["base"] = "staging"
         self.assertEqual(self.invoke()[0], 1)
         self.facts["approval"] = "captain-current-instruction"
         self.facts["all_checks_green"] = False

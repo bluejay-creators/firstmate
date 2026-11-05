@@ -176,15 +176,22 @@
 # fm_firstmate_root_home, read directly on every merge (never inherited).
 # FM_CONFIG_OVERRIDE applies only when this home is that root. An absent file
 # requires captain approval; malformed, ambiguous, or unreadable policy refuses.
-# JSON v1 has exactly {version:1,bindings:[],grants:[],sensitive_paths:[]}.
+# JSON v1 requires {version:1,bindings:[],grants:[],sensitive_paths:[]}.
+# Optional extra_nonproduction_environments is an array of private environment
+# names extending accepted nonproduction labels and feature-protected refs.
+# Names must be nonempty without surrounding whitespace; duplicates, including
+# case variants, and case-insensitive built-in environment/protected-ref names
+# or default refuse. Names retain exact spelling in bindings, grants and audits.
 # A binding has repository (canonical https repository URL), base (exact live
-# target ref, NOT an inferred environment), system, environment (kstage, staging,
-# nonprod, internal, feature, pilot, prod, other), autonomous_paths (fnmatch paths).
+# target ref, NOT an inferred environment), system, environment (staging, nonprod,
+# internal, feature, pilot, prod, other or a configured extra nonproduction name),
+# autonomous_paths (fnmatch paths).
 # The operator binding is the authoritative deployment assertion; do not create
 # one from a branch name alone.
 # Only one binding per repository/base is permitted.
-# A grant has id, repository, system (nonempty domain), environment (kstage,
-# staging, nonprod, internal or feature), all_checks_green:true, report_after:true.
+# A grant has id, repository, system (nonempty domain), environment (staging,
+# nonprod, internal, feature or a configured extra nonproduction name),
+# all_checks_green:true, report_after:true.
 # Only one grant may match a binding. Optional required_proof is forge-checks
 # (default), local-tests or forge-or-local-tests. forge-checks requires at least
 # one successful reported forge check and cannot substitute a local receipt.
@@ -194,7 +201,8 @@
 # A feature binding asserts an exact operator-certified NON-DEPLOYING target;
 # it is never inferred from its name and must use forge-or-local-tests.
 # Feature autonomy reads live repository default-branch metadata and refuses
-# unknown/default targets and main, master, staging, kstage, pilot, prod, production.
+# unknown/default targets, main, master, staging, pilot, prod, production and
+# every ref listed in extra_nonproduction_environments.
 # Deployment classification remains the operator's assertion, not a path heuristic.
 # Any grant whose proof needs local evidence uses --local-test-receipt.
 # The receipt is owned regular single-link JSON v1, not writable by others:

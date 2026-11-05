@@ -27,7 +27,7 @@ Reply with the single word and nothing else.
 Wake reason: $reason
 EOF
 )
-answer=$("$wrapper" "$prompt" 2>/dev/null || true)
+answer=$(FM_HOME="$home" "$wrapper" "$prompt" 2>/dev/null || true)
 answer=$(printf '%s' "$answer" | tr -d '[:space:]')
 case "$answer" in
   absorb|surface|escalate) printf '%s\n' "$answer" ;;

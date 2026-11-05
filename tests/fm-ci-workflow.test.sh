@@ -306,9 +306,8 @@ raise "sweep runs-on must honour a repo variable" unless sweep_job["runs-on"].to
   pass "sweep.yml runs hourly skipped-unchanged and writes state/sweep.status with the blame range"
 }
 
-# The upstream no-mistakes gate must not block the jubin-marut fork, which
-# runs direct-PR with no-mistakes disabled; on the parent repo the gate stays
-# enforced.
+# The upstream no-mistakes gate skips forks while remaining enforced for
+# non-bot pull requests on the parent repository.
 test_no_mistakes_gate_is_repo_gated() {
   local gate="$ROOT/.github/workflows/no-mistakes-required.yml"
   assert_present "$gate" "no-mistakes-required.yml is missing"
@@ -316,8 +315,23 @@ test_no_mistakes_gate_is_repo_gated() {
 doc = YAML.load_file(ARGV[0])
 job = doc.fetch("jobs").fetch("check")
 cond = job.fetch("if")
-raise "gate must be repo-conditional" unless cond.include?("github.repository")
-raise "gate must target the parent repo" unless cond.include?("kunchenguid/firstmate")
+evaluate = lambda do |repository, author|
+  context = {
+    "github.repository" => repository,
+    "github.event.pull_request.user.login" => author,
+  }
+  cond.split("&&").all? do |clause|
+    match = clause.strip.match(/\A([\w.]+)\s*(==|!=)\s*\x27([^\x27]*)\x27\z/)
+    raise "unsupported gate condition: #{clause}" unless match
+    actual = context.fetch(match[1])
+    match[2] == "==" ? actual == match[3] : actual != match[3]
+  end
+end
+raise "parent human PR must run the gate" unless evaluate.call("kunchenguid/firstmate", "fixture-author")
+raise "fork human PR must skip the gate" if evaluate.call("fixture-org/firstmate", "fixture-author")
+%w[github-actions[bot] dependabot[bot]].each do |author|
+  raise "#{author} must skip the gate" if evaluate.call("kunchenguid/firstmate", author)
+end
 ' "$gate" || fail "no-mistakes gate must be repo-conditional"
   pass "no-mistakes gate skips on forks and stays enforced on kunchenguid/firstmate"
 }

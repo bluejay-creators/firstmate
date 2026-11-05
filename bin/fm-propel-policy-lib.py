@@ -1,6 +1,18 @@
 import json, os, sys
-DOMAIN_ORDER = ["firstmate", "platform", "marut", "auditless", "MBCA", "agents", "oath",
-                "usga", "garuda", "wiki", "bridge", "gitrank", "kg"]
+from pathlib import Path
+
+config = Path(os.environ["CONFIG"])
+try:
+    profile = json.loads((config / "propel-profile.json").read_text())
+    if not isinstance(profile, dict) or profile.get("harness") != "omp" \
+            or not isinstance(profile.get("model"), str) or not profile["model"].strip():
+        raise ValueError("propel-profile.json must be one concrete omp profile with a model")
+    if profile.get("effort"):
+        raise ValueError("propel does not support an effort override in its profile")
+    DOMAIN_ORDER = [line.strip() for line in (config / "propel-domains").read_text().splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")]
+except (OSError, ValueError):
+    sys.exit("configure propel-profile.json with one concrete omp model and propel-domains")
 def domain(labels):
     lowered = {l.lower() for l in labels or []}
     for d in DOMAIN_ORDER:
@@ -24,8 +36,8 @@ backlog = {t.rsplit(",", 1)[-1].strip().strip('"') if t.count(",") >= 4
            else t for t in backlog}
 roster = json.loads(os.environ["ROSTER_JSON"])
 only = {t for t in os.environ["ONLY_TASKS"].split(",") if t}
-HARNESS = "omp"
-MODEL = "f2-stage-gateway/marutai/MAI-Pro"
+HARNESS = profile["harness"]
+MODEL = profile["model"]
 state_dir = os.environ["STATE"]
 work_underway = {os.path.splitext(n)[0] for n in os.listdir(state_dir) if n.endswith(".meta")} \
     if os.path.isdir(state_dir) else set()

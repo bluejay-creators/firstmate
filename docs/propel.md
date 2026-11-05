@@ -4,17 +4,34 @@ The bounded propulsion dispatcher turns ready Beads work into accountable assign
 It is a small change controller, not a scheduling framework: firstmate remains the accountable owner of every dispatch, and the dispatcher only computes a plan and surfaces decision points.
 The behavioral contract below is the single owner; `bin/fm-propel.sh`'s header cross-references this page instead of restating it.
 
+## Private configuration
+
+The dispatcher and peer roster resolve the shared board from an explicit `FM_BOARD` override, otherwise `config/beads-board` under the effective `FM_HOME`.
+This board resolver does not honor `FM_CONFIG_OVERRIDE`, and neither consumer has a built-in shared-board path.
+[`bin/fm-bead-board-lib.sh`](../bin/fm-bead-board-lib.sh) owns the board-file format and path resolution.
+The existing `config/propel-beads-dir` still selects only this home's discovery board.
+
+Private `config/propel-domains` supplies ordered domain labels, one per line with blank lines and comments ignored.
+The first configured matching domain selects the domain used for assignment.
+Private `config/propel-profile.json` supplies one profile object with harness `omp` and a nonblank `model`; propulsion refuses a missing profile, an array, another harness, or an effort override rather than choosing or inventing a profile.
+These domain and profile reads use `FM_CONFIG_OVERRIDE` when set, otherwise the effective home selected by `FM_HOME`, `FM_ROOT_OVERRIDE`, then the tracked code root.
+Missing or invalid required settings stop propulsion without a dispatch.
+[`bin/fm-propel.sh`'s header and help](../bin/fm-propel.sh) own the exact configuration and invocation contract.
+
+The propulsion pin is independent of global `config/crew-dispatch.json` rules/defaults. Moving an existing propulsion default into private configuration must not change how unrelated workers are routed.
+Installing private settings and activating the source change are separate from merging it.
+
 ## State machine
 
 Each run walks the same six stages in order.
 
-1. **DISCOVER.** Reads this home's ready beads from the `.beads` store configured in `config/propel-beads-dir` (the home itself when it holds `.beads`), intersected with the shared board (`FM_BOARD`, default `/Users/jubin/Git/jubin-marut/beads`) `bd --readonly --sandbox list --status open`.
+1. **DISCOVER.** Reads this home's ready beads from the `.beads` store configured in `config/propel-beads-dir` (the home itself when it holds `.beads`), intersected with the privately configured shared board's `bd --readonly --sandbox list --status open`.
    When this home has no board of its own, the shared board is the discover surface too.
 2. **FILTER.** A bead is dropped when `bd ready` did not name it, when the title already sits `in_flight` or `queued` in this home's tasks-axi backlog, when a `state/<task-id>.meta` names matching work already under way in any local home, or when the roster has zero idle panes (a capacity gate, never silently an external wait).
 3. **CLASSIFY.** Labels route each surviving bead to `ship`, `scout`, or `captain`.
-   `captain` beads, and any bead whose `model:<name>` label requires a model other than the default, are surfaced as decision lines in the plan, never dispatched; everything else is `ship` or `scout`.
+   `captain` beads and beads with an explicit `model:<name>` label are surfaced as decision lines in the plan, never dispatched; everything else is `ship` or `scout`.
 4. **ASSIGN.** Pairs a ship- or scout-class bead with one stable assignee: an idle roster pane first, then a registered secondmate whose `data/secondmates.md` scope covers the bead's domain, then at most one fresh crewmate per run.
-   Every dispatched worker runs on omp with the default model `f2-stage-gateway/marutai/MAI-Pro`; codex and claude credits are never spent without an explicit captain decision.
+   Every planned dispatch is pinned to omp and the privately configured propulsion model; another harness or model requires an explicit captain decision.
    `config/project-capacity` capacity is `bin/fm-propel-pane-check.sh`'s verdict, delegated to `bin/fm-project-capacity-lib.sh`.
 5. **RECURSE.** A readiness blocked on an open bead routes the blocker as the new actionable item; the waiter keeps waiting.
 6. **TIME GATES.** `deferred` beads, or `defer_until`-gated ones, are external waits surfaced through the durable wake queue at their gate date instead of active assignment.

@@ -8,10 +8,9 @@
 # Rows (top-level agents[]):
 # bd resolves its board from the current working directory; running from
 # this script's directory would silently answer with the nearest enclosing
-# checkout's board. FM_BOARD (default /Users/jubin/Git/jubin-marut/beads,
-# the shared captain board used by bin/fm-propel.sh) pins the chdir target
-# every bd invocation runs under. Exported below so the python heredoc can
-# read it.
+# checkout's board. FM_BOARD overrides config/beads-board, resolved by
+# fm-bead-board-lib.sh, and pins the working directory for every bd invocation.
+# An unconfigured board is an explicit partial read, never the caller's board.
 
 #   - every hand-launched peer in state/peers/peers.tsv (name<TAB>label rows),
 #   - every Firstmate-managed worker with state/<id>.meta (its own local copy),
@@ -68,9 +67,13 @@
 # Dependency: python3 (already required for the Herdr protocol-16 paths).
 
 set -euo pipefail
-FM_HOME=${FM_HOME:-$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd -P)}"
+FM_HOME="${FM_HOME:-$FM_ROOT}"
 export FM_HOME
-BOARD=${FM_BOARD:-/Users/jubin/Git/jubin-marut/beads}
+# shellcheck source=bin/fm-bead-board-lib.sh
+. "$SCRIPT_DIR/fm-bead-board-lib.sh"
+BOARD=${FM_BOARD:-$(fm_bead_board_dir || true)}
 export BOARD
 exec python3 - "$@" <<'PY'
 import datetime
@@ -402,9 +405,10 @@ for child in children:
 captain_beads = []
 
 try:
-    board_cwd = board if board else None
+    if not board:
+        raise ValueError('shared board is not configured; set config/beads-board or FM_BOARD')
     payload = run(['bd', '--readonly', '--sandbox', '--json', 'list', '--status', 'open', '--limit', '0'],
-                  cwd=board_cwd)
+                  cwd=board)
     issues = payload if isinstance(payload, list) else payload.get('issues')
     if not isinstance(issues, list):
         raise ValueError('bd list did not return an issue array')

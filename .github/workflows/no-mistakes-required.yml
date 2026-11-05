@@ -23,9 +23,8 @@ jobs:
   check:
     name: PR must be raised via no-mistakes
     runs-on: ubuntu-latest
-    # The gate is authoritative on the parent repo only. Forks ship their own
-    # delivery posture (jubin-marut runs direct-PR with no-mistakes disabled
-    # per captain decision); on any other repository the job skips rather than
+    # The gate is authoritative on the parent repo only. Forks choose their
+    # own delivery posture; on any other repository the job skips rather than
     # blocks, so upstream keeps the guard while forks inherit it quietly.
     if: >-
       github.repository == 'kunchenguid/firstmate' &&

@@ -9,7 +9,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 TMP_ROOT=$(fm_test_tmproot fm-propel)
 FM_TEST_CLEANUP_DIRS+=("$TMP_ROOT")
-MAI_PRO='f2-stage-gateway/marutai/MAI-Pro'
+PINNED_MODEL='fixture-provider/fixture-model'
 
 PROPEL="$ROOT/bin/fm-propel.sh"
 PANE_CHECK="$ROOT/bin/fm-propel-pane-check.sh"
@@ -17,6 +17,14 @@ FIXTURE="$TMP_ROOT/fixture"
 HOME_DIR="$TMP_ROOT/home"
 BOARD="$TMP_ROOT/board"
 mkdir -p "$FIXTURE" "$HOME_DIR/state" "$HOME_DIR/config" "$HOME_DIR/data" "$HOME_DIR/bin"
+unset FM_CONFIG_OVERRIDE FM_BOARD
+printf '{"harness":"omp","model":"%s"}\n' "$PINNED_MODEL" \
+  > "$HOME_DIR/config/propel-profile.json"
+# Propulsion's pin must not replace or depend on global dispatch rules/defaults.
+printf '%s\n' '{"default":[{"harness":"codex","model":"fixture-global"},{"harness":"cursor","model":"fixture-other"}]}' \
+  > "$HOME_DIR/config/crew-dispatch.json"
+printf 'firstmate\nplatform\nagents\nfixture-service\n' > "$HOME_DIR/config/propel-domains"
+printf '%s\n' "$BOARD" > "$HOME_DIR/config/beads-board"
 
 # Missing tools make this suite impossible rather than green: the dispatcher
 # refuses the same way in production.
@@ -53,13 +61,13 @@ bead_create() { # <title> <labels-csv> [priority]
 
 ID_SHIP=$(bead_create 'Ship propulsion mechanism' firstmate 1)
 ID_SCOUT=$(bead_create 'Investigate roster drift' 'research,agents' 2)
-ID_CAPTAIN=$(bead_create 'Captain sync with TJ' captain 1)
+ID_CAPTAIN=$(bead_create 'Captain sync with Fixture' captain 1)
 ID_BLOCKER=$(bead_create 'Route the blocker first' platform 2)
 ID_WAITER=$(bead_create 'Blocked waiter keeps waiting' platform 2)
 ID_INFLIGHT=$(bead_create 'Already In flight in the backlog' agents 2)
 ID_META=$(bead_create 'Under way fm-bridge-want' agent-work 2)
-ID_GATE=$(bead_create 'Deferred until a gate' auditless 2)
-ID_MODEL=$(bead_create 'Needs a specific model' 'firstmate,model:gpt-x' 3)
+ID_GATE=$(bead_create 'Deferred until a gate' fixture-service 2)
+ID_MODEL=$(bead_create 'Needs a specific model' 'firstmate,model:fixture-other' 3)
 
 bd_board link "$ID_WAITER" "$ID_BLOCKER" --type blocks >/dev/null \
   || fail "bd link failed wiring $ID_WAITER behind $ID_BLOCKER"
@@ -121,7 +129,7 @@ chmod +x "$FAKEBIN/herdr"
 # Read-only home guard: the dispatcher reads state/data/config; only the
 # fixture's own PLAN path writes, so trip on any write outside the plan row.
 export PATH="$FAKEBIN:$PATH"
-export FM_HOME=$HOME_DIR FM_ROOT_OVERRIDE=$ROOT FM_BOARD=$BOARD HERDR_SESSION=default
+export FM_HOME=$HOME_DIR FM_ROOT_OVERRIDE=$ROOT HERDR_SESSION=default
 
 # Roster reads against the fixture: bin/fm-peer-roster.sh is production, so the
 # only fabrication is herdr out of fixture files plus bd via the real scratch
@@ -143,7 +151,7 @@ cat > "$FIXTURE/agents.json" <<'JSON'
 JSON
 
 # --- Baseline (wake mode): fresh dispatch surfaces exactly once, with the
-# default MAI-Pro harness on every planned dispatch. --------------------------
+# operator-selected model on every planned dispatch. --------------------------
 "$PANE_CHECK" "$HOME_DIR" > /dev/null || fail 'pane probe reported the fixture home not-free'
 printf 'note [at=%s]: fresh\n' "$(date +%s)" > "$HOME_DIR/state/peers/alice.log"
 "$PROPEL" --emit-wakes > "$FIXTURE/run1.out" 2> "$FIXTURE/run1.err" || {
@@ -152,15 +160,15 @@ printf 'note [at=%s]: fresh\n' "$(date +%s)" > "$HOME_DIR/state/peers/alice.log"
 }
 count=$(grep -c 'propel: dispatch' "$FIXTURE/run1.out" || true)
 [ "$count" -eq 2 ] || { cat "$FIXTURE/run1.out" >&2; fail 'baseline run did not surface one dispatch per fresh idle slot'; }
-grep -Fq "propel: dispatch $ID_SHIP -> alice (harness omp, model $MAI_PRO)" "$FIXTURE/run1.out" \
-  || fail 'the ship-class bead did not dispatch to the idle pane on the default MAI-Pro harness'
-grep -Fq "propel: captain decision $ID_CAPTAIN: Captain sync with TJ" "$FIXTURE/run1.out" \
+grep -Fq "propel: dispatch $ID_SHIP -> alice (harness omp, model $PINNED_MODEL)" "$FIXTURE/run1.out" \
+  || fail 'the ship-class bead did not dispatch to the idle pane on the configured model'
+grep -Fq "propel: captain decision $ID_CAPTAIN: Captain sync with Fixture" "$FIXTURE/run1.out" \
   || fail 'captain decision was not announced as an external wake'
-grep -Fq "propel: captain decision $ID_MODEL: requires model gpt-x" "$FIXTURE/run1.out" \
+grep -Fq "propel: captain decision $ID_MODEL: requires model fixture-other" "$FIXTURE/run1.out" \
   || fail 'an explicit model requirement was not surfaced as a captain decision'
 grep -Fq "propel: gate $ID_GATE clears at" "$FIXTURE/run1.out" \
   || fail 'deferred bead never surfaced as its time gate wake'
-pass 'wake mode announces one fresh MAI-Pro dispatch plus captain and gate surfaces'
+pass 'wake mode announces fresh configured-model dispatches plus captain and gate surfaces'
 
 # Wake announcement is idempotent once every surface has been published.
 "$PROPEL" --emit-wakes > "$FIXTURE/run2.out"
@@ -170,8 +178,8 @@ pass 'repeated polls in wake mode print nothing; wake gates are idempotent'
 # Dry-run prints the verdict and the full plan, including the pinned harness.
 "$PROPEL" > "$FIXTURE/run3d.out"
 assert_contains "$(cat "$FIXTURE/run3d.out")" 'propel ' 'the dry-run plan summary opens with the dispatch verdict'
-grep -Fq $'harness\tomp '"$MAI_PRO" "$FIXTURE/run3d.out" \
-  || fail 'dry-run plan did not record the default MAI-Pro model on the dispatch'
+grep -Fq $'harness\tomp '"$PINNED_MODEL" "$FIXTURE/run3d.out" \
+  || fail 'dry-run plan did not record the operator-selected model on the dispatch'
 grep -Fq $'\troster\talice' "$FIXTURE/run3d.out" \
   || fail 'dry-run plan did not pair the idle pane with the ship-class bead'
 grep -Fq "$ID_WAITER"$'\troute-blocker\t'"$ID_BLOCKER" "$FIXTURE/run3d.out" \
@@ -235,3 +243,35 @@ pass 'a missing board is verdicted unknown, not guessed dispatch'
 "$PANE_CHECK" "$HOME_DIR" > "$FIXTURE/pane.out"
 assert_contains "$(cat "$FIXTURE/pane.out")" 'free' 'a home with no declared capacity answers free'
 pass 'pane probe fails closed on missing evidence'
+
+# No operator profile means no model, not an arbitrary dispatch fallback.
+mv "$HOME_DIR/config/propel-profile.json" "$FIXTURE/operator-profile.json"
+if "$PROPEL" --emit-wakes --only-tasks="$ID_SHIP" \
+    > "$FIXTURE/no-profile.out" 2> "$FIXTURE/no-profile.err"; then
+  fail 'missing operator profile still allowed dispatch'
+fi
+[ ! -s "$FIXTURE/no-profile.out" ] || fail 'missing profile emitted a wake'
+pass 'unconfigured model fails closed without a dispatch wake'
+
+# Multiple propulsion candidates cannot silently substitute for an operator pin.
+jq -nc '[{harness:"omp",model:"fixture-provider/first"},
+         {harness:"omp",model:"fixture-provider/second"}]' \
+  > "$HOME_DIR/config/propel-profile.json"
+if "$PROPEL" --emit-wakes --only-tasks="$ID_SHIP" \
+    > "$FIXTURE/ambiguous-profile.out" 2> "$FIXTURE/ambiguous-profile.err"; then
+  fail 'multiple propulsion profiles selected an arbitrary model'
+fi
+[ ! -s "$FIXTURE/ambiguous-profile.out" ] || fail 'ambiguous profile emitted a wake'
+mv "$FIXTURE/operator-profile.json" "$HOME_DIR/config/propel-profile.json"
+pass 'propulsion requires one pin independently of global dispatch defaults'
+
+# Without the shared-board setting, cwd is never an implicit store selector.
+mv "$HOME_DIR/config/beads-board" "$FIXTURE/shared-board"
+if "$PROPEL" --emit-wakes > "$FIXTURE/no-board.out" 2> "$FIXTURE/no-board.err"; then
+  fail 'unconfigured shared board still allowed dispatch'
+fi
+[ ! -s "$FIXTURE/no-board.out" ] || fail 'unconfigured shared board emitted a wake'
+grep -Fq 'shared board is not configured' "$FIXTURE/no-board.err" \
+  || fail 'missing shared board was not reported explicitly'
+mv "$FIXTURE/shared-board" "$HOME_DIR/config/beads-board"
+pass 'unconfigured shared board fails closed rather than inheriting cwd'

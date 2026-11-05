@@ -43,12 +43,12 @@ accepts 'https://user:token@git.example.com/org/app.git'
 accepts 'git@host.internal:group/app.git'
 accepts 'build-mac.local:/srv/git/app.git'
 accepts 'git@my_host:app.git'
-accepts 'git@192.168.1.10:/srv/git/app.git'
+accepts 'git@192.0.2.10:/srv/git/app.git'
 accepts 'ssh://git@[2001:db8::1]:22/srv/git/app.git'
 accepts '[2001:db8::1]:/srv/git/app.git'
 accepts 'git@[2001:db8::1]:/srv/git/app.git'
-accepts 'https://github.com/kunchenguid/firstmate.git'
-accepts 'git@github.com:kunchenguid/firstmate.git'
+accepts 'https://github.com/fake-owner/fixture-repo.git'
+accepts 'git@github.com:fake-owner/fixture-repo.git'
 accepts "file://$TMP_ROOT/source.git"
 accepts "$TMP_ROOT/source.git"
 

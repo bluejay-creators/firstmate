@@ -108,7 +108,7 @@ Untracked files and directories whose names begin with `scratchpad` are also git
 
 - The [`bin/fm-fleet-snapshot.sh` header](../bin/fm-fleet-snapshot.sh) owns the snapshot's event-time and age fields, including secondmate parent-event projections.
 
-- [`bin/fm-pr-merge.sh`'s header and help](../bin/fm-pr-merge.sh) own central private merge-policy configuration, nonproduction and non-deploying feature-target grants, exact-head local-test receipts, repository-owner GitHub account selection, taskless merging, and private decision audits.
+- [`bin/fm-pr-merge.sh`'s header and help](../bin/fm-pr-merge.sh) own central private merge-policy configuration, optional private nonproduction-environment extensions, nonproduction and non-deploying feature-target grants, exact-head local-test receipts, repository-owner GitHub account selection, taskless merging, and private decision audits.
 
 - Wake, watcher, away-mode, and Relay-specific state mechanics remain with their named scripts and reference sections rather than being duplicated into one exhaustive state tree here.
 
@@ -403,6 +403,7 @@ Absent or empty config is the historical behavior: firstmate makes no `bd` call 
 With the config in place, [`bin/fm-captain-hold.sh`](../bin/fm-captain-hold.sh) mirrors every hold into one `captain`-label bead assigned to the captain and closes it with the recorded answer on every resolution path, and [`bin/fm-captain-ask.sh`](../bin/fm-captain-ask.sh) files firstmate's own direct asks on the same board.
 [`bin/fm-captain-beads-check.sh`](../bin/fm-captain-beads-check.sh) delivers each closed captain bead's close reason to the requester it names (`requester:<name>` label or the `fm-requester:` body line the mirroring writes), deduped once per bead; its `install` subcommand hash-binds it as this home's watcher check.
 Bead mirroring never gates the hold or the answer: a broken board surfaces one explicit warning while the backlog record stands.
+The peer roster and propulsion dispatcher use the same private board setting; [propulsion configuration](propel.md#private-configuration) owns their override precedence and required dispatch settings.
 
 Native permission snapshots use the same board through
 `fm-captain-ask.sh --approval-event FILE`; `--approval-protocol` reports
@@ -736,16 +737,22 @@ The count and window come from the silent-absorption ledger `state/.fm-routine-a
 
 ## MAI routing (config/mai-routing)
 
-The optional local, gitignored `config/mai-routing` presence flag opts this home into routing bounded mechanical classifications through self-hosted MAI-Pro on the F2 stage gateway rather than spending the primary thread on them.
+The optional local, gitignored `config/mai-routing` presence flag opts this home into routing bounded mechanical classifications through its privately configured inference service rather than spending the primary thread on them.
 With the flag absent the only consumer, `bin/fm-ask-mai-wake.sh`, exits 2 and the primary thread handles wakes exactly as before.
 
-`bin/fm-ask-mai.sh` is the fail-closed one-shot call surface: fixed model `marutai/MAI-Pro` (never selectable by argument or environment), `temperature=0`, `reasoning_effort=low`, stdout carries only the answer, and every non-happy path - transport, HTTP error after bounded retry, empty or null content, or `finish_reason=length` - exits non-zero.
-Escalation is the caller's own thread, never another gateway model.
+Configure the inference service in private `config/mai-gateway.json`; [`bin/fm-ask-mai.sh`'s header and help](../bin/fm-ask-mai.sh) own its required `url`, `token_command`, and `model` fields and exact invocation contract.
+The config directory follows `FM_CONFIG_OVERRIDE`, otherwise the effective home selected by `FM_HOME`, `FM_ROOT_OVERRIDE`, then the tracked code root.
+There is no built-in endpoint, credential helper, or model, and absent or invalid required configuration fails before an inference request.
+The existing `F2_GATEWAY_URL` and `F2_GATEWAY_TOKEN_CMD` environment overrides remain supported for the endpoint and credential helper, but the model comes only from the private file.
+Setting `FM_MAI_MODEL`, even to an empty value, or supplying an extra model argument is refused.
+
+`bin/fm-ask-mai.sh` is the fail-closed one-shot call surface: the model is fixed by private home configuration rather than selected by a call argument or environment, `temperature=0`, `reasoning_effort=low`, stdout carries only the answer, and every non-happy path - transport, HTTP error after bounded retry, empty or null content, or `finish_reason=length` - exits non-zero.
+Escalation is the caller's own thread, never another model.
 
 Privacy tiers: content that must stay local is refused outright by `bin/fm-ask-mai-redacted.sh` - `data/captain*.md`, `data/learnings.md`, `data/*/brief.md`, and `.env` references, plus any line carrying an `@captain`, `@private`, or `@secret` marker.
-Material that may reach MAI-Pro only after redaction passes through that wrapper first: full PR URLs collapse to `#<number>`, `~/Git` and absolute home prefixes collapse to basenames, and any path containing a `state/` component collapses to its basename.
+Material that may reach the inference service only after redaction passes through that wrapper first: full PR URLs collapse to `#<number>`, `~/Git` and absolute home prefixes collapse to basenames, and any path containing a `state/` component collapses to its basename.
 
-`bin/fm-ask-mai-wake.sh <home> <wake-reason>` classifies one wake reason into `absorb`, `surface`, or `escalate`; an out-of-set or failed answer always resolves to `escalate`, so an MAI-Pro failure lands the wake back on the primary thread.
+`bin/fm-ask-mai-wake.sh <home> <wake-reason>` classifies one wake reason into `absorb`, `surface`, or `escalate`; an out-of-set or failed answer always resolves to `escalate`, so an inference failure lands the wake back on the primary thread.
 The spend-or-judgment classifications in the design report's routing rubric stay on the primary thread: spend, dispatch, merge, persona, captain-facing text, and multi-artifact judgment.
 
 ## Parked-gate wait deferral (config/wedge-defer-parked-gate)

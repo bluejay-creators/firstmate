@@ -608,7 +608,7 @@ IFS= read -r -d '' WORKING_POSTURE <<EOF || true
 # Working posture
 Act-and-note: for a bounded reversible step inside this brief's stated scope, make the reasonable call and append a \`note [at=<epoch>]: {call made}\` line to the status file; never write \`blocked\` and park.
 Only ask when the choice is irreversible, destructive, crosses into a lane this brief doesn't own, would need captain credential or merge authority, or is genuinely out of scope.
-Park-with-named-wait: when you must stop, append one \`$PAUSED_VERB [at=<epoch>]: waiting on <external event>\` line - for example \`$PAUSED_VERB [at=<epoch>]: waiting on platform deploying rev 300 to kstage\` or \`$PAUSED_VERB [at=<epoch>]: waiting on captain word on PR #N\` - then STOP appending status until that event clears it.
+Park-with-named-wait: when you must stop, append one \`$PAUSED_VERB [at=<epoch>]: waiting on <external event>\` line - for example \`$PAUSED_VERB [at=<epoch>]: waiting on platform deploying rev 300 to staging\` or \`$PAUSED_VERB [at=<epoch>]: waiting on captain word on PR #N\` - then STOP appending status until that event clears it.
 That named wait is firstmate's signal to stop waiting-too-long alerts; it replaces the old 60-minute quiet-pane alert for a declared wait.
 Status freshness: append exactly one \`working [at=<epoch>]: <phase> - <short detail>\` status line at every phase change (setup, read-only exploration, deciding, implementing, testing, validating, PR-published, cleanup, done) so the status file alone tells firstmate where you are.
 Firstmate watches the status file and peers into your pane only as an exception, to diagnose a genuinely stuck or halting state; pane reads are not routine supervision.

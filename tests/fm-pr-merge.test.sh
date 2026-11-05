@@ -4584,7 +4584,7 @@ write_fixture_grant() {
   local config=$1
   mkdir -p "$config"
   cat > "$config/merge-policy.json" <<'JSON'
-{"version":1,"bindings":[{"repository":"https://github.com/example/repo","base":"main","system":"platform","environment":"kstage","autonomous_paths":["src/*"]}],"grants":[{"id":"fixture-green-grant","repository":"https://github.com/example/repo","system":"platform","environment":"kstage","all_checks_green":true,"report_after":true}],"sensitive_paths":[]}
+{"version":1,"bindings":[{"repository":"https://github.com/example/repo","base":"main","system":"platform","environment":"fixture-stage","autonomous_paths":["src/*"]}],"grants":[{"id":"fixture-green-grant","repository":"https://github.com/example/repo","system":"platform","environment":"fixture-stage","all_checks_green":true,"report_after":true}],"sensitive_paths":[],"extra_nonproduction_environments":["fixture-stage"]}
 JSON
   chmod 0600 "$config/merge-policy.json"
 }
