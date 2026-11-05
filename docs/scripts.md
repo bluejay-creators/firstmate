@@ -34,6 +34,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-captain-hold.sh`     | Hold tasks for the captain, record the captain's answers, gate investigation completion, and report record divergence between the status log and the backlog |
 | `fm-decision-hold.sh`    | One-release compatibility shim mapping the retired decision commands onto fm-captain-hold.sh |
 | `fm-captain-ask.sh`      | File firstmate's own direct captain asks on the captain board (config/beads-board) and close them with the captain's answer |
+| `fm-prompt-shadow.py`    | External Herdr/OMP prompt classifier and stall-card observer, shadow-only with no approval input; `--help` owns reviewed grants, private findings, routing and native-capture limits |
 | `fm-captain-beads-check.sh` | One-shot (or watcher-installed) delivery of closed captain beads' close reasons to their recorded requesters, deduped once per bead |
 | `fm-bead-board-lib.sh`   | Shared config/beads-board resolution and bd surface for the captain-request loop consumers |
 | `fm-brief.sh`            | Scaffold ship (explicit `--mode`, plus the project's registered `--forge`), scout, secondmate-charter, and Herdr-lab briefs, with Captain's intent and Firstmate spec subsections on ship/scout |
