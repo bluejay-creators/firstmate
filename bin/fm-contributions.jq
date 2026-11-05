@@ -46,9 +46,8 @@ def projected($input; $saved; $now; $max_age):
          (.id == $k.task or ((.links // []) | index($k.url)) != null))
          | select(.hold_bucket == "live")] | first) as $hold
     | ([$input.tasks[]? | select(.id == $k.task and .pr.url == $k.url)
-       | {head:(.pr.head | select(. != null and . != "")), merge_authority:(.merge_authority // "unknown")}] | first) as $task
+       | {head:(.pr.head | select(. != null and . != ""))}] | first) as $task
     | ($task.head // null) as $recorded_head
-    | ($task.merge_authority // "unknown") as $merge_authority
     | ($record.observation // {}) as $o
     | (if $record.error == null and $record.observation != null and ($o.head | sha) then $o.head else null end) as $observed_head
     | (($record.checked_at // "") | try fromdateiso8601 catch null) as $checked
@@ -93,8 +92,6 @@ def projected($input; $saved; $now; $max_age):
        elif $verdict != null and $verdict.actor == "captain" then
          {actor:"fleet",reason:"record the unresolved arbitration as a captain hold"}
        elif $o.review_decision == "REVIEW_REQUIRED" then {actor:"maintainer",reason:"review required"}
-       elif $o.can_merge == true and $merge_authority == "away" then
-         {actor:"fleet",reason:"checks green; merge is authorized by delivery posture"}
        elif $o.can_merge == true then {actor:"captain",reason:"checks green; merge approval needed"}
        else {actor:"maintainer",reason:"delivery awaits the maintainer"} end) as $action
     | $k + {kind:($record.kind // (if ($k.url | contains("/issues/")) then "issue" else "pr" end)),

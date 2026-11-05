@@ -1,8 +1,10 @@
 Mode: omp (Oh My Pi) extension background wake.
 
+For an omp secondmate, the renderer selects the [inbox-first protocol](omp-secondmate.md).
+
 When this session owns supervision and away mode is not active:
-1. Drain first with `bin/fm-wake-drain.sh`.
-   After handling all emitted wakes and reconciling open decisions and unread status lines, run the exact `--ack-through` command printed as `WAKE_ACK_REQUIRED`; until then the work remains durable for idempotent re-handling after interruption.
+1. Drain first with `bin/fm-wake-drain.sh --brief --ack`.
+   That call prints one line per queued wake (kind · task · first ~100 chars), acks itself when everything presented absorbed as routine, or prints the exact `WAKE_ACK_REQUIRED` `--ack-through` command to run after handling otherwise; until then the work remains durable for idempotent re-handling after interruption.
 2. Confirm the omp primary auto-loaded both project extensions from `.omp/extensions/`; omp has no project-trust gate, so a plain `omp` started with this home as its working directory loads them with no dialog.
    If `bin/fm-session-start.sh` reported the omp extensions as not loaded, restart omp inside this home; pass `-e __FM_OMP_TURNEND_EXT__ -e __FM_OMP_EXT__` only when omp must start from another directory, because omp loads a file named both ways twice.
 3. Initial process cycle only: make the one required `fm_watch_arm_omp` call; if startup already owned the fleet lock, this is an ownership-based no-op.
@@ -19,6 +21,9 @@ When this session owns supervision and away mode is not active:
    A redundant call while the extension owns an arm child or scheduled retry is an ownership-based `watcher: unchanged` no-op, not an independent health claim.
 11. Never use shell `&` for watcher supervision.
    The arm mechanism above is extension-owned, not a model tool call, but a manual recovery probe that backgrounds, pipes, or bundles the arm is denied automatically by the pre-tool seatbelt (`bin/fm-arm-pretool-check.sh`, wired into the turn-end guard extension at `__FM_OMP_TURNEND_EXT__`).
+12. An in-process subagent (task tool, /tan clone) is not a session replacement: it rebinds the extension factories with `ctx.agent.kind === "sub"`, so the watcher and turn-end extensions stand down entirely and the child never claims, consumes, retires, or re-arms the supervising generation or its handoff.
+   Bounded read-only or short investigative work should run as such a subagent from this session rather than an `fm-spawn` worker pane; [`.agents/skills/harness-adapters/references/harness/omp.md`](../../.agents/skills/harness-adapters/references/harness/omp.md) owns the dispatch-size rule and `docs/verification/omp.md` owns the safety evidence.
+
 
 The turn-end guard on omp is structural, not advisory: `__FM_OMP_TURNEND_EXT__` answers omp's blocking `session_stop` hook, and when `bin/fm-turnend-guard.sh` returns 2 it forces one continuation carrying the guard text, bounded to one per turn by the `stop_hook_active` flag omp sets on the continuation's own stop.
 An interrupted turn never raises `session_stop`, so a supervisor-initiated interrupt is not guarded; `bin/fm-control.sh` owns that postcondition.

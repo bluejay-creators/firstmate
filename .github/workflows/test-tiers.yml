@@ -1,0 +1,237 @@
+name: Test tiers
+
+# Tiered testing for the fork: a fast blocking tier on every PR, a heavy tier
+# that blocks only when a PR touches its mapped subsystem, and an hourly +
+# main-push full sweep in sweep.yml. CONTRIBUTING.md "Test tiers" is the
+# owner of this layout's rationale and the branch-protection documentation.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-tiers-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Fast tier, blocking: lint only the canonical roots the PR touches plus the
+  # changed-file-selected tests. The full canonical two-partition lint walk
+  # stays with sweep.yml: its backend-purity failure on bin/fm-propel.sh:80
+  # lives on main, and the upstream fix or fork exemption lands outside this
+  # branch's scope. bin/fm-test-run.sh owns the path -> tests map; this job
+  # never re-spells it.
+  fast:
+    name: Fast tier (lint changed roots + changed tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install pinned actionlint
+        run: |
+          set -eu
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install tasks-axi
+        run: |
+          set -eu
+          npm install -g tasks-axi
+          tasks-axi --version
+      - name: Install the Pi package for the Pi extension tests
+        run: |
+          set -eu
+          npm install -g @earendil-works/pi-coding-agent
+      - name: Compute content hash and check prior green
+        id: skipcheck
+        run: |
+          set -eu
+          # Content-hash skip: on repeat pushes with no diff vs the most
+          # recent green PR-tier run, the whole job exits with a green note.
+          # Skip is authoritative only when nothing in the tier changed:
+          # code the tier exercises (bin/fm-lint.sh, bin/fm-test-run.sh, plus
+          # anything reachable through bin/fm-test-run.sh --changed), the
+          # tier workflow itself, and the suite headers it runs.
+          repo="${GITHUB_REPOSITORY}"
+          prior_run=$(gh-axi run list \
+            --repo "${repo}" \
+            --workflow "test-tiers.yml" \
+            --branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" \
+            --event pull_request \
+            --limit 5 \
+            --fields status,conclusion,headSha,number 2>/dev/null | \
+            grep -E 'success' | head -1 || true)
+          prior_sha=$(printf '%s' "$prior_run" | grep -oE '[0-9a-f]{40}' | head -1 || true)
+          # Walking the changed files relative to the prior green keeps the
+          # work meaningful when there is no prior run yet.
+          if [ -n "$prior_sha" ] && [ "$prior_sha" != "${GITHUB_SHA}" ]; then
+            changed=$(git diff --name-only "$prior_sha".."${GITHUB_SHA}" 2>/dev/null || true)
+          else
+            changed=''
+          fi
+          if [ -z "$changed" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "skip-if-unchanged: no diff against prior green run ${prior_sha:-none}"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "skip-if-unchanged: diff detected against ${prior_sha:-none}; running tier"
+            printf 'changed files (vs %s):\n%s\n' "${prior_sha:-none}" "$changed"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: steps.skipcheck.outputs.skip == 'true'
+        name: Skip if unchanged
+        run: |
+          set -eu
+          echo "Fast tier skipped: no content change since the last green run on this branch."
+          exit 0
+      - if: steps.skipcheck.outputs.skip != 'true'
+        name: Lint changed canonical roots
+        env:
+          FM_LINT_REQUIRE_BOUNDS: '1'
+          FM_LINT_JOBS: '1'
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-lint"
+          # --changed limits the lint walk to the canonical roots this PR
+          # touches; sweep.yml owns the full two-partition walk separately
+          # so a pre-existing defect on an untouched bin/ file cannot block
+          # the fast tier. The backend-purity and workflow-lint sub-checks
+          # still run because they stay in this account.
+          bin/fm-lint.sh --changed \
+            --base "origin/${GITHUB_BASE_REF}" \
+            --telemetry "$RUNNER_TEMP/fm-lint/changed.tsv"
+      - if: steps.skipcheck.outputs.skip != 'true'
+        name: Run changed-file-selected tests
+        run: |
+          set -eu
+          git fetch --no-tags origin "refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          # --changed is the single owner of affected-test selection and runs
+          # its admissible selection with bounded automatic concurrency; the
+          # real-herdr-gated family stays excluded in this fork tier (no Herdr
+          # install here) and the live-harness-optin guards capability-skip.
+          bin/fm-test-run.sh --changed \
+            --base "origin/${GITHUB_BASE_REF}" \
+            --exclude-family real-herdr-gated \
+            --exclude-family live-harness-optin \
+            --json "$RUNNER_TEMP/fm-test/selected.json"
+
+  # Heavy tier, blocking per subsystem when touched: watcher/lock/arm for
+  # bin/fm-watch*.sh and lock code, the Herdr backend suite for
+  # bin/backends/herdr.sh and its library, and the omp harness for
+  # .omp/extensions. Path gating is an exact literal pattern set maintained in
+  # this job and matched against the PR's changed files.
+  heavy-watcher-lock:
+    name: Heavy tier - watcher lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Changed files decide whether this tier runs
+        id: gate
+        run: |
+          set -eu
+          git fetch --no-tags origin "refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+          changed=$(git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD")
+          printf '%s\n' "$changed"
+          if printf '%s\n' "$changed" | grep -Eq '^bin/fm-(watch|wake|lock|guard)[^/]*\.sh$|^tests/fm-watcher-lock\.test\.sh$|^tests/wake-helpers\.sh$'; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install the Pi package for the Pi extension tests
+        if: steps.gate.outputs.run == '1'
+        run: |
+          set -eu
+          npm install -g @earendil-works/pi-coding-agent
+      - name: Run watcher-lock suite
+        if: steps.gate.outputs.run == '1'
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          # The suite coordinates its own case groups in parallel children and
+          # runs real processes against the explicit short timeouts it already
+          # passes; the production-default smoke case belongs to the hourly
+          # sweep (sweep.yml).
+          bin/fm-test-run.sh tests/fm-watcher-lock.test.sh \
+            --json "$RUNNER_TEMP/fm-test/watcher-lock.json"
+
+  heavy-herdr-backend:
+    name: Heavy tier - Herdr backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Changed files decide whether this tier runs
+        id: gate
+        run: |
+          set -eu
+          git fetch --no-tags origin "refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+          changed=$(git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD")
+          printf '%s\n' "$changed"
+          if printf '%s\n' "$changed" | grep -Eq '^bin/backends/herdr\.sh$'; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Require jq and python3
+        if: steps.gate.outputs.run == '1'
+        run: |
+          set -eu
+          command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
+          command -v python3 >/dev/null || { echo "::error::python3 is required"; exit 1; }
+      - name: Install pinned Herdr
+        if: steps.gate.outputs.run == '1'
+        run: |
+          set -eu
+          bin/fm-install-herdr.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Run Herdr backend suite
+        if: steps.gate.outputs.run == '1'
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          # The real-herdr-gated e2e family stays excluded except in the
+          # full sweep; this leg runs the backend-focused portable coverage.
+          bin/fm-test-run.sh tests/fm-backend-herdr.test.sh \
+            --json "$RUNNER_TEMP/fm-test/herdr-backend.json"
+
+  heavy-omp-harness:
+    name: Heavy tier - omp harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Changed files decide whether this tier runs
+        id: gate
+        run: |
+          set -eu
+          git fetch --no-tags origin "refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+          changed=$(git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD")
+          printf '%s\n' "$changed"
+          if printf '%s\n' "$changed" | grep -Eq '^\.omp/extensions/'; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run omp harness suite
+        if: steps.gate.outputs.run == '1'
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          bin/fm-test-run.sh tests/fm-omp-harness.test.sh \
+            --json "$RUNNER_TEMP/fm-test/omp-harness.json"

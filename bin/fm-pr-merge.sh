@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Merge a task's PR or MR after recording pr= and any available pr_head= through
-# bin/fm-pr-check.sh, so teardown can verify landed work after squash merges.
+# Merge a task's PR/MR, or an explicitly taskless PR/MR, through one live
+# forge preflight and the central finite merge policy.
 # The full canonical URL is parsed by bin/fm-pr-lib.sh. A GitHub pull request is
 # addressed through gh by the derived owner and repository; a GitLab merge
 # request is addressed through glab by the project URL rebuilt from the parsed
-# host and path, so any instance works and no host is hardcoded. A Gerrit change
-# is refused outright: that adapter is read-only, and the refusal at the parse
-# below owns why.
+# host and path, so any instance works and no host is hardcoded; a Forgejo
+# pull request is addressed through tea by the derived owner and repository
+# plus a "tea login" resolved fresh from the parsed host on every run. A Gerrit
+# change is refused outright: that adapter is read-only, and the refusal at the
+# parse below owns why.
 #
 # Merge method on GitHub defaults to --squash when the caller passes none of
 # --squash, --merge, --rebase, or --method after the optional -- separator.
+# On Forgejo the merge style defaults to the repository's own
+# default_merge_style, read live, and a merge is refused when it cannot be read.
 # A GitHub merge is refused unless every pre-merge condition holds, each read
 # live at merge time rather than taken from recorded metadata: the pull request
 # is open, not a draft, mergeable, free of conflicts, every unwaived check
@@ -53,7 +57,9 @@
 # required source or producer read. Both are
 # refused while the away-posture record exists, and neither
 # applies on GitLab, where a merge already requires the head pipeline to have
-# succeeded. After gh returns success, GitHub's live state is read back and
+# succeeded, or on Forgejo, where a merge already requires the head's combined
+# commit status to have succeeded. After gh returns success, GitHub's live
+# state is read back and
 # accepted only when the pull request is merged or in the merge queue. gh's
 # GraphQL API supplies that queue-aware read; when that read fails, gh-axi's
 # own view still proves a landed merge, and every outcome it cannot prove
@@ -96,19 +102,41 @@
 # recorded value stale. Reading that state needs glab and jq, and either one
 # absent stops the merge before any state is recorded.
 #
-# Before either forge merge, the task's existing per-task control lock
-# serializes the captain-hold check through the forge command. A still-held or
-# unreadable row refuses before that command, so a captain approval must be
-# recorded as an `answer --release` before this entrypoint is invoked. While
-# an away record exists (a quiet-mode record is a present captain, so its
-# merges stay attended: bin/fm-afk-contract.sh mode) any green merge may
-# proceed under away authority:
-# the record's presence is the whole mechanical fact, and which merge the
-# captain's away words meant is the supervision session's reading
-# (bin/fm-branch-prompt.sh "Postures"). An unreadable record refuses rather
-# than being skipped, neither posture releases a captain hold, and away
-# authority lapses when the record is archived.
-# The authority read and synchronous forge command share the away record's
+# A Forgejo merge is refused unless every pre-merge condition holds, each read
+# live at merge time: the pull request is open, not a draft, mergeable is
+# true, and the combined commit status at the exact current head, read across
+# every status page, is success (an unconfigured status, reported as "none",
+# refuses rather than being treated as nothing to check, the same reading
+# GitLab's null head_pipeline gets above). Every
+# failing condition is reported, not just the first. tea exposes no head-
+# binding flag on its own merge subcommand, so the verified head is instead
+# passed as head_commit_id to a direct call against Forgejo/Gitea's REST API
+# (through "tea api"), which rejects a mismatched value with "head out of
+# date" - verified against a real instance, along with every claim below about
+# tea's and the API's exact behavior. Also unlike gh and glab, that API call
+# reports an HTTP-level failure with exit status 0, so the merge is never
+# judged by its own exit status: only a follow-up read confirming merged=true
+# counts as landed. tea addresses a repository by owner/repository slug only;
+# the host comes from a named "tea login" rather than the URL the way gh and
+# glab take one, so the login registered for the parsed host is re-resolved
+# fresh at merge time (bin/fm-pr-check.sh already required one at arm time,
+# but a login can be renamed or removed afterwards). Reading and merging both
+# need tea and jq, and either one absent stops the merge before any state is
+# recorded. Forgejo has no merge-queue or scheduled-merge concept, so unlike
+# GitHub and GitLab there is no away-mode async/queued case to detect: every
+# accepted Forgejo merge here is immediate, and any caller-passed extra
+# argument beyond a merge method is refused rather than silently dropped,
+# because there is no established translation from a gh/glab-style flag into
+# a Forgejo API field yet.
+#
+# For taskful requests the per-task control lock serializes the captain-hold
+# check through the forge command; unreadable/held metadata refuses, and a
+# captain hold must first be released. Taskless requests use a canonical-URL
+# lock, never create task metadata, and publish a durable role-routed outcome.
+# Neither an attended session nor the away record constitutes captain approval.
+# The away record changes actor routing and imposes synchronous, all-green,
+# non-sensitive merging, in addition to the policy below.
+# The posture read and synchronous forge command share the away record's
 # cross-subsystem lock, which bin/fm-afk-contract.sh owns, closing the common
 # live-owner TOCTOU; failure to take it refuses before the forge call. Async and
 # queued paths are refused while away. Two confused-agent-grade limitations are
@@ -117,8 +145,8 @@
 # recovery. docs/architecture.md owns those away-merge limits, while
 # docs/captain-hold-lifecycle.md owns the separate merge-to-cleanup residual.
 # A failed forge command releases the lock after it returns. A successful one
-# retains the lock until the accepted merge authority is persisted against the
-# still-matching task metadata.
+# retains the lock until the accepted merge authority and policy audit are
+# persisted (task metadata is revalidated only for a taskful request).
 #
 # Extra args must not include --repo or -R in any form, including a bundled
 # short-option cluster such as -yR, because the repository comes only from the
@@ -135,7 +163,89 @@
 # explicit captain instruction and never skips the live green check, the
 # away-record read, or a captain hold.
 #
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
+# Usage: fm-pr-merge.sh <task-id>|--taskless <pr-url> [--captain-approval <reference>] [--kind <kind>] [--local-test-receipt <path>] [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
+# --captain-approval attests a concrete captain instruction for this URL and
+# verified head; the reference is retained in the private decision audit.
+# This is caller-attested provenance, not OS authentication. --attended-override
+# only enables protected forge flags; it does not imply captain approval.
+# --kind may repeat, and only raises sensitivity: keys, iam, dns, destructive,
+# schema-migration, spend, production-deploy, customer-data-write, outward-message.
+# Unknown kinds refuse.
+#
+# Central policy: config/merge-policy.json in the local root home resolved by
+# fm_firstmate_root_home, read directly on every merge (never inherited).
+# FM_CONFIG_OVERRIDE applies only when this home is that root. An absent file
+# requires captain approval; malformed, ambiguous, or unreadable policy refuses.
+# JSON v1 requires {version:1,bindings:[],grants:[],sensitive_paths:[]}.
+# Optional extra_nonproduction_environments is an array of private environment
+# names extending accepted nonproduction labels and feature-protected refs.
+# Names must be nonempty without surrounding whitespace; duplicates, including
+# case variants, and case-insensitive built-in environment/protected-ref names
+# or default refuse. Names retain exact spelling in bindings, grants and audits.
+# A binding has repository (canonical https repository URL), base (exact live
+# target ref, NOT an inferred environment), system, environment (staging, nonprod,
+# internal, feature, pilot, prod, other or a configured extra nonproduction name),
+# autonomous_paths (fnmatch paths).
+# The operator binding is the authoritative deployment assertion; do not create
+# one from a branch name alone.
+# Only one binding per repository/base is permitted.
+# A grant has id, repository, system (nonempty domain), environment (staging,
+# nonprod, internal, feature or a configured extra nonproduction name),
+# all_checks_green:true, report_after:true.
+# Only one grant may match a binding. Optional required_proof is forge-checks
+# (default), local-tests or forge-or-local-tests. forge-checks requires at least
+# one successful reported forge check and cannot substitute a local receipt.
+# forge-or-local-tests requires successful forge evidence OR a valid receipt.
+# No CI and neutral-only checks are not successful CI proof.
+# local-tests always requires a receipt.
+# A feature binding asserts an exact operator-certified NON-DEPLOYING target;
+# it is never inferred from its name and must use forge-or-local-tests.
+# Feature autonomy reads live repository default-branch metadata and refuses
+# unknown/default targets, main, master, staging, pilot, prod, production and
+# every ref listed in extra_nonproduction_environments.
+# Deployment classification remains the operator's assertion, not a path heuristic.
+# Any grant whose proof needs local evidence uses --local-test-receipt.
+# The receipt is owned regular single-link JSON v1, not writable by others:
+# {version:1,repository:<canonical URL>,number:<positive integer>,base:<live ref>,
+#  head:<exact live SHA>,checks:[{command:<nonempty string>,exit_code:0},...]}.
+# At least one successful check is required. Unknown fields, failed checks and
+# mismatched targets refuse. Commands are recorded, never executed from receipts.
+# This is caller-attested local evidence, not independent runner attestation.
+# Receipt contents and their SHA-256 are retained in the private decision audit.
+# Local evidence never waives a required, red, missing or unreadable forge check.
+# Work-specific grant instances belong in private/work-side config only.
+# sensitive_paths entries have kind (one of --kind's values) and patterns.
+# They add to built-in deterministic sensitive-path signals, never remove them.
+# Patterns are shell-style fnmatch data, not expressions; safe paths cannot
+# cancel sensitivity, and rename sources and destinations are both inspected.
+#
+# Precedence: existing forge/head/check/app/hold/actor guards always apply;
+# pilot/prod or unknown-environment red/missing checks refuse even with approval;
+# while away sensitive/unclassified changes refuse; deterministic sensitivity
+# requires captain approval; pilot/prod always require captain approval; a
+# concrete approval authorizes the remaining attended request; otherwise only
+# an exact nonproduction grant with ALL checks green and every changed path
+# classified by autonomous_paths permits merging, with mandatory outcome report.
+# A named waiver still waives only that exact check and never an unreadable
+# source; it needs concrete approval and an authoritative non-pilot/prod binding.
+# Live changed-file reads for autonomy/away require complete provider responses
+# between matching URL/head/base reads. Unknown/truncated paths refuse, rather
+# than promoting model judgement into authority. Operators must classify
+# semantic risks with --kind as well: path matching cannot understand arbitrary
+# code. This confused-agent-grade guard is not a malicious same-UID sandbox.
+# Decision facts/approval/grant and requested/accepted/landed/queued status are
+# retained in private state/.merge-decision.* JSON, independently of task state.
+#
+# GitHub account selection uses the existing generated ghx owner/account API at
+# BLUEJAY_ACCOUNTS_CONFIG (default
+# $HOME/Git/bluejay-creators/bluejay-setup/config/accounts.generated.sh).
+# The exact repository owner selects its configured login and stored gh token.
+# Missing catalog, owner mapping or account refuses before any target read.
+# The selected token scopes this process and its read/merge/outcome helpers;
+# global active auth is never switched. Only account id/login enters the audit.
+# Taskless merges publish through the same role-routed durable outcome transport
+# without inventing a task or arming a task poll; an unconfirmed/queued request
+# must be rechecked by its canonical URL and is never reported as landed.
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
 # an auto-merge-queued or unconfirmed request leaves the poll armed and records
@@ -160,14 +270,29 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-merge-authority-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-bead-board-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-bead-board-lib.sh"
+# shellcheck source=bin/fm-bead-eta-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-bead-eta-lib.sh"
+
+if [ "${1:-}" = --help ] || [ "${1:-}" = -h ]; then
+  while IFS= read -r help_line; do
+    case "$help_line" in '#!'*) continue ;; '# '*) printf '%s\n' "${help_line#\# }" ;; '#') printf '\n' ;; *) break ;; esac
+  done < "${BASH_SOURCE[0]}"
+  exit 0
+fi
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
   exit 2
 fi
+TASKLESS=false
 ID=$1
+[ "$ID" != --taskless ] || { TASKLESS=true; ID=; }
 RAW_URL=$2
-if ! fm_pr_task_id_valid "$ID" || ! fm_pr_url_parse "$RAW_URL"; then
+if { [ "$TASKLESS" != true ] && ! fm_pr_task_id_valid "$ID"; } || ! fm_pr_url_parse "$RAW_URL"; then
   echo "error: invalid PR merge request" >&2
   exit 2
 fi
@@ -196,8 +321,30 @@ shift 2
 ATTENDED_OVERRIDE=false
 ALLOW_RED=()
 ALLOW_MISSING=()
+CAPTAIN_APPROVAL=
+LOCAL_TEST_RECEIPT=
+MERGE_KINDS='[]'
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --captain-approval)
+      [ -n "${2:-}" ] && [ -z "$CAPTAIN_APPROVAL" ] || { echo "error: --captain-approval requires one nonempty reference" >&2; exit 2; }
+      CAPTAIN_APPROVAL=$2
+      shift 2
+      ;;
+    --local-test-receipt)
+      [ -n "${2:-}" ] && [ -z "$LOCAL_TEST_RECEIPT" ] || { echo "error: --local-test-receipt requires one nonempty path" >&2; exit 2; }
+      LOCAL_TEST_RECEIPT=$2
+      shift 2
+      ;;
+    --kind)
+      case "${2:-}" in keys|iam|dns|destructive|schema-migration|spend|production-deploy|customer-data-write|outward-message) ;; *) echo "error: unknown merge change kind" >&2; exit 2 ;; esac
+      MERGE_KINDS=$(printf '%s' "$MERGE_KINDS" | jq -c --arg kind "$2" '. + [$kind] | unique') || exit 2
+      shift 2
+      ;;
+    --captain-approval=*|--kind=*|--local-test-receipt=*)
+      echo "error: policy options require separate arguments" >&2
+      exit 2
+      ;;
     --attended-override)
       ATTENDED_OVERRIDE=true
       shift
@@ -230,13 +377,39 @@ while [ "$#" -gt 0 ]; do
     *) break ;;
   esac
 done
-if [ "${#ALLOW_RED[@]}" -gt 0 ] && [ "$PROVIDER" = gitlab ]; then
-  echo "error: --allow-red does not apply to GitLab, where a merge already requires the head pipeline to have succeeded" >&2
+if [ "$ATTENDED_OVERRIDE" = true ] && [ -z "$CAPTAIN_APPROVAL" ]; then
+  echo "error: --attended-override requires a concrete --captain-approval reference" >&2
   exit 2
 fi
-if [ "${#ALLOW_MISSING[@]}" -gt 0 ] && [ "$PROVIDER" = gitlab ]; then
-  echo "error: --allow-missing does not apply to GitLab, where a merge already requires the head pipeline to have succeeded" >&2
-  exit 2
+# --allow-red names one check run to waive, which only GitHub's per-check
+# reading can match. GitLab and Forgejo each collapse their checks into a
+# single head verdict - a head pipeline status and a combined commit status -
+# so there is no per-check name to waive there and the green requirement stays
+# absolute. Refuse the combination rather than accept a flag that would be
+# silently dropped into a refusal the caller cannot explain.
+if [ "${#ALLOW_RED[@]}" -gt 0 ]; then
+  case "$PROVIDER" in
+    gitlab)
+      echo "error: --allow-red does not apply to GitLab, where a merge already requires the head pipeline to have succeeded" >&2
+      exit 2
+      ;;
+    forgejo)
+      echo "error: --allow-red does not apply to Forgejo, where a merge already requires the head's combined commit status to have succeeded" >&2
+      exit 2
+      ;;
+  esac
+fi
+if [ "${#ALLOW_MISSING[@]}" -gt 0 ]; then
+  case "$PROVIDER" in
+    gitlab)
+      echo "error: --allow-missing does not apply to GitLab, where a merge already requires the head pipeline to have succeeded" >&2
+      exit 2
+      ;;
+    forgejo)
+      echo "error: --allow-missing does not apply to Forgejo, where a merge already requires the head's combined commit status to have succeeded" >&2
+      exit 2
+      ;;
+  esac
 fi
 
 caller_has_merge_method() {
@@ -369,10 +542,13 @@ fm_backlog_directory_present "$STATE" "state directory" || {
   echo "error: PR merge refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
   exit 1
 }
-META="$STATE/$ID.meta"
+META=
+[ "$TASKLESS" = true ] || META="$STATE/$ID.meta"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-merge-policy-lib.sh
+. "$SCRIPT_DIR/fm-merge-policy-lib.sh"
 # Role partition: merging is MAIN-owned while attended; the Pi supervision
 # branch reports the green PR and never merges (contract: bin/fm-lease-lib.sh;
 # no-op in homes without a branch actor). While the away-posture record exists
@@ -385,6 +561,7 @@ META="$STATE/$ID.meta"
 . "$SCRIPT_DIR/fm-lease-lib.sh"
 fm_lease_forbid_branch "PR merge (fm-pr-merge)" --away-relocated
 
+if [ "$TASKLESS" != true ]; then
 if [ ! -f "$META" ] || [ -L "$META" ]; then
   echo "error: task metadata is unavailable" >&2
   exit 1
@@ -394,6 +571,7 @@ if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
   exit 1
 fi
 MERGE_EXPECTED_SPAWN_GEN=$FM_BACKLOG_META_SPAWN_GEN
+fi
 
 MERGE_CONTROL_LOCK=
 MERGE_META_LOCK=
@@ -403,15 +581,21 @@ merge_control_cleanup() {
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
 }
 trap merge_control_cleanup EXIT
-MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"
-fm_lock_acquire_wait "$MERGE_CONTROL_LOCK"
-if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
-  echo "error: task $ID changed while waiting to merge; refusing: $FM_BACKLOG_TRANSITION_ERROR" >&2
-  exit 1
-fi
-if [ "$FM_BACKLOG_META_SPAWN_GEN" != "$MERGE_EXPECTED_SPAWN_GEN" ]; then
-  echo "error: task $ID changed incarnation while waiting to merge; refusing" >&2
-  exit 1
+if [ "$TASKLESS" = true ]; then
+  merge_identity=$(printf '%s' "$URL" | shasum -a 256) || exit 1
+  MERGE_CONTROL_LOCK="$STATE/.merge-pr-${merge_identity%% *}.lock"
+  fm_lock_acquire_wait "$MERGE_CONTROL_LOCK"
+else
+  MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"
+  fm_lock_acquire_wait "$MERGE_CONTROL_LOCK"
+  if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
+    echo "error: task $ID changed while waiting to merge; refusing: $FM_BACKLOG_TRANSITION_ERROR" >&2
+    exit 1
+  fi
+  if [ "$FM_BACKLOG_META_SPAWN_GEN" != "$MERGE_EXPECTED_SPAWN_GEN" ]; then
+    echo "error: task $ID changed incarnation while waiting to merge; refusing" >&2
+    exit 1
+  fi
 fi
 
 # Reading the merge request state needs both tools. Report them together and
@@ -438,12 +622,34 @@ if [ "$PROVIDER" = github ]; then
     echo "error: merging a GitHub pull request requires $GITHUB_MISSING on PATH" >&2
     exit 1
   fi
+  fm_pr_github_account_configure "$PR_HOST" "$PR_OWNER" || exit 1
+fi
+# tea addresses a repo by slug only; the host comes from a named "tea login"
+# rather than the URL, so the login registered for this exact host is
+# resolved here too (bin/fm-pr-check.sh already refused arming without one,
+# but a login can be removed or renamed after arming, so this is re-derived
+# fresh rather than trusted from that earlier check).
+FORGEJO_MISSING=
+FORGEJO_LOGIN=
+if [ "$PROVIDER" = forgejo ]; then
+  command -v tea >/dev/null 2>&1 || FORGEJO_MISSING="tea"
+  if ! command -v jq >/dev/null 2>&1; then
+    FORGEJO_MISSING="${FORGEJO_MISSING:+$FORGEJO_MISSING and }jq"
+  fi
+  if [ -n "$FORGEJO_MISSING" ]; then
+    echo "error: merging a Forgejo pull request requires $FORGEJO_MISSING on PATH" >&2
+    exit 1
+  fi
+  FORGEJO_LOGIN=$(fm_pr_forgejo_login "$PR_HOST") || {
+    echo "error: merging a Forgejo pull request at $PR_HOST requires exactly one 'tea login' registered for that host (see 'tea login list')" >&2
+    exit 1
+  }
 fi
 
 # The recorded head is read before bin/fm-pr-check.sh rewrites the metadata,
 # because that script re-records pr= and drops a pr_head= it cannot resolve.
 RECORDED_HEAD=
-if [ "$PROVIDER" = gitlab ]; then
+if [ "$TASKLESS" != true ] && { [ "$PROVIDER" = gitlab ] || [ "$PROVIDER" = forgejo ]; }; then
   RECORDED_HEAD=$(grep '^pr_head=' "$META" | tail -1 | cut -d= -f2- || true)
 fi
 
@@ -451,6 +657,9 @@ fi
 # the merge request. Sets FM_PR_MERGE_HEAD to the verified head on success and
 # returns non-zero after reporting every condition that failed.
 FM_PR_MERGE_HEAD=
+FM_PR_MERGE_BASE=
+FM_PR_ALL_CHECKS_GREEN=false
+FM_PR_FORGE_CHECKS_PASSED=false
 FM_PR_GITLAB_ASYNC_CONFIGURED=false
 gitlab_verify_mergeable() {
   local json fields line
@@ -550,6 +759,186 @@ FIELDS
     "$URL" "$live_head" >&2
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITLAB_ASYNC_CONFIGURED=$async_configured
+  FM_PR_MERGE_BASE=$(printf '%s' "$json" | jq -r '.target_branch // ""') || return 1
+  FM_PR_ALL_CHECKS_GREEN=true
+  FM_PR_FORGE_CHECKS_PASSED=true
+}
+
+# Pre-merge conditions for a Forgejo pull request, read from one live view of
+# it. tea's single-PR view ignores field selection entirely (verified against
+# a real instance), so the raw API is read directly through "tea api" instead
+# of any tea subcommand, exactly like glab's JSON view above but through
+# Forgejo/Gitea's REST API. Sets FM_PR_MERGE_HEAD to the verified head on
+# success and returns non-zero after reporting every condition that failed.
+#
+# Forgejo has no merge-queue or scheduled-merge concept to detect, so unlike
+# GitHub and GitLab this never sets an async/queued signal: every accepted
+# Forgejo merge here is immediate. Shares FM_PR_MERGE_HEAD, declared above.
+forgejo_verify_mergeable() {
+  local pr_json status_json fields line
+  local total=0 named=0 refusals=''
+  local state='' mergeable='' draft='' live_head='' ci_state='' page_state='' page_count='' page=1
+
+  if ! pr_json=$(tea api --login "$FORGEJO_LOGIN" --repo "$PR_OWNER/$PR_REPO" \
+      "/repos/{owner}/{repo}/pulls/$PR_NUMBER" 2>/dev/null) || [ -z "$pr_json" ]; then
+    echo "error: could not read the Forgejo pull request state before merging" >&2
+    return 1
+  fi
+  if ! fields=$(printf '%s' "$pr_json" | jq -r '
+      if type == "object" then
+        "state=" + ((.state // "") | tostring),
+        "mergeable=" + (.mergeable | tostring),
+        "draft=" + (.draft | tostring),
+        "head=" + ((.head.sha // "") | tostring)
+      else
+        error("pull request payload is not an object")
+      end' 2>/dev/null); then
+    echo "error: could not read the Forgejo pull request state before merging" >&2
+    return 1
+  fi
+  while IFS= read -r line; do
+    total=$((total + 1))
+    case "$line" in
+      state=*) state=${line#state=} ;;
+      mergeable=*) mergeable=${line#mergeable=} ;;
+      draft=*) draft=${line#draft=} ;;
+      head=*) live_head=${line#head=} ;;
+      *) continue ;;
+    esac
+    named=$((named + 1))
+  done <<FIELDS
+$fields
+FIELDS
+  if [ "$named" -ne 4 ] || [ "$total" -ne 4 ]; then
+    echo "error: could not read the Forgejo pull request state before merging" >&2
+    return 1
+  fi
+
+  if ! fm_pr_head_valid "$live_head"; then
+    echo "error: could not read the Forgejo pull request head commit before merging" >&2
+    return 1
+  fi
+  if [ -n "$RECORDED_HEAD" ] && [ "$RECORDED_HEAD" != "$live_head" ]; then
+    printf 'notice: recorded head %s disagrees with the live head %s; verifying the live head\n' \
+      "$RECORDED_HEAD" "$live_head" >&2
+  fi
+
+  # An absent combined status (no statuses on any page, as a repo with no
+  # configured Actions reports) is a real "none" here rather than nothing to
+  # check, the same reading GitLab's null head_pipeline gets above. The
+  # endpoint computes its combined state from one page of the latest status
+  # per context, so every page is read until an empty one and the head is
+  # green only when each non-empty page is; the first page that is not
+  # success, or that cannot be read, decides the refusal.
+  ci_state=none
+  while :; do
+    if ! status_json=$(tea api --login "$FORGEJO_LOGIN" --repo "$PR_OWNER/$PR_REPO" \
+        "/repos/{owner}/{repo}/commits/$live_head/status?limit=50&page=$page" 2>/dev/null) \
+      || ! fields=$(printf '%s' "$status_json" | jq -r '
+          if type == "object" and ((.statuses // []) | type) == "array" then
+            "count=" + ((.statuses // []) | length | tostring),
+            "state=" + ((.state // "") | tostring)
+          else
+            error("status payload is not a combined status")
+          end' 2>/dev/null); then
+      ci_state=unreadable
+      break
+    fi
+    page_count='' page_state=''
+    while IFS= read -r line; do
+      case "$line" in
+        count=*) page_count=${line#count=} ;;
+        state=*) page_state=${line#state=} ;;
+      esac
+    done <<FIELDS
+$fields
+FIELDS
+    [ "$page_count" != 0 ] || break
+    if [ "$page_state" != success ]; then
+      ci_state=${page_state:-unreadable}
+      break
+    fi
+    ci_state=success
+    page=$((page + 1))
+    # A server that ignores the page parameter would repeat a non-empty page
+    # forever, so an implausible page count is unreadable rather than green.
+    if [ "$page" -gt 100 ]; then
+      ci_state=unreadable
+      break
+    fi
+  done
+
+  [ "$state" = open ] \
+    || refusals="$refusals  - state is \"${state:-unreadable}\", not open
+"
+  [ "$mergeable" = true ] \
+    || refusals="$refusals  - mergeable is \"${mergeable:-unreadable}\", not true
+"
+  # Only a positive draft reading refuses: an instance too old to report the
+  # field still refuses a work-in-progress merge server side.
+  [ "$draft" != true ] \
+    || refusals="$refusals  - the pull request is a draft
+"
+  [ "$ci_state" = success ] \
+    || refusals="$refusals  - the combined commit status is \"$ci_state\", not success
+"
+
+  if [ -n "$refusals" ]; then
+    printf 'error: refusing to merge %s\n' "$URL" >&2
+    printf '%s' "$refusals" >&2
+    return 1
+  fi
+  printf 'verified: %s is open and mergeable, with a successful combined status at head %s\n' \
+    "$URL" "$live_head" >&2
+  FM_PR_MERGE_HEAD=$live_head
+  FM_PR_MERGE_BASE=$(printf '%s' "$pr_json" | jq -r '.base.ref // ""') || return 1
+  FM_PR_ALL_CHECKS_GREEN=true
+  FM_PR_FORGE_CHECKS_PASSED=true
+}
+
+# The caller's own extra arguments may only name a merge method, in the same
+# forms caller_merge_method reads. There is no translation from a gh/glab-style
+# flag such as --auto, --admin, or --delete-branch into a Forgejo API field
+# yet (reject_protected_forge_args above already forbids those exact spellings
+# outright), so anything else is refused rather than silently dropped.
+forgejo_reject_unsupported_args() {
+  local arg pending=false
+  for arg in "$@"; do
+    if [ "$pending" = true ]; then
+      pending=false
+      continue
+    fi
+    case "$arg" in
+      --squash|--merge|--rebase) ;;
+      --method) pending=true ;;
+      --method=*) ;;
+      *)
+        echo "error: extra merge arguments are not yet supported for Forgejo merges" >&2
+        return 1
+        ;;
+    esac
+  done
+}
+
+# The merge style a Forgejo merge uses when the caller names none: the
+# repository's own default_merge_style, read live through the same tea login,
+# so a repository that allows only squash or rebase merges is not sent a merge
+# commit it refuses. An unreadable or unrecognized value is refused rather than
+# replaced by a style chosen here.
+forgejo_default_merge_style() {
+  local repo_json style
+  repo_json=$(tea api --login "$FORGEJO_LOGIN" --repo "$PR_OWNER/$PR_REPO" \
+    "/repos/{owner}/{repo}" 2>/dev/null) || repo_json=
+  style=$(printf '%s' "$repo_json" | jq -r '
+    if type == "object" and (.default_merge_style | type) == "string"
+    then .default_merge_style else "" end' 2>/dev/null) || style=
+  case "$style" in
+    merge|rebase|rebase-merge|squash|fast-forward-only) printf '%s' "$style" ;;
+    *)
+      echo "error: refusing to merge $URL: the repository's default merge style could not be read; name one with --merge, --rebase, --squash, or --method <style>" >&2
+      return 1
+      ;;
+  esac
 }
 
 # Every GitHub check that is not green in the given live pull-request JSON, one
@@ -860,6 +1249,15 @@ EOF
     "$URL" "$live_head" >&2
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITHUB_BASE=$base
+  FM_PR_MERGE_BASE=$base
+  FM_PR_ALL_CHECKS_GREEN=false
+  if [ -z "$red" ] && [ -z "$missing" ]; then
+    FM_PR_ALL_CHECKS_GREEN=true
+    FM_PR_FORGE_CHECKS_PASSED=$(printf '%s' "$json" | jq -r '
+      any(.statusCheckRollup[];
+        (.__typename == "CheckRun" and .status == "COMPLETED" and .conclusion == "SUCCESS")
+        or (.__typename == "StatusContext" and .state == "SUCCESS"))') || return 1
+  fi
 }
 
 # Read one live GitHub pull request view after gh returns. The selected
@@ -1063,6 +1461,7 @@ METHODS
 }
 
 record_pr_metadata() {
+  [ "$TASKLESS" != true ] || return 0
   if ! FM_PR_CHECK_MERGE=1 "$SCRIPT_DIR/fm-pr-check.sh" "$ID" "$URL"; then
     return 1
   fi
@@ -1073,6 +1472,7 @@ record_pr_metadata() {
 }
 
 require_released_captain_hold() {
+  [ "$TASKLESS" != true ] || return 0
   local hold_status=0
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
     "$SCRIPT_DIR/fm-captain-hold.sh" open "$ID" --distinguish-absent || hold_status=$?
@@ -1096,7 +1496,7 @@ FM_PR_MERGE_AUTHORITY=
 # resolved here. An unreadable record refuses rather than being skipped.
 resolve_merge_authority() {
   FM_PR_MERGE_AUTHORITY=
-  if fm_merge_authority_resolve "$FM_HOME" "$STATE" "$META" "$ID"; then
+  if fm_merge_authority_resolve "$FM_HOME" "$STATE"; then
     FM_PR_MERGE_AUTHORITY=$FM_MERGE_AUTHORITY
     return 0
   fi
@@ -1145,6 +1545,8 @@ require_current_away_authority() {
 
 persist_accepted_merge_authority() {
   local status=0
+  fm_merge_policy_outcome accepted || return 1
+  [ "$TASKLESS" != true ] || return 0
   MERGE_META_LOCK=$(fm_meta_lock_path "$META") || return 1
   fm_lock_acquire_wait "$MERGE_META_LOCK" || return 1
   fm_merge_authority_persist "$STATE" "$ID" "$META" \
@@ -1183,6 +1585,7 @@ refuse_github_queue_while_away() {
 }
 
 require_recorded_pr_identity() {
+  [ "$TASKLESS" != true ] || return 0
   local existing
   existing=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
   [ -n "$existing" ] || return 0
@@ -1240,7 +1643,10 @@ github_caller_method_is() {
 }
 
 github_report_queue_rules() {
-  local queue_method methods_display
+  local queue_method methods_display request_target approval_arg receipt_arg=
+  if [ -n "$LOCAL_TEST_RECEIPT" ]; then
+    printf -v receipt_arg ' --local-test-receipt %q' "$LOCAL_TEST_RECEIPT"
+  fi
   if [ "$FM_PR_AWAY_POSTURE" = true ]; then
     printf 'error: the direct merge did not land while the away-posture record exists; merge-queue retry flags are unavailable because a queued merge would outlive its authority\n' >&2
     return 0
@@ -1259,8 +1665,16 @@ github_report_queue_rules() {
         printf 'error: this run refuses even though the request for %s was accepted with the exact flags base branch %s requires (--auto --%s): the pull request has still not entered the merge queue, so no landed or queued outcome is proven; re-check the pull request'"'"'s merge queue state before retrying\n' \
           "$URL" "$FM_PR_GITHUB_BASE" "$queue_method" >&2
       else
-        printf 'error: base branch %s requires the merge queue; retry with: %s %s %s --attended-override -- --auto --%s\n' \
-          "$FM_PR_GITHUB_BASE" "$0" "$ID" "$URL" "$queue_method" >&2
+        request_target=$ID
+        [ "$TASKLESS" != true ] || request_target=--taskless
+        if [ -n "$CAPTAIN_APPROVAL" ]; then
+          printf -v approval_arg '%q' "$CAPTAIN_APPROVAL"
+          printf 'error: base branch %s requires the merge queue; retry with: %s %s %s --captain-approval %s%s --attended-override -- --auto --%s\n' \
+            "$FM_PR_GITHUB_BASE" "$0" "$request_target" "$URL" "$approval_arg" "$receipt_arg" "$queue_method" >&2
+        else
+          printf 'error: base branch %s requires the merge queue; obtain concrete captain approval before retrying with --captain-approval <reference>%s --attended-override -- --auto --%s\n' \
+            "$FM_PR_GITHUB_BASE" "$receipt_arg" "$queue_method" >&2
+        fi
       fi
       ;;
     conflicting)
@@ -1326,6 +1740,26 @@ gitlab_confirm_merged() {
   [ "$state" = merged ]
 }
 
+# Unlike gh and glab, "tea api" reports an HTTP-level failure (a rejected or
+# malformed merge request included) with exit status 0 and the error only in
+# the response body, verified empirically against a real Forgejo instance. So
+# this confirmation is not a bonus corroboration of an already-trusted exit
+# code the way gitlab_confirm_merged's is: it is the only reliable signal that
+# a Forgejo merge landed at all.
+forgejo_confirm_merged() {
+  local json merged
+  if ! json=$(tea api --login "$FORGEJO_LOGIN" --repo "$PR_OWNER/$PR_REPO" \
+    "/repos/{owner}/{repo}/pulls/$PR_NUMBER" 2>/dev/null) || [ -z "$json" ]; then
+    return 2
+  fi
+  if ! merged=$(printf '%s' "$json" | jq -r \
+    'if type == "object" and (.merged | type == "boolean") then .merged else error("invalid merged field") end' \
+    2>/dev/null); then
+    return 2
+  fi
+  [ "$merged" = true ]
+}
+
 # Record before either forge call. This arms the merge poll without claiming a
 # landed outcome, so even a provider read failure after a real merge cannot
 # leave teardown without the PR identity it needs to verify the result.
@@ -1384,6 +1818,8 @@ case "$PROVIDER" in
     require_current_away_authority || away_status=$?
     [ "$away_status" -eq 0 ] || exit "$away_status"
     refuse_github_queue_while_away || exit 2
+    fm_merge_policy_require || exit 1
+    fm_merge_policy_outcome requested || exit 1
     merge_status=0
     merge_output=$(gh pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
       --match-head-commit "$FM_PR_MERGE_HEAD" \
@@ -1395,6 +1831,7 @@ case "$PROVIDER" in
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
       MERGE_CONTROL_LOCK=
     else
+      fm_merge_policy_outcome failed || true
       fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
       MERGE_CONTROL_LOCK=
@@ -1410,18 +1847,22 @@ case "$PROVIDER" in
       exit "$merge_status"
     fi
     if ! github_read_outcome; then
+      fm_merge_policy_outcome unconfirmed || true
       github_report_forge_output "$merge_output"
       exit 1
     fi
     if [ "$FM_PR_GITHUB_MERGED" = true ]; then
+      fm_merge_policy_outcome merged || exit 1
       printf 'verified: %s is merged (state=%s, merged=%s, isInMergeQueue=%s)\n' \
         "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
     elif [ "$FM_PR_GITHUB_QUEUED" = true ]; then
+      fm_merge_policy_outcome queued || exit 1
       printf 'verified: %s is queued (state=%s, merged=%s, isInMergeQueue=%s)\n' \
         "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
       exit 0
     else
       github_report_forge_output "$merge_output"
+      fm_merge_policy_outcome unconfirmed || true
       github_report_unmerged_outcome
       exit 1
     fi
@@ -1438,6 +1879,8 @@ case "$PROVIDER" in
     away_status=0
     require_current_away_authority || away_status=$?
     [ "$away_status" -eq 0 ] || exit "$away_status"
+    fm_merge_policy_require || exit 1
+    fm_merge_policy_outcome requested || exit 1
     merge_status=0
     gitlab_merge_args=()
     if [ "$FM_PR_AWAY_POSTURE" = true ]; then
@@ -1446,6 +1889,7 @@ case "$PROVIDER" in
     GITLAB_HOST="$FM_PR_HOST" glab mr merge "$PR_NUMBER" -R "$PROJECT_URL" \
       --sha "$FM_PR_MERGE_HEAD" --yes "$@" "${gitlab_merge_args[@]+"${gitlab_merge_args[@]}"}" || merge_status=$?
     if [ "$merge_status" -ne 0 ]; then
+      fm_merge_policy_outcome failed || true
       fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
       MERGE_CONTROL_LOCK=
@@ -1457,7 +1901,64 @@ case "$PROVIDER" in
     MERGE_CONTROL_LOCK=
     gitlab_confirm_rc=0
     gitlab_confirm_merged || gitlab_confirm_rc=$?
-    [ "$gitlab_confirm_rc" -eq 0 ] || exit 0
+    if [ "$gitlab_confirm_rc" -ne 0 ]; then
+      fm_merge_policy_outcome unconfirmed || true
+      printf 'actionable: %s is not proven merged; re-check its live forge state\n' "$URL" >&2
+      [ "$TASKLESS" != true ] || exit 1
+      exit 0
+    fi
+    fm_merge_policy_outcome merged || exit 1
+    ;;
+  forgejo)
+    forgejo_reject_unsupported_args "$@" || exit 1
+    forgejo_method=$(caller_merge_method "$@")
+    [ -n "$forgejo_method" ] || forgejo_method=$(forgejo_default_merge_style) || exit 1
+    forgejo_verify_mergeable || exit 1
+    # The away record is locked first, so this last presence and authority
+    # read and the forge command below share one live-owner critical section.
+    hold_away_record_for_merge || exit 1
+    away_status=0
+    require_current_away_authority || away_status=$?
+    [ "$away_status" -eq 0 ] || exit "$away_status"
+    fm_merge_policy_require || exit 1
+    fm_merge_policy_outcome requested || exit 1
+    # head_commit_id binds the merge to the head this run verified: Forgejo's
+    # REST API rejects a mismatched value with "head out of date" (verified
+    # against a real instance), matching --match-head-commit/--sha above. tea
+    # exposes no such flag on its own merge subcommand, so the API is called
+    # directly through "tea api" instead.
+    merge_output=$(tea api --login "$FORGEJO_LOGIN" --repo "$PR_OWNER/$PR_REPO" \
+      -X POST "/repos/{owner}/{repo}/pulls/$PR_NUMBER/merge" \
+      -f "Do=$forgejo_method" -f "head_commit_id=$FM_PR_MERGE_HEAD" 2>&1) || true
+    # "tea api" reports an HTTP-level failure with exit status 0 (also
+    # verified against a real instance), so that output is kept only for the
+    # failure report below; the merge is judged solely by reading the pull
+    # request back through forgejo_confirm_merged. Only an unreadable read-back
+    # (status 2) is retried, a bounded number of times, so a transient read
+    # failure after a landed merge is not reported as unmerged; a definite
+    # merged=false stops at once.
+    forgejo_confirm_attempt=1
+    while :; do
+      forgejo_confirm_rc=0
+      forgejo_confirm_merged || forgejo_confirm_rc=$?
+      [ "$forgejo_confirm_rc" -eq 2 ] && [ "$forgejo_confirm_attempt" -lt 5 ] || break
+      sleep 1
+      forgejo_confirm_attempt=$((forgejo_confirm_attempt + 1))
+    done
+    if [ "$forgejo_confirm_rc" -ne 0 ]; then
+      fm_merge_policy_outcome unconfirmed || true
+      fm_afk_contract_lock_release || true
+      fm_lock_release "$MERGE_CONTROL_LOCK" || true
+      MERGE_CONTROL_LOCK=
+      [ -z "$merge_output" ] || printf 'error: > %s\n' "$merge_output" >&2
+      echo "error: Forgejo did not confirm $URL as merged" >&2
+      exit 1
+    fi
+    persist_accepted_merge_authority || exit 1
+    fm_merge_policy_outcome merged || exit 1
+    fm_afk_contract_lock_release || true
+    fm_lock_release "$MERGE_CONTROL_LOCK" || true
+    MERGE_CONTROL_LOCK=
     ;;
   *)
     echo "error: invalid PR merge request" >&2
@@ -1469,6 +1970,13 @@ esac
 # refused or failed merge above, and a queued forge merge exits without an
 # outcome while its existing poll remains armed.
 outcome_rc=0
+if [ "$TASKLESS" = true ]; then
+  fm_merge_outcome_report_taskless "$FM_HOME" "$STATE" "$URL" "$FM_PR_POLICY_AUTHORITY" || {
+    printf 'actionable: merged %s but could not durably report the taskless outcome\n' "$URL" >&2
+    exit 1
+  }
+  exit 0
+fi
 fm_merge_outcome_report "$FM_HOME" "$STATE" "$ID" "$URL" self \
   "${FM_PR_MERGE_AUTHORITY:-}" || outcome_rc=$?
 case "$outcome_rc" in
@@ -1481,3 +1989,10 @@ case "$outcome_rc" in
     printf 'actionable: merged %s but could not record the outcome for supervision\n' "$URL" >&2
     ;;
 esac
+
+# A confirmed merge also lands this task's linked bead (bin/fm-bead-eta-lib.sh):
+# best-effort, after the forge confirmed the merge landed, and never part of
+# the merge verdict. A task with no bead= record makes no board call, and a
+# duplicate close on an already-closed bead is a quiet bd no-op.
+merge_bead=$(grep '^bead=' "$META" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+[ -z "$merge_bead" ] || fm_bead_close_landed "$merge_bead" "$URL ($ID)"

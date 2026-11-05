@@ -53,7 +53,7 @@ The installed pi-signed 0.82.0 wrapper repeated the shared Pi primary extension 
 The omp Run-tier adapter was verified on 2026-09-05 with omp 18.1.11 and the openai-codex `gpt-6-astra` model through `FM_OMP_LIVE_E2E=1 tests/fm-omp-primary-live-e2e.test.sh`, which drives a real omp in its JSON-RPC stdio mode inside an isolated lab clone.
 Both tracked `.omp/extensions/*.ts` files loaded by auto-discovery alone (no `-e`, no trust dialog), `before_agent_start` returned the digest as a persistent context message, the model quoted the lab's `SESSION START -` heading back on its first turn, `state/.session-start-complete` was recorded, and `state/.lock` named the omp process, so ancestry detection identified the markerless binary.
 omp's `session_start` payload carries no reason field, so the adapter derives the source: the first start of the process is `startup` (or `resume` from a `--continue`/`--resume` launch line) and a later in-process start is `clear`; `tests/fm-omp-harness.test.sh` pins that mapping over a fake omp API.
-A file named both by `-e` and by auto-discovery loads twice (two factory calls, doubled `session_stop` continuations), which is why the secondmate launch names no `-e` and the per-task worker extension lives in `state/`.
+A file named both by `-e` and by auto-discovery loads twice (two factory calls, doubled `session_stop` continuations), which is why a secondmate launch never names its auto-discovered primary extensions with `-e` and the per-task busy extension lives in `state/`.
 
 ### Run-tier source vocabulary and context-reset injection
 
@@ -578,6 +578,74 @@ ok - unacknowledged recovery is announced at most once per generation and the su
 FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=59357
 ```
 
+The Codex foreground-checkpoint behavior was exercised hermetically on 2026-09-14 with real watcher processes and isolated home state.
+That run observed an announced recovery remain announced through a quiet checkpoint, a never-announced generation surface once, and a durable wake appended during a live checkpoint resurface.
+Its announced-recovery fixture had no unacknowledged durable queue row, so it did not establish that the old behavior reproduced the regression; the revised counterfactual fixture and result are recorded separately below.
+This state transition depends on Firstmate's checkpoint wrapper rather than vendor output, so no live Codex prompt was required.
+
+```sh
+bin/fm-test-run.sh tests/fm-watch-checkpoint.test.sh
+```
+
+Observed output:
+
+```text
+ok - an announced recovery is not reannounced by the next foreground checkpoint
+ok - a never-announced recovery still surfaces once from a foreground checkpoint
+ok - a queue append during a foreground checkpoint still resurfaces
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=11750
+```
+
+On 2026-10-07 the announced-recovery fixture was revised so it reproduces the original failure.
+It appends a durable queue row, lets a first checkpoint announce that recovery generation while the row stays unacknowledged, then runs a second checkpoint and asserts it supervises for its full bound with the generation and row unchanged.
+The fixture was run on its own in an isolated copy of the test file, once with the checkpoint wrapper as committed and once with its `FM_WATCH_FOREGROUND_CHECKPOINT=1` export removed.
+From the repository root, this command isolates that test function, runs it against the committed wrapper, then runs it against a temporary control wrapper with the checkpoint export removed:
+
+```sh
+set -eu
+root=$PWD
+runner=$(mktemp tests/.fm-watch-checkpoint.XXXXXX)
+control_bin=$(mktemp -d tests/.fm-watch-checkpoint-bin.XXXXXX)
+trap 'rm -rf "$runner" "$control_bin"' EXIT
+for source in "$root"/bin/*; do
+  [ -f "$source" ] || continue
+  name=${source##*/}
+  [ "$name" = fm-watch-checkpoint.sh ] || ln -s "$source" "$control_bin/$name"
+done
+sed '/^export FM_WATCH_FOREGROUND_CHECKPOINT=1$/d' \
+  "$root/bin/fm-watch-checkpoint.sh" > "$control_bin/fm-watch-checkpoint.sh"
+chmod +x "$control_bin/fm-watch-checkpoint.sh"
+awk '
+  /^test_quiet_checkpoint_exits_124_cleanly$/ { exit }
+  /^CHECKPOINT=/ {
+    print "CHECKPOINT=\"${FM_TEST_CHECKPOINT:-$ROOT/bin/fm-watch-checkpoint.sh}\""
+    next
+  }
+  { print }
+' "$root/tests/fm-watch-checkpoint.test.sh" > "$runner"
+printf '%s\n' 'test_announced_recovery_is_not_reannounced_by_next_checkpoint' >> "$runner"
+FM_TEST_CHECKPOINT= bash "$runner"
+status=0
+FM_TEST_CHECKPOINT="$control_bin/fm-watch-checkpoint.sh" bash "$runner" \
+  > "$control_bin/control.out" 2>&1 || status=$?
+cat "$control_bin/control.out"
+[ "$status" -eq 1 ] \
+  && grep -Fqx 'not ok - announced recovery checkpoint exit: expected exit 124, got 0' \
+    "$control_bin/control.out"
+```
+
+Observed output with the checkpoint distinction:
+
+```text
+ok - an announced recovery is not reannounced by the next foreground checkpoint
+```
+
+Observed output without the checkpoint distinction:
+
+```text
+not ok - announced recovery checkpoint exit: expected exit 124, got 0
+```
+
 Deterministic entry points:
 
 ```sh
@@ -586,6 +654,7 @@ tests/fm-pi-primary-types.test.sh
 tests/fm-watcher-lock.test.sh
 tests/fm-watch-arm.test.sh
 tests/fm-watch-recovery-loop.test.sh
+tests/fm-watch-checkpoint.test.sh
 tests/fm-wake-queue.test.sh
 tests/fm-subagent-pretool-check.test.sh
 tests/fm-claude-stop-autoarm.test.sh
@@ -768,6 +837,41 @@ tests/fm-supervision-host.test.sh
 tests/fm-afk-return.test.sh
 tests/fm-branch-supervision.test.sh
 ```
+
+## External Mac watchdog
+
+Verified on macOS 26.6.2 on 2026-10-23 through these public entry points:
+
+```bash
+bash tests/fm-watchdog.test.sh
+FM_WATCHDOG_LAUNCHD_SMOKE=1 bash tests/fm-watchdog-launchd-live.test.sh
+```
+
+The portable suite passed all nine behavioral groups, including the 120/121-second recovery boundary, 299/300-second escalation boundary, restart and concurrency reservations, new-beat recovery, missing and unrelated targets, and bounded transport failures.
+Its foreground-identity checks use two real fixture processes with deliberately divergent kernel names and argv[0], plus a real shell behind a stale omp registration.
+The latter regression failed before foreground-process verification was added.
+The fixture compiles its own inert leaf with `cc`; it does not relocate a platform-signed macOS executable or start a model.
+
+The native guard uses a real per-home LaunchAgent and the installed `fm-notify-phone` executable against a loopback receiver.
+Only Herdr identity/prompt delivery and the notify-only secret getter are synthetic adapters; no real pane, Keychain item or device is contacted.
+It validates rendered plist parsing and escaped home paths, observes RunAtLoad without a model turn, checks one exact content-free HTTP payload with restart deduplication, then observes recovery on the next scheduled invocation without a kickstart.
+The escalation deadline is advanced only in the private fixture episode; the scheduler cadence itself is real time.
+The guard spends no model tokens, runs by default where its Mac/GUI/tool capabilities exist, and an explicit opt-in refuses rather than skips a missing prerequisite.
+
+Observed native output:
+
+```text
+PASS: real launchd RunAtLoad requested recovery in an isolated home; no omp/model turn.
+PASS: actual fm-notify-phone sent exactly one watcher-down-only payload to loopback with a synthetic secret adapter; restart dedup held.
+PASS: native scheduled tick observed fresh recovery and cleared the episode after 60 seconds; no duplicate prompt/phone.
+PASS: only the unique fixture LaunchAgent was unloaded.
+```
+
+Herdr CLI 0.9.3 also supplied read-only native `agent get` and `pane process-info` responses for a running omp primary: the home and pane matched, and the foreground process list contained both the kernel name `omp` and argv[0] `omp`.
+That observation establishes the installed identity-field shape, not delivery of a real recovery prompt or successful extension re-arm.
+Live primary recovery and actual device notification remain activation checks; this verification did not install the watchdog for a live home.
+Other primary harnesses and backends are not changed or given a fallback by this opt-in omp-on-Herdr job.
+Current operator setup belongs to [configuration](../configuration.md#external-mac-watchdog), and exact runtime mechanics belong to `bin/fm-watchdog.sh`'s header.
 
 ## Wedge-alarm channels
 

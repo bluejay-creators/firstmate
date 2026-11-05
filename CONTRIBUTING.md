@@ -128,6 +128,23 @@ Its header and `--help` own the flags, family labels, lanes, and changed-file ma
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 Family selection is the ordinary local path; `--all` is deliberate full regression only.
 CI owns broad regression across required portable parallel shards, the portable serial lane's separate-runner shards, the Herdr lane, lint, invariants, the coverage guard, and stock macOS Bash compatibility in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+## Test tiers on the fork
+
+Forks use [`.github/workflows/test-tiers.yml`](.github/workflows/test-tiers.yml) and [`.github/workflows/sweep.yml`](.github/workflows/sweep.yml) in place of the shard fan-out above, which is calibrated for the parent repo's runners; fork PRs never run the inherited `ci.yml` jobs because each upstream job carries an `if:` that skips non-parent `pull_request` events.
+The fast tier runs on every PR and blocks on lint plus the tests `bin/fm-test-run.sh --changed` selects from the PR's changed files.
+The heavy tier blocks only when a PR touches its mapped subsystem: the watcher/lock/arm suite for `bin/fm-watch*.sh` and lock code, the Herdr backend suite for `bin/backends/herdr.sh`, and the omp harness for `.omp/extensions/`.
+The hourly-and-main-push sweep in `sweep.yml` skips when main has not moved since the last sweep, runs the complete lint walk and test sweep non-blocking (plus the watcher-lock production-default smoke case), and on failure opens or updates one tracking issue naming the last-green and failing commits and writes `state/sweep.status` on the branch so the supervising firstmate sees the red line.
+The subsystem path globs live in the `gate` step of each heavy-tier job inside `test-tiers.yml`; extend them there when a subsystem gains code paths.
+The same selection `fm-test-run.sh --changed` uses locally is what the fast tier runs, so a PR's CI matches the local rehearsal.
+
+On a private fork every GitHub Actions minute counts against a monthly quota, so this layout keeps the fork's per-PR load to the test-tiers fast and heavy gates (upstream `ci.yml` jobs yield via the `if:` guards against non-parent pull_request events) and routes full-coverage to the hourly sweep. The sweep only fires when main has new commits since its prior run, and the fast tier uses the diff-against-last-green cache to skip repeats of an already-green tree. Typical wall on the free `ubuntu-latest` runners today: fast tier ~3–5 min per PR event, sweep 20–35 min, hourly skip-check under 1 min. At ten PR pushes daily and one sweep-worthy day that is ≈ 80 PR-tier minutes plus ≈ 30 sweep minutes and ≈ 24 sub-minute skip-checks per month — comfortably inside the 2,000-minute private-fork free tier. Set the `SWEEP_RUNNERS` repo variable to a self-hosted runner label once the captain registers one to pull the sweep off the quota entirely.
+
+Mark the `Fast tier (lint changed roots + changed tests)` check and each heavy-tier job (`Heavy tier - watcher lock`, `Heavy tier - Herdr backend`, `Heavy tier - omp harness`) as required status checks on the fork's main ruleset once they are green, following the "Maintaining required checks" procedure above; the exact context comes from the newest green run's check name, and heavy-tier jobs stay green (skipped) on PRs that do not touch their subsystem, so requiring them never holds up unrelated work.
+Enable the Issues feature in the fork's settings for `sweep.yml`'s blame tracking; until then the sweep warns instead of filing and `state/sweep.status` on the sweep branch stays the live signal.
+
+`tests/fm-watcher-lock.test.sh` is the suite this layout speeds up: it coordinates its own case groups as parallel child invocations by default, with `FM_WATCHER_LOCK_GROUP=<name>` selecting one group inline, `FM_WATCHER_LOCK_SERIAL=1` running every group inline serially (the pre-parallel shape), and `FM_WATCHER_LOCK_SMOKE=1` running only the production-default timeout smoke case that the sweep owns.
+Every production lock/stale/takeover timeout it covers is env-overridable with production defaults unchanged, listed in the suite's own header comment.
 Pushing a new head to a pull request cancels that pull request's still-running CI so only the current head is validated; pushes to `main` are never cancelled, and the workflow owns that contract and its rationale.
 Use `bin/fm-test-run.sh --list-lanes` for exact lane names and `--help` for `--jobs` rules and required gate-skip flags when reproducing a lane locally.
 Leave the `sleep 0.1` cadence in the suites' bounded condition waits alone.

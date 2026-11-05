@@ -1,0 +1,256 @@
+name: Sweep
+
+# Hourly full-coverage sweep over the fork's main branch: the complete lint
+# walk, the complete test sweep (excluding only the real-Herdr family this fork
+# has no pinned install for, which the upstream required Herdr lane owns, and
+# the token-spending live-harness-optin guards, which stay opt-in), the
+# watcher-lock production-default smoke case that owns real-timeout coverage,
+# and the same gates `test-tiers.yml` blocks. Runs hourly when main has new
+# commits since the last sweep, plus on every push to main. Never blocks PRs
+# and never merges. On failure it opens or updates one tracking issue with the
+# commit range to blame and appends a status line under state/ that the
+# supervising firstmate reads for ASAP signal; forks that leave the Issues
+# feature disabled warn instead of filing and the status line remains the
+# primary signal.
+on:
+  schedule:
+    - cron: '13 * * * *'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: sweep-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# The repo variable SWEEP_RUNNERS overrides the runs-on label for every job in
+# this workflow. Default is GitHub-hosted ubuntu-latest; registering the
+# captain's self-hosted GitHub runners under the label `self-hosted-fm` and
+# setting the variable switches the whole sweep without editing this file.
+jobs:
+  skip-if-unchanged:
+    name: Skip when main has not moved
+    runs-on: ${{ vars.SWEEP_RUNNERS || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.decide.outputs.changed }}
+      last_sha: ${{ steps.decide.outputs.last_sha }}
+    steps:
+      - name: Decide whether the sweep runs
+        id: decide
+        run: |
+          set -eu
+          event="${GITHUB_EVENT_NAME}"
+          if [ "$event" = "push" ] || [ "$event" = "workflow_dispatch" ]; then
+            echo "changed=yes" >> "$GITHUB_OUTPUT"
+            echo "last_sha='' " >> "$GITHUB_OUTPUT"
+            echo "skip-if-unchanged: ${event} trigger always runs"
+            exit 0
+          fi
+          # Hourly schedule: compare the current main HEAD against the most
+          # recent sweep's head_sha, recorded under state/ by the closing
+          # status step.
+          repo="${GITHUB_REPOSITORY}"
+          cur="${GITHUB_SHA}"
+          prev=$(gh api "repos/${repo}/contents/state/sweep.head-sha?ref=${GITHUB_REF_NAME}" \
+                   --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
+          if [ -n "$prev" ] && [ "$prev" = "$cur" ]; then
+            echo "changed=no" >> "$GITHUB_OUTPUT"
+            echo "last_sha=${prev} " >> "$GITHUB_OUTPUT"
+            echo "skip-if-unchanged: main has not moved since $prev; skipping sweep"
+            exit 0
+          fi
+          echo "changed=yes" >> "$GITHUB_OUTPUT"
+          echo "last_sha=${prev:-} " >> "$GITHUB_OUTPUT"
+          echo "skip-if-unchanged: main moved (prev=${prev:-none}, cur=$cur); running sweep"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sweep:
+    name: Sweep (lint + full tests + watcher-lock smoke)
+    needs: skip-if-unchanged
+    if: needs.skip-if-unchanged.outputs.changed == 'yes'
+    runs-on: ${{ vars.SWEEP_RUNNERS || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install pinned actionlint
+        run: |
+          set -eu
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install tasks-axi
+        run: |
+          set -eu
+          npm install -g tasks-axi
+          tasks-axi --version
+      - name: Install the Pi package for the Pi extension tests
+        run: |
+          set -eu
+          npm install -g @earendil-works/pi-coding-agent
+      - name: Record last-green commit for blame tracking
+        id: lastgreen
+        run: |
+          set -eu
+          repo="${GITHUB_REPOSITORY}"
+          # The sweep workflow is the canonical green signal for main. Greps
+          # the bare 40-hex head-sha line from gh-axi's TOON output.
+          sha=$(gh-axi run list --repo "${repo}" --workflow sweep.yml \
+                  --branch "${GITHUB_REF_NAME}" --status success --limit 1 \
+                  --fields headSha 2>/dev/null | grep -E '^[0-9a-f]{40}$' | head -1 || true)
+          printf 'commit=%s\n' "${sha:-none}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run complete lint walk
+        id: lint
+        continue-on-error: true
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-lint"
+          bin/fm-lint.sh --partition 1of2 --telemetry "$RUNNER_TEMP/fm-lint/1.tsv"
+          bin/fm-lint.sh --partition 2of2 --telemetry "$RUNNER_TEMP/fm-lint/2.tsv"
+      - name: Run production-default watcher-lock smoke
+        id: smoke
+        continue-on-error: true
+        run: |
+          set -eu
+          FM_WATCHER_LOCK_SMOKE=1 bash tests/fm-watcher-lock.test.sh
+      - name: Run complete test sweep
+        id: tests
+        continue-on-error: true
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          bin/fm-test-run.sh --all \
+            --exclude-family real-herdr-gated \
+            --exclude-family live-harness-optin \
+            --per-script-timeout-secs 1800 \
+            --json "$RUNNER_TEMP/fm-test/all.json"
+      - name: Compute sweep outcome
+        id: outcome
+        if: always()
+        run: |
+          set -eu
+          if [ "${{ steps.lint.outcome }}" = "success" ] \
+             && [ "${{ steps.smoke.outcome }}" = "success" ] \
+             && [ "${{ steps.tests.outcome }}" = "success" ]; then
+            echo "result=green" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=red" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Persist sweep state and notify
+        if: always()
+        run: |
+          set -eu
+          repo="${GITHUB_REPOSITORY}"
+          run_url="${GITHUB_SERVER_URL}/${repo}/actions/runs/${GITHUB_RUN_ID}"
+          lastgreen="${{ steps.lastgreen.outputs.commit }}"
+          result="${{ steps.outcome.outputs.result }}"
+          cur="${GITHUB_SHA}"
+
+          if [ "$lastgreen" != none ] && [ -n "$lastgreen" ]; then
+            range="${lastgreen}..${cur}"
+          else
+            range="${cur} (no recorded last-green)"
+          fi
+
+          # Status file firstmate reads for ASAP visibility on failure or on
+          # state transitions. Lives under state/ on the same branch.
+          status_payload=$(cat <<EOF
+          {
+            "event": "sweep",
+            "result": "${result}",
+            "ref": "${GITHUB_REF_NAME}",
+            "sha": "${cur}",
+            "run_url": "${run_url}",
+            "range": "${range}",
+            "recorded_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          )
+          payload_b64=$(printf '%s' "$status_payload" | base64)
+
+          # api.github.com/repos/<repo>/contents/state/sweep.status requires
+          # the prior blob sha when the file already exists.
+          existing_sha=$(gh api "repos/${repo}/contents/state/sweep.status?ref=${GITHUB_REF_NAME}" \
+                           --jq '.sha' 2>/dev/null || true)
+          if [ -n "$existing_sha" ]; then
+            gh api -X PUT "repos/${repo}/contents/state/sweep.status" \
+              -f message="sweep ${result} at ${cur}" \
+              -f content="${payload_b64}" \
+              -f sha="${existing_sha}" \
+              -f branch="${GITHUB_REF_NAME}" >/dev/null
+          else
+            gh api -X PUT "repos/${repo}/contents/state/sweep.status" \
+              -f message="sweep ${result} at ${cur}" \
+              -f content="${payload_b64}" \
+              -f branch="${GITHUB_REF_NAME}" >/dev/null
+          fi
+
+          # Track the head sha for the hourly skip-if-unchanged gate above.
+          head_b64=$(printf '%s' "$cur" | base64)
+          existing_head_sha=$(gh api "repos/${repo}/contents/state/sweep.head-sha?ref=${GITHUB_REF_NAME}" \
+                                --jq '.sha' 2>/dev/null || true)
+          if [ -n "$existing_head_sha" ]; then
+            gh api -X PUT "repos/${repo}/contents/state/sweep.head-sha" \
+              -f message="sweep tracked head ${cur}" \
+              -f content="${head_b64}" \
+              -f sha="${existing_head_sha}" \
+              -f branch="${GITHUB_REF_NAME}" >/dev/null
+          else
+            gh api -X PUT "repos/${repo}/contents/state/sweep.head-sha" \
+              -f message="sweep tracked head ${cur}" \
+              -f content="${head_b64}" \
+              -f branch="${GITHUB_REF_NAME}" >/dev/null
+          fi
+
+          # Open or update the tracking issue; on forks with Issues disabled
+          # the status line above stays the live signal and the sweep simply
+          # warns.
+          if gh api "repos/${repo}" --jq '.has_issues' | grep -q '^true$'; then
+            existing=$(gh api "repos/${repo}/issues?labels=sweep-failure&state=open&per_page=1" \
+                         --jq 'if type == "array" and length > 0 then .[0].number else "" end' || true)
+            if [ "$result" = red ]; then
+              title="Sweep failure on ${GITHUB_REF_NAME}: ${cur}"
+              body_file="$RUNNER_TEMP/issue-body.md"
+              {
+                printf 'The hourly full sweep failed.\n\n'
+                printf -- '- Ref: `%s` at `%s`\n' "${GITHUB_REF_NAME}" "${cur}"
+                printf -- '- Failing run: %s\n' "${run_url}"
+                printf -- '- Last green commit: `%s`\n' "${lastgreen}"
+                printf -- '- Commit range to blame: `%s`\n' "${range}"
+                printf -- '- Status record: `state/sweep.status` on the sweep branch\n'
+              } > "$body_file"
+              body=$(cat "$body_file")
+              if [ -n "$existing" ]; then
+                gh api -X POST "repos/${repo}/issues/${existing}/comments" -f body="$body" >/dev/null
+                gh api -X PATCH "repos/${repo}/issues/${existing}" -f title="$title" >/dev/null
+              else
+                gh api -X POST "repos/${repo}/issues" -f title="$title" -f body="$body" \
+                  -f "labels[]=sweep-failure" >/dev/null
+              fi
+              echo "::error::sweep failed; tracking issue updated (range ${range})"
+              exit 1
+            fi
+            if [ -n "$existing" ]; then
+              gh api -X POST "repos/${repo}/issues/${existing}/comments" \
+                -f body="Sweep green again at ${cur}." >/dev/null
+              gh api -X PATCH "repos/${repo}/issues/${existing}" -f state=closed >/dev/null
+            fi
+          else
+            echo "::warning::Issues are disabled on ${repo}; sweep result '${result}' was not filed. Enable Issues in repo settings for blame tracking."
+            [ "$result" = green ]
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

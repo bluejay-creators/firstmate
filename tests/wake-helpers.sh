@@ -309,6 +309,27 @@ SH
   printf '%s\n' "$dir"
 }
 
+# fm_test_read_fifo <out-var> <fifo> [max-retries]: read one line from <fifo>
+# into <out-var>, retrying a signal-interrupted read. Stock macOS bash 3.2
+# delivers EINTR to a blocked `IFS= read -r _ < fifo` when a fast signal storm
+# lands on the test shell under 40-process lock contention (observed under
+# bin/fm-wake-lib.sh's steal concurrency case on 2026-10-14). Each retry
+# re-opens the FIFO, so the writer's next write is still consumed; a genuine
+# writer-hang still fails by exhaustively retrying inside a fixed bound
+# rather than by freezing the parent.
+fm_test_read_fifo() {
+  local var=$1 fifo=$2 max=${3:-50} i=0 line
+  while [ "$i" -lt "$max" ]; do
+    line=
+    if IFS= read -r line < "$fifo"; then
+      printf -v "$var" '%s' "$line"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # Only pass a process owned by this test. A deadline must also bound cleanup:
 # TERM can be ignored or remain pending on a stopped child, so never follow it
 # with an unbounded wait. Keep process evidence before the final owned-PID kill.

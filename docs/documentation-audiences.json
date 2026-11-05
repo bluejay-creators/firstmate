@@ -365,6 +365,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/forgejo-tea-integration.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/gerrit-change-watch.md",
       "audience": "maintainer-verification"
     },
@@ -397,6 +401,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/propel.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/remote-secondmates.md",
       "audience": "operator-current"
     },
@@ -417,6 +425,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/subagents.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/supervision-protocols/claude.md",
       "audience": "agent-runtime"
     },
@@ -430,6 +442,10 @@
     },
     {
       "path": "docs/supervision-protocols/grok.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "docs/supervision-protocols/omp-secondmate.md",
       "audience": "agent-runtime"
     },
     {
@@ -490,6 +506,10 @@
     },
     {
       "path": "docs/verification/muse.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/omp.md",
       "audience": "maintainer-verification"
     },
     {
@@ -575,6 +595,10 @@
     {
       "path": ".agents/skills/validation-supervision/SKILL.md",
       "audience": "agent-runtime"
+    },
+    {
+      "path": "docs/merged-teardown.md",
+      "audience": "maintainer-architecture"
     }
   ]
 }

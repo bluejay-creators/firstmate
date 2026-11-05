@@ -8,6 +8,8 @@
 # projection's model-aware verdict and unknown path. Human note/list/drain
 # behaviour stays unchanged when the new flags are omitted.
 set -euo pipefail
+# Each fixture starts without an ambient runtime override; cases set their own.
+unset FM_SUPERVISION_MODEL
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -495,6 +497,41 @@ assert_equals "True" "$(printf '%s' "$held" | json_get can_receive)" \
 kill_holder
 trap fm_test_cleanup EXIT
 pass "readiness says unknown (or not-receivable) instead of inferring liveness from a lock"
+
+# A point lookup must not expose or load unrelated history into its response.
+home=$(make_home point-receipt)
+target=$(run_inbox "$home" note --request-id point-target --json "target canary")
+target_id=$(printf '%s' "$target" | json_get id)
+python3 - "$home" <<'PY'
+import sys
+from pathlib import Path
+handled = Path(sys.argv[1]) / "state/inbox/handled"
+handled.mkdir(parents=True, exist_ok=True)
+(handled / "1700000000-unrelated.note").write_text(
+    "id=1700000000-unrelated\nsource=terminal\nrequest_id=unrelated-history\n--\n"
+    + "unrelated-" + "x" * 1100000 + "\n")
+PY
+point=$(run_inbox "$home" receipts --id "$target_id")
+printf '%s' "$point" | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+assert [(n["id"], n["body"], n["acknowledged"]) for n in d["pending"]] == [(sys.argv[1], "target canary", False)]
+assert d["handled"] == [] and d["replies"] == [] and d["omitted"] == []' "$target_id"
+run_inbox "$home" drain --ack "$target_id" >/dev/null
+run_inbox "$home" reply "$target_id" "canary-complete" >/dev/null
+point=$(run_inbox "$home" receipts --id "$target_id")
+printf '%s' "$point" | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+assert d["pending"] == [] and len(d["handled"]) == 1
+n=d["handled"][0]
+assert n["id"] == sys.argv[1] and n["acknowledged"] is True
+assert n["reply"]["body"] == "canary-complete"
+assert d["replies"] == [n["reply"]] and d["omitted"] == []' "$target_id"
+set +e
+run_inbox "$home" receipts --id '../outside' >/dev/null 2>&1
+point_bad_code=$?
+set -e
+expect_code 1 "$point_bad_code" "point lookup rejects path-like note ids"
+pass "point receipts preserve pending, handled and reply state without unrelated history"
 
 # --- invalid input ----------------------------------------------------------
 

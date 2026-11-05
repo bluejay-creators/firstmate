@@ -113,14 +113,19 @@ Routine supervision uses `bin/fm-peek.sh <id>` and `FM_HOME=<home> bin/fm-send.s
 
 ### Hand-launched peer roster
 
-Run `FM_HOME=<active-home> bin/fm-peer-roster.sh` from a directory where `bd where` resolves the intended board, or set `BEADS_DIR`.
-Use `--json` for the complete structured view; peer reports older than four hours count as stale.
-The roster observes agent tabs in the current Herdr workspace, exact peer identities from the home's registry, Beads assigned by exact peer name with their blocking dependencies, and timestamped historical peer reports.
-Herdr reads target the `HERDR_SESSION` session (default `default`), the same session used to recognise Firstmate-managed worker tabs.
-Any `blocked` or `needs-decision` report key in a peer's log with no later `resolved` line for the same key stays open; the peer is blocked regardless of report age and every open key is listed.
-It identifies Firstmate-managed worker tabs separately and shows unmapped tabs, unavailable or ambiguous peers, and unassigned Beads without taking ownership or changing any of them.
+Run `FM_HOME=<active-home> bin/fm-peer-roster.sh` from any directory; `bd` is chdird to the shared board (`FM_BOARD`, the same default bin/fm-propel.sh uses), so a stale cwd cannot redirect the join.
+Use `--json` for the complete structured view; the roster lists peers, firstmate-managed workers, every secondmate home and its live children, and surfaces each row's live activity, deterministic posture (`parked` > `blocked` > `done`/`failed` > `working` > `idle-stale` > `idle`, where a terminal `done` or `failed` status verb always outranks a lingered idle pane so a published result never reads as needing the captain), current open beads, latest status line age, and the trailing `on_captain` section (captain-label beads + open firstmate captain holds).
+Herdr reads target the `HERDR_SESSION` session (default `default`) and never mutate a pane, board, inbox cursor, or worker.
+Keyed `blocked`/`needs-decision` entries with no later `resolved` key stay overtly blocked regardless of report age or free text in between; only the tag pair (`[key=...][at=...]`) registers, never the body.
+A keyed open older than 60 minutes with no resolution ages out of `open_keys` into the per-row `stale_keys` list and stops forcing the blocked posture; a bare `done:`/`failed:` line on the same row is still a terminal self-report.
 An unavailable Herdr or Beads read yields an explicit partial/unknown result and a nonzero exit status rather than an empty or unblocked roster.
 The script header owns CLI flags, output fields, and observation boundaries.
+
+### Filing captain beads as a peer
+
+A hand-launched peer that files a Beads bead needing the captain's answer adds the label `requester:<name>`, where `<name>` is its registered peer name in the home's `state/peers/peers.tsv`.
+Firstmate's `bin/fm-captain-beads-check.sh` consumes closed captain beads and delivers each close reason to the requester that marker names - through `state/peers/peers.sh send` for a peer, `bin/fm-send.sh` for a firstmate-managed task or secondmate, and a `check:` wake when the requester is `firstmate` itself.
+Beads filed by `bin/fm-captain-hold.sh` or `bin/fm-captain-ask.sh` carry an equivalent `fm-requester:` body line automatically; the label convention exists for beads filed by hand or by other tooling.
 
 ### Focus
 
@@ -140,6 +145,12 @@ With presentation spaces disabled, a crewmate or scout is created in the exact w
 That workspace is read live from Herdr rather than from the injected snapshot, so the worker always appears beside the agent that launched it.
 Duplicate labels elsewhere in the session are irrelevant, and the globally focused workspace is never the target.
 A `--secondmate` launch is the deliberate exception: it stands up that secondmate home's own workspace instead of joining the launcher's.
+
+A home can instead direct its own ship/scout spawns into a named worker workspace with the local `config/herdr-worker-workspace` file, which the primary propagates to secondmate homes through the inherited local-material contract.
+The file holds exactly one whitespace-free Herdr workspace label in the current named session; a value containing whitespace is refused with a warning and ignored.
+When set, the adapter resolves and creates that workspace by label, never consults the launcher's pane identity for placement, and a worker's observed launch workspace then differs from the launcher's by design.
+When the file is absent or empty, the launcher-workspace inheritance above is unchanged.
+The setting governs only fresh ship/scout placement: a `--secondmate` launch never reads the launching home's file (its own home's copy governs only that home's own future crewmates), and existing task operations use recorded endpoint ids, so a live task is never moved when the label changes or the workspace closes.
 
 ### Unresolvable launcher identity
 

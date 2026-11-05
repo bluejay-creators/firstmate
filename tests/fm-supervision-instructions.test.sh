@@ -7,6 +7,11 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-supervision-instructions)
 RENDER="$ROOT/bin/fm-supervision-instructions.sh"
+# Never inherit a real operational home's role or configuration into rendering.
+FM_HOME="$TMP_ROOT/default-home"
+mkdir -p "$FM_HOME/config" "$FM_HOME/state"
+export FM_HOME
+unset FM_CONFIG_OVERRIDE FM_STATE_OVERRIDE FM_ROOT_OVERRIDE
 
 test_selected_harness_block_only() {
   local out
@@ -304,6 +309,38 @@ test_pi_snippet_uses_effective_extension_path() {
   pass "pi supervision snippet renders the effective extension path"
 }
 
+test_omp_secondmate_inbox_does_not_require_primary_tools() {
+  local home primary out
+  home="$TMP_ROOT/omp-secondmate"
+  primary="$TMP_ROOT/omp-primary"
+  mkdir -p "$home/config" "$home/state" "$primary/config" "$primary/state"
+  printf '%s\n' isolated-mate > "$home/.fm-secondmate-home"
+
+  out=$(FM_HOME="$home" bash "$RENDER" --harness omp)
+  assert_not_contains "$out" "fm_watch_arm_omp" "secondmate startup requires an unavailable primary tool"
+  assert_not_contains "$out" "bin/fm-watch-arm.sh" "secondmate startup bypasses extension ownership"
+  assert_contains "$out" "docs/secondmate-parent-channel.md" "secondmate startup lost its supported return-channel contract"
+  out=$(FM_HOME="$home" bash "$RENDER" --harness omp --repair-line)
+  assert_not_contains "$out" "fm_watch_arm_omp" "secondmate repair requires an unavailable primary tool"
+  assert_not_contains "$out" "bin/fm-watch-arm.sh" "secondmate repair launches a shell watcher"
+  assert_contains "$out" "docs/secondmate-parent-channel.md" "secondmate repair lost the inbox/parent route"
+
+  out=$(FM_HOME="$primary" bash "$RENDER" --harness omp)
+  assert_contains "$out" "fm_watch_arm_omp" "tool-owning primary lost its required arming protocol"
+  out=$(FM_HOME="$primary" bash "$RENDER" --harness omp --repair-line)
+  assert_contains "$out" "fm_watch_arm_omp" "tool-owning primary lost its repair path"
+  out=$(FM_HOME="$home" bash "$RENDER" --harness pi --repair-line)
+  assert_contains "$out" "fm_watch_arm_pi" "omp-only role routing changed another harness"
+
+  printf '%s\n' invalid/mate > "$home/.fm-secondmate-home"
+  if out=$(FM_HOME="$home" bash "$RENDER" --harness omp 2>&1); then
+    fail "an invalid secondmate identity silently received a primary protocol"
+  fi
+  assert_not_contains "$out" "fm_watch_arm_omp" "invalid identity still required a primary tool"
+  pass "omp secondmate startup and repair use the inbox without altering primary or other-harness ownership"
+}
+
+test_omp_secondmate_inbox_does_not_require_primary_tools
 test_supervision_host_protocol_on_a_claude_home_unless_off
 test_supervision_host_protocol_on_every_arm_owner
 test_selected_harness_block_only

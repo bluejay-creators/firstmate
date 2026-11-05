@@ -202,6 +202,9 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$FM_DAEMON_DIR/fm-busy-lib.sh"
 
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$FM_DAEMON_DIR/fm-timeout-lib.sh"
+
 # --- tunables ---------------------------------------------------------------
 # Supervisor backends this daemon knows how to inject into today. zellij, orca,
 # and cmux are real backends elsewhere in firstmate (bin/fm-backend.sh) but this
@@ -867,6 +870,7 @@ escalate_flush() {  # <state>
   # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
   # safety net, but keeping the source single-line makes the intent explicit).
   msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$ESCALATE_EVENTS" "$msg")
+  phone_notify_digest "$state"
   if inject_msg "$msg" "$state"; then
     unknown_wake_acknowledge_flushed "$state" "$buf" \
       || log "unknown-wake acknowledgement write failed; a delivered unknown wake may escalate again"
@@ -880,6 +884,85 @@ escalate_flush() {  # <state>
     rm -f "$full"
   fi
   return 1
+}
+
+# Optional content-free phone hints, independent of pane delivery. Reserve the
+# per-template attempt before dispatch, including failures, so restarts cannot
+# turn a broken bridge into a retry storm. No shell evaluation or caller text.
+phone_notify() {  # <state> <template> [count]
+  local state=$1 template=$2 cfg cmd stamp now last=0 rc lock
+  shift 2
+  afk_active "$state" || return 0
+  [ "$(fm_afk_contract_mode "$state" 2>/dev/null)" != quiet ] || return 0
+  cfg="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/phone-notify"
+  [ -f "$cfg" ] && [ -r "$cfg" ] || return 0
+  cmd=$(cat "$cfg") || { log "phone notify: cannot read config"; return 0; }
+  cmd=${cmd:-fm-notify-phone}
+  case "$cmd" in
+    *[!a-zA-Z0-9_.-]*|-*) log "phone notify: invalid command name (redacted)"; return 0 ;;
+  esac
+  command -v "$cmd" >/dev/null 2>&1 \
+    || { log "phone notify: configured command is not on PATH"; return 0; }
+  case "$template" in
+    decisions-waiting)
+      [ "$#" -eq 1 ] || return 0
+      case "$1" in ''|*[!0-9]*) return 0 ;; esac ;;
+    urgent|away-digest-ready|watcher-down) [ "$#" -eq 0 ] || return 0 ;;
+    *) return 0 ;;
+  esac
+  stamp="$state/.phone-notify-$template"
+  # Run off the daemon's critical path, with a hard process-group bound.
+  # The portable lock also serializes workers left briefly alive at a restart.
+  (
+    fm_afk_contract_lock_helpers || exit 0
+    lock="${stamp}.lock"
+    fm_lock_try_acquire "$lock" || exit 0
+    # Freeze the path: this background shell can exit after local scope unwinds.
+    # shellcheck disable=SC2064
+    trap "fm_lock_release $(printf '%q' "$lock") >/dev/null 2>&1 || true" EXIT
+    if [ -f "$stamp" ]; then
+      read -r last < "$stamp" || last=0
+      case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    fi
+    now=$(_now)
+    [ "$last" -eq 0 ] || [ $((now - last)) -ge 600 ] || exit 0
+    if ! printf '%s\n' "$now" > "$stamp"; then
+      log "phone notify: cannot reserve rate limit; skipped"
+      exit 0
+    fi
+    # Neither digest content nor bridge responses belong in stdin or logs.
+    if fm_run_timed 5 "$cmd" "$template" "$@" </dev/null >/dev/null 2>&1; then
+      :
+    else
+      rc=$?
+      log "phone notify: $template failed (exit $rc)"
+    fi
+  ) &
+  return 0
+}
+
+phone_notify_digest() {  # <state>
+  local state=$1 count
+  [ -f "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/phone-notify" ] || return 0
+  afk_active "$state" || return 0
+  [ "$(fm_afk_contract_mode "$state" 2>/dev/null)" != quiet ] || return 0
+  (
+    # Reuse the canonical local backlog projection, never digest prose or worker
+    # hints: a hold can remain pending after its worker is gone or has moved on.
+    set -o pipefail
+    if ! count=$(fm_run_timed 5 "$FM_DAEMON_DIR/fm-fleet-snapshot.sh" --contribution-input 2>/dev/null \
+      | jq -er '[.backlog.records[] | select(.captain_actionable == true)] | length' 2>/dev/null); then
+      log "phone notify: pending holds could not be counted; skipped"
+      exit 0
+    fi
+    if [ "$count" -gt 0 ]; then
+      phone_notify "$state" decisions-waiting "$count"
+    else
+      phone_notify "$state" away-digest-ready
+    fi
+    wait
+  ) &
+  return 0
 }
 
 # --- backend-independent active wedge alert ---------------------------------
@@ -1158,6 +1241,7 @@ inject_wedge_alarm() {  # <state> <age-seconds>
   # the durable record whether or not any channel fires.
   if [ "$notify" -eq 1 ]; then
     wedge_alarm_notify "away-mode escalations WEDGED ${age}s undelivered - see $marker" "$marker"
+    phone_notify "$state" urgent
   fi
 }
 
@@ -1945,6 +2029,7 @@ fm_super_main() {
         if [ "$rc" -ne 0 ] || [ -z "$reason" ]; then
           record_crash
           log "watcher exited rc=$rc reason='$reason'; restarting after ${backoff_secs}s"
+          phone_notify "$STATE" urgent
           WATCHER_PID=""
           sleep "$backoff_secs"
           continue

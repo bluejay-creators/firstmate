@@ -37,6 +37,9 @@ import {
   classifyFirstmateCurrentOperationalText,
   encodeFirstmateOperationalInput,
 } from "../../.pi/extensions/lib/fm-operational-input.ts";
+// Opt-in lifecycle debug log (FM_OMP_EXTENSION_DEBUG_LOG); its owner states
+// the contract and is a no-op when the variable is unset.
+import { extensionDebugEnabled, extensionDebugLogger } from "../../.pi/extensions/lib/fm-extension-debug.ts";
 
 // The omp extension API surface this file uses, declared locally: omp ships no
 // separately installable type package and is a Pi fork whose event names match
@@ -93,6 +96,9 @@ function markLoaded(): void {
   writeFileSync(marker, `${extensionVersion}\n${process.pid}\n`);
 }
 
+const debugLog = extensionDebugLogger("omp-turnend-guard");
+let nextDebugBindingId = 0;
+
 const sessionstartDeliveryBytes = 512 * 1024;
 
 type SessionStartContext = {
@@ -100,6 +106,35 @@ type SessionStartContext = {
     getSessionId?: () => unknown;
   };
 };
+
+// omp re-binds this factory for a subagent (task tool, /tan clone); that
+// session's handlers carry ctx.agent.kind === "sub" and ctx.agent.depth > 0
+// (omp's extension documentation owns the signal shape). The guard then
+// stands down entirely: session_stop already never fires for a subagent,
+// while session_start, session_compact, and a subagent session_shutdown must
+// not create or tear down sessionstart generations shared with the primary,
+// and the tool_call seatbelt stays out of a bounded in-process assistant's
+// bash policy. The factory bind itself touches no shared module state, so a
+// rebind leaves the primary's active generation in place (observed on omp
+// 18.10.4 with FM_OMP_EXTENSION_DEBUG_LOG; see "Subagent session safety" in
+// fm-primary-omp-watch.ts). Beyond the observed kind/depth shape the gate is
+// defensive: depth > 0 means subagent, and an ambiguous ctx (no kind or an
+// unrecognized kind) reads as subagent unless lockOwnership() proves this
+// process is the fleet's owning primary.
+function subagentContext(ctx: unknown): boolean {
+  if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return false;
+  const agent = ctx.agent;
+  if (!agent || typeof agent !== "object") return false;
+  if ("kind" in agent && agent.kind === "sub") return true;
+  if ("depth" in agent && typeof agent.depth === "number" && agent.depth > 0) return true;
+  if (!("kind" in agent) || agent.kind !== "main") return lockOwnership() !== "owned";
+  return false;
+}
+function subagentShutdownContext(ctx: unknown): boolean {
+  if (subagentContext(ctx)) return true;
+  if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return lockOwnership() !== "owned";
+  return false;
+}
 
 // The launch line is the only resume evidence omp offers an extension: its
 // session_start payload has no reason and no header timestamp is guaranteed.
@@ -505,7 +540,14 @@ function runCdCheck(command: string): Promise<{ code: number; stderr: string }> 
 }
 
 export default function (pi: ExtensionAPI) {
+  const debugBinding = ++nextDebugBindingId;
   let sessionstartGeneration: SessionstartGeneration | null = null;
+  const generationDebugFields = (): Record<string, unknown> => ({
+    sessionstartGeneration: sessionstartGeneration ? sessionstartGeneration.id : null,
+    activeSessionstartGeneration: activeSessionstartGeneration ? activeSessionstartGeneration.id : null,
+    lock: lockOwnership(),
+  });
+  debugLog(debugBinding, "factory_bind", "bind", undefined, generationDebugFields);
   let sessionstartExitListenerRegistered = false;
   let sessionStarts = 0;
   const cleanupSessionstartOnProcessExit = (): void => {
@@ -538,6 +580,11 @@ export default function (pi: ExtensionAPI) {
   registerSessionstartExitListener();
 
   pi.on?.("session_start", (_event, ctx) => {
+    if (subagentContext(ctx)) {
+      debugLog(debugBinding, "session_start", "subagent-skip", ctx, generationDebugFields);
+      return;
+    }
+    debugLog(debugBinding, "session_start", "createSessionstartGeneration", ctx, generationDebugFields);
     sessionStarts += 1;
     const source: SessionstartSource = sessionStarts === 1
       ? (launchResumeSource() ?? "startup")
@@ -548,6 +595,9 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on?.("before_agent_start", async (_event, ctx) => {
+    const subagent = subagentContext(ctx);
+    debugLog(debugBinding, "before_agent_start", subagent ? "subagent-skip" : "claimSessionstartMessage", ctx, generationDebugFields);
+    if (subagent) return undefined;
     const generation = sessionstartGeneration;
     if (!generation) return undefined;
     const message = await claimSessionstartMessage(generation, ctx);
@@ -558,6 +608,9 @@ export default function (pi: ExtensionAPI) {
   // is idle and auto-compaction may retry without another before_agent_start,
   // so the message is sent directly while sharing generation ownership.
   pi.on?.("session_compact", async (_event, ctx) => {
+    const subagent = subagentContext(ctx);
+    debugLog(debugBinding, "session_compact", subagent ? "subagent-skip" : "createSessionstartGeneration", ctx, generationDebugFields);
+    if (subagent) return;
     registerSessionstartExitListener();
     const generation = createSessionstartGeneration("compact", sessionIdFromContext(ctx));
     sessionstartGeneration = generation;
@@ -570,7 +623,10 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on?.("session_shutdown", async () => {
+  pi.on?.("session_shutdown", async (_event, ctx) => {
+    const subagent = subagentShutdownContext(ctx);
+    debugLog(debugBinding, "session_shutdown", subagent ? "subagent-skip" : "stopSessionstartGeneration", ctx, generationDebugFields);
+    if (subagent) return;
     const generation = sessionstartGeneration;
     try {
       if (generation) await stopSessionstartGeneration(generation);
@@ -579,8 +635,16 @@ export default function (pi: ExtensionAPI) {
       removeSessionstartExitListener();
     }
   });
+  // Debug-only observers: registered only when the debug log is enabled, so
+  // the default extension surface is unchanged.
+  if (extensionDebugEnabled) {
+    pi.on?.("agent_end", (_event, ctx) => {
+      debugLog(debugBinding, "agent_end", "observe", ctx, generationDebugFields);
+    });
+  }
 
-  pi.on?.("tool_call", async (event) => {
+  pi.on?.("tool_call", async (event, ctx) => {
+    if (subagentContext(ctx)) return {};
     if (!event || event.type !== "tool_call" || event.toolName !== "bash") return {};
     const command = String((event.input as { command?: unknown })?.command ?? "");
     if (!command) return {};

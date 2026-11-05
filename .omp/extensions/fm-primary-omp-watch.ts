@@ -41,11 +41,48 @@
 // omp emits session_shutdown for ordinary same-process replacements (/new,
 // /resume, /fork) as well as terminal quit. This extension binds one generation
 // per session activation. Only the active live generation may start, stop,
-// rearm, or clear the arm child. An owning replacement session_start (or fresh
-// factory bind) arms its new generation without a model turn. A replacement
+// rearm, or clear the arm child. An owning replacement session_start (or the
+// first factory bind, while no live generation exists) arms its new
+// generation without a model turn. A replacement
 // handoff carries actionable closes that were still pending delivery; its
 // durable state lives at state/extensions/omp-primary-watch/session-replacement-actionable.json.
 // Stale callbacks from a prior generation are no-ops against the active replacement.
+//
+// Send-channel session ownership (stated once here):
+// A subagent factory rebind flips omp's shared extension runtime so every
+// pi object in the process - including the primary's own factory-level
+// closure - delivers through the subagent's conversation. sendWake therefore
+// never sends through the factory closure: each generation pins the send
+// closure captured at its own owning-ctx session_start in
+// SessionGeneration.sendUserMessageRef, nulls it before a replacement
+// session_start activates the replacement generation and before its own
+// session_shutdown, and sends through that pinned closure. Without the pin
+// a wake delivered between a subagent spawn and the primary's next owning
+// event lands in the subagent's conversation, where the receiving model
+// runs bin/fm-wake-drain.sh and drains firstmate's durable wake queue for
+// itself (fm-otu). A send with no pinned channel yet - the replacement
+// replay inside a generation's own session_start before that handler claims
+// the channel - sends through the factory closure that EMITTED that
+// session_start, whose conversation is by construction the replacement.
+//
+// Subagent session safety (stated once here):
+// omp re-binds this factory for a subagent session (task tool, eval agent(),
+// /tan clone) on the same evaluated module, so module state - including the
+// active generation - is shared with the primary. Observed on omp 18.10.4
+// with FM_OMP_EXTENSION_DEBUG_LOG: the rebind runs in the parent process right
+// after before_subagent_spawn, before any subagent event and with no ctx, and
+// the subagent's events then carry ctx.agent.kind === "sub" (depth > 0 for
+// task children); no subagent session_shutdown followed its completion.
+// A factory bind therefore activates its generation only when no live
+// generation exists, so a rebind never displaces the primary's; omp's
+// extension documentation owns the ctx.agent signal shape. A subagent session
+// never claims, consumes, or retires the owner's arm and never persists the
+// replacement handoff: every lifecycle handler and the arming tool stand down
+// on that context. The 2026-10-08, 2026-10-13, and 2026-10-14 incidents were
+// an unconditional activation at bind: the subagent's generation became the
+// active one, the primary's read as not live, its next actionable close was
+// dropped undelivered, and fm_watch_arm_omp answered "watcher: not armed -
+// omp session is shutting down" until the supervisor restarted.
 //
 // Delivery versus consumption (stated once here):
 // A main follow-up is delivered once omp accepts it (sendUserMessage returns).
@@ -59,7 +96,15 @@
 // replacement handoff.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // typebox resolves inside omp's extension loader (verified, omp 18.1.11); the
@@ -69,14 +114,26 @@ import { Type } from "typebox";
 // resolves bin/fm-operational-input.sh relative to its own location, which is
 // the same repository root this file lives in.
 import { encodeFirstmateOperationalInput } from "../../.pi/extensions/lib/fm-operational-input.ts";
+// Opt-in lifecycle debug log (FM_OMP_EXTENSION_DEBUG_LOG); its owner states
+// the contract and is a no-op when the variable is unset.
+import { extensionDebugEnabled, extensionDebugLogger } from "../../.pi/extensions/lib/fm-extension-debug.ts";
+
 
 // The omp extension API surface this file uses. omp is a Pi fork and ships no
 // separately installable type package, so the contract is declared locally
 // rather than imported from the Pi package name.
 type ExtensionAPI = {
-  on?: (event: string, handler: (event: any, ctx: any) => unknown) => void;
+  on?: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => void;
   sendUserMessage: (content: string, options?: { deliverAs?: string }) => unknown;
-  registerCommand?: (name: string, command: { description: string; handler: (args: string, ctx: any) => Promise<void> | void }) => void;
+  // pi.sendMessage delivers a hidden custom message; observed on omp 18.10.4:
+  // customType fm.wake + display:false never renders, and with triggerTurn
+  // and deliverAs 'followUp' the same message opens its own turn. omp's host
+  // call is VOID (packages/coding-agent/src/modes/runtime-init.ts): it starts
+  // the send, catches its own errors, and returns nothing, so a failed send
+  // never rejects the caller's await - the extension reports delivery once
+  // the call returns, exactly as it already does for sendUserMessage.
+  sendMessage?: (message: { customType: string; content: string; display: boolean }, options?: { triggerTurn?: boolean; deliverAs?: string }) => unknown;
+  registerCommand?: (name: string, command: { description: string; handler: (args: string, ctx: unknown) => Promise<void> | void }) => void;
   registerTool?: (tool: Record<string, unknown>) => void;
 };
 
@@ -92,13 +149,45 @@ type CloseClassification = {
   message: string;
 };
 
-type PendingActionableClose = {
+export type PendingActionableClose = {
   version: 1;
   token: string;
   message: string;
   predecessorArmPid: string;
+  // Persisted origin: the omp session process and epoch at creation, so a
+  // replacement can expire handoffs from a predecessor that is long gone
+  // instead of replaying them forever (the Oct 10 case replayed 261 stale
+  // wakes across every ordinary restart). Optional identically on write and
+  // in-memory: absence reads as oldest on replay, never as expired.
+  originPid?: string;
+  originAt?: number;
   delivered?: true;
 };
+
+// One sink per module for handoff prune notes ("dropped N stale...", "dropped
+// N over the cap..."): writeReplacementHandoff and the expiry wrapper push
+// here from top level (where no generation exists yet), and the registered
+// default body binds the sink to the CURRENT generation's queue as soon as
+// it creates or activates one, so the note rides that generation's first
+// delivered wake rather than becoming a wake of its own. A production load
+// with no extension registered yet keeps notes here module-locally; a test
+// imports only the primitives, assigns its own sink, and observes directly.
+declare global {
+  // eslint-disable-next-line no-var
+  var __fmOmpWatchStaleNotes: { push(note: string): void; take(): string[] } | undefined;
+}
+function globalStaleNotes(): { push(note: string): void; take(): string[] } {
+  return (globalThis.__fmOmpWatchStaleNotes ??= {
+    push(note: string): void {
+      staleNotesBuffer.push(note);
+    },
+    take(): string[] {
+      return staleNotesBuffer.splice(0);
+    },
+  });
+}
+const staleNotesBuffer: string[] = [];
+export const __tests = { globalStaleNotes };
 
 type ReplacementActionableHandoff = {
   version: 2;
@@ -131,6 +220,20 @@ type SessionGeneration = {
   // still delivering the wake it was started for; its bounded retry runs once
   // that delivery settles instead of being skipped by the single-flight guard.
   deferredClose: { message: string; predecessorArmPid: string } | null;
+  // Coalesce rule (3): per (pane, reason) keys last delivered within
+  // staleWakeupTtlMs. Same pane emitting the identical stale reason within
+  // the window does not re-ping main; a pane whose own state changed is a
+  // fresh key and IS delivered. Never consulted across a fresh session_start
+  // replay: a wake a replacement handed back already earned its delivery.
+  deliveredStaleAt: Map<string, number>;
+  // Queue sequences change when reconciliation reannounces an unhandled
+  // capture; its source/capture key does not. Acceptance is session-scoped,
+  // not a handled marker: a replacement may recover the durable result.
+  acceptedCaptures: Set<string>;
+  // The send channel pinned to the conversation that owns this generation
+  // ("Send-channel session ownership" at the top of this file owns the
+  // contract).
+  sendUserMessageRef: { send: ((content: string, options?: { deliverAs?: string }) => unknown) | null };
 };
 
 const extensionFile = fileURLToPath(import.meta.url);
@@ -143,6 +246,8 @@ const config = process.env.FM_CONFIG_OVERRIDE || `${fmHome}/config`;
 const armScript = `${fmRoot}/bin/fm-watch-arm.sh`;
 const hostScript = `${fmRoot}/bin/fm-supervision-host.sh`;
 const marker = `${state}/.omp-watch-extension-loaded`;
+const fmQuietCoalesceScript = `${fmRoot}/bin/fm-ask-mai-coalesce.sh`;
+const fmWakeDrainScript = `${fmRoot}/bin/fm-wake-drain.sh`;
 const handoffDir = `${state}/extensions/omp-primary-watch`;
 const actionableHandoff = `${handoffDir}/session-replacement-actionable.json`;
 const extensionVersion = `sha256:${createHash("sha256").update(readFileSync(extensionFile)).digest("hex")}`;
@@ -160,10 +265,33 @@ const hostReadyTimeoutMs = Math.max(armReadyTimeoutMs, 30000);
 const armRetireTimeoutMs = positiveInteger("FM_WATCH_ARM_RETIRE_TIMEOUT_MS", 1000);
 const repairOnlyHint = "call fm_watch_arm_omp again only after a later notification says the cycle is missing, failed, or unhealthy";
 const shuttingDownMessage = "watcher: not armed - omp session is shutting down";
+// A persisted replacement handoff that outlives its predecessor omp session
+// replays stale notifications on every ordinary restart (the Oct 10 case
+// replayed 261 of them, and only a forced kill cleared the file, because a
+// plain restart re-persists whatever replays). Cmp for age only against the
+// origin stamp; a missing stamp reads oldest, so a handoff predating this
+// bound expires as soon as its predecessor process is gone.
+const handoffMaxAgeMs = positiveInteger("FM_OMP_HANDOFF_MAX_AGE_MS", 60 * 60 * 1000);
+const handoffMaxPending = positiveInteger("FM_OMP_HANDOFF_MAX_PENDING", 50);
 
 let nextGenerationId = 0;
 let nextHandoffId = 0;
 let activeGeneration: SessionGeneration | null = null;
+const debugLog = extensionDebugLogger("omp-watch");
+// One id per evaluation of this module and one per factory invocation, so the
+// debug log shows whether a rebound session shares this module's state.
+const debugModuleInstance = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+let nextDebugBindingId = 0;
+function generationDebugFields(generation: SessionGeneration): Record<string, unknown> {
+  return {
+    module: debugModuleInstance,
+    generation: generation.id,
+    stopping: generation.stopping,
+    activeGeneration: activeGeneration ? activeGeneration.id : null,
+    live: generationIsLive(generation),
+    lock: lockOwnership(),
+  };
+}
 let replacementHandoff: PendingActionableClose[] | null = null;
 type ReplacementActionableReceiver = (pending: PendingActionableClose) => void;
 type ActionableDeliveryClaim = {
@@ -222,6 +350,67 @@ function pidAlive(pid: string): boolean {
   } catch {
     return false;
   }
+}
+
+const fmWakeLib = `${fmRoot}/bin/fm-wake-lib.sh`;
+
+// The watcher side of the ownership answer ("unchanged" in startArm and in the
+// session_start liveness check): bin/fm-wake-lib.sh's fm_watcher_fresh_beat
+// applies the turn-end guard's staleness threshold to state/.last-watcher-beat
+// with no process or lock requirement, so a held slot reflects a watcher that
+// actually beat within the guard's grace. A query that cannot run (missing
+// lib, shell error) or a missing/stale beacon reads as unhealthy, never as
+// healthy.
+function watcherBeatFresh(): boolean {
+  const result = spawnSync(
+    "bash",
+    ["-c", `. "$1" && fm_watcher_fresh_beat "$2"`, "bash", fmWakeLib, state],
+    { encoding: "utf8" },
+  );
+  return result.status === 0;
+}
+
+// The guard grace as bin/fm-wake-lib.sh derives it; a miss falls back to the
+// library's documented 300s floor (fm_poll_derived_grace owns the default).
+let guardGraceMsCache = 0;
+function guardGraceMs(): number {
+  if (guardGraceMsCache > 0) return guardGraceMsCache;
+  const result = spawnSync(
+    "bash",
+    ["-c", `. "$1" && fm_poll_derived_grace`, "bash", fmWakeLib],
+    { encoding: "utf8" },
+  );
+  const seconds = result.status === 0 ? Number(result.stdout.trim()) : Number.NaN;
+  guardGraceMsCache = (Number.isFinite(seconds) && seconds > 0 ? seconds : 300) * 1000;
+  return guardGraceMsCache;
+}
+
+// Arming timestamps, so a freshly armed child whose first beat window has not
+// elapsed yet is not misread as a non-beating watcher (the guard grace IS the
+// watcher's beat budget: a child younger than it may simply not have beaten).
+const armStartedAt = new WeakMap<ChildProcess, number>();
+
+// Whether the ownership slot may answer "unchanged": the arm child process
+// must be live as a process (dead tracked children never answer ownership,
+// matching the Pi adapter's liveArmChild port here) AND - once the child has
+// been up at least one guard grace, the watcher's own beat budget - some
+// watcher must still be beating. An exited-but-unclosed child must not hold
+// the single-flight slot: neither a repair call nor a scheduled retry would
+// start anything until that close finally fired. The beat half closes the
+// fm-5gh5 gap, where a live arm child whose watcher had stopped answering
+// kept the slot while no beat arrived, so fm_watch_arm_omp and session_start
+// both reported health through a window with no watcher cycle. The grace-age
+// tolerance keeps a child armed seconds ago (its first beat still in flight)
+// from earning a spurious re-arm on every redundant call.
+export function armOwnershipHealthy(owner: SessionGeneration): boolean {
+  const child = owner.child;
+  if (!child) return false;
+  if (child.exitCode !== null || child.signalCode !== null) return false;
+  const pid = child.pid;
+  if (pid === undefined || !pidAlive(String(pid))) return false;
+  const startedAt = armStartedAt.get(child);
+  if (startedAt !== undefined && Date.now() - startedAt < guardGraceMs()) return true;
+  return watcherBeatFresh();
 }
 
 function lockOwnership(): LockOwnership {
@@ -326,49 +515,101 @@ function createPendingActionable(message: string, predecessorArmPid: string): Pe
     token: `${process.pid}-${Date.now()}-${++replacementCoordinator.nextTokenId}`,
     message,
     predecessorArmPid,
+    originPid: String(process.pid),
+    originAt: Date.now(),
   };
 }
 
+// The creation origin of a handoff entry: the explicit stamps when present,
+// otherwise derived from the token's own "<pid>-<epoch-ms>-<seq>" head -
+// which means handoffs persisted by builds predating the stamps (the Oct 10
+// file's 261 entries included) still carry their predecessor's pid and age
+// readable at replay time.
+export function handoffEntryOrigin(item: PendingActionableClose): { pid: string; atMs: number } {
+  if (item.originPid !== undefined && item.originPid !== "" && item.originAt !== undefined) {
+    return { pid: item.originPid, atMs: item.originAt };
+  }
+  const match = item.token.match(/^([0-9]+)-([0-9]+)-[0-9]+$/);
+  return match ? { pid: match[1], atMs: Number(match[2]) } : { pid: "", atMs: 0 };
+}
+
+// Whether a persisted handoff entry is expired at <nowMs>: the predecessor
+// omp session that created it is gone AND the entry has passed the age
+// bound. A pid that is alive always keeps the entry - pid recycling keeps
+// an old handoff past expiry, never the reverse, which is exactly "never
+// drop a fresh pending wake from a live predecessor".
+export function handoffEntryExpired(item: PendingActionableClose, nowMs: number): boolean {
+  const origin = handoffEntryOrigin(item);
+  if (origin.pid === "" || pidAlive(origin.pid)) return false;
+  return nowMs - origin.atMs >= handoffMaxAgeMs;
+}
+
+// Whether <item> is a prune casualty when the persisted list exceeds the
+// bound: it falls outside the newest <max> entries by (age, token).
+export function handoffEntryDroppedByCap(item: PendingActionableClose, all: PendingActionableClose[], max: number): boolean {
+  const ordered = [...all].sort((a, b) => {
+    const aAt = handoffEntryOrigin(a).atMs;
+    const bAt = handoffEntryOrigin(b).atMs;
+    return aAt - bAt || a.token.localeCompare(b.token);
+  });
+  return ordered.indexOf(item) < ordered.length - max;
+}
+
 function validatePendingActionable(value: unknown): PendingActionableClose {
+  const item = value as Partial<PendingActionableClose> & { version?: unknown };
   if (
     typeof value !== "object" || value === null ||
-    (value as { version?: unknown }).version !== 1 ||
-    typeof (value as { token?: unknown }).token !== "string" ||
-    !/^[0-9]+-[0-9]+-[0-9]+$/.test((value as { token: string }).token) ||
-    typeof (value as { message?: unknown }).message !== "string" ||
-    (!actionableLine((value as { message: string }).message) &&
-      !/^supervision-host:/m.test((value as { message: string }).message)) ||
-    typeof (value as { predecessorArmPid?: unknown }).predecessorArmPid !== "string" ||
-    !/^[0-9]*$/.test((value as { predecessorArmPid: string }).predecessorArmPid) ||
-    ((value as { delivered?: unknown }).delivered !== undefined &&
-      (value as { delivered?: unknown }).delivered !== true)
+    item.version !== 1 ||
+    typeof item.token !== "string" ||
+    !/^[0-9]+-[0-9]+-[0-9]+$/.test(item.token) ||
+    typeof item.message !== "string" ||
+    (!actionableLine(item.message) &&
+      !/^supervision-host:/m.test(item.message)) ||
+    typeof item.predecessorArmPid !== "string" ||
+    !/^[0-9]*$/.test(item.predecessorArmPid) ||
+    (item.originPid !== undefined && (typeof item.originPid !== "string" || !/^[0-9]+$/.test(item.originPid))) ||
+    (item.originAt !== undefined && (typeof item.originAt !== "number" || !Number.isFinite(item.originAt) || item.originAt <= 0)) ||
+    (item.delivered !== undefined && item.delivered !== true)
   ) {
     throw new Error(`invalid omp replacement actionable handoff at ${actionableHandoff}`);
   }
   return value as PendingActionableClose;
 }
 
-function validateReplacementHandoff(value: unknown): PendingActionableClose[] {
-  if (
-    typeof value !== "object" || value === null ||
-    (value as { version?: unknown }).version !== 2 ||
-    !Array.isArray((value as { pending?: unknown }).pending) ||
-    (value as { pending: unknown[] }).pending.length === 0
-  ) {
+function validateReplacementHandoff(value: unknown): { pending: PendingActionableClose[] } {
+  const raw = value as Partial<ReplacementActionableHandoff>;
+  if (typeof value !== "object" || value === null || raw.version !== 2 || !Array.isArray(raw.pending)) {
     throw new Error(`invalid omp replacement actionable handoff at ${actionableHandoff}`);
   }
-  const pending = (value as { pending: unknown[] }).pending.map(validatePendingActionable);
-  if (new Set(pending.map((item) => item.token)).size !== pending.length) {
-    throw new Error(`invalid omp replacement actionable handoff at ${actionableHandoff}`);
+  const pending = raw.pending.map(validatePendingActionable);
+  const tokens: Record<string, true> = {};
+  for (const item of pending) {
+    if (tokens[item.token]) throw new Error(`invalid omp replacement actionable handoff at ${actionableHandoff}`);
+    tokens[item.token] = true;
   }
-  return pending;
+  return { pending };
 }
 
-function writeReplacementHandoff(pending: PendingActionableClose[]): void {
-  replacementHandoff = [...pending];
+export function writeReplacementHandoff(pending: PendingActionableClose[]): void {
+  // Persist only the newest handoffMaxPending entries (by origin age, then
+  // token); a shutdown pile-up (the Oct 10 case) can never grow the file
+  // unbounded. A fresh pending wake is always newest, so the cap never
+  // drops the wake this shutdown just created.
+  const kept: PendingActionableClose[] = [];
+  let droppedCount = 0;
+  for (const item of pending) {
+    if (handoffEntryDroppedByCap(item, pending, handoffMaxPending)) droppedCount += 1;
+    else kept.push(item);
+  }
+  if (droppedCount > 0) {
+    globalStaleNotes().push(
+      `watcher: dropped ${droppedCount} replacement-session actionable wake(s) over the ${handoffMaxPending}-entry persistence bound; the newest pending wakes were kept`,
+    );
+  }
+  replacementHandoff = [...kept];
   mkdirSync(handoffDir, { recursive: true });
   const temporary = `${actionableHandoff}.tmp-${process.pid}-${++nextHandoffId}`;
-  const handoff: ReplacementActionableHandoff = { version: 2, pending };
+  const handoff: ReplacementActionableHandoff = { version: 2, pending: kept };
   try {
     writeFileSync(temporary, `${JSON.stringify(handoff)}\n`, { mode: 0o600 });
     renameSync(temporary, actionableHandoff);
@@ -381,17 +622,140 @@ function writeReplacementHandoff(pending: PendingActionableClose[]): void {
     throw error;
   }
 }
+// The replay side of writeReplacementHandoff: drop aged-out entries whose
+// predecessor session process is gone, delete or rewrite the persisted file
+// so an ordinary restart no longer re-persists them, then hand the survivors
+// to the ordinary load path. The durable wake queue (bin/fm-wake-drain.sh)
+// already replays every wake idempotently, so an entry is lost only when it
+// never reached ANY session - which this file's own persistence prevents.
+
+export function loadReplacementHandoffWithExpiry(load: () => PendingActionableClose[], note: (text: string) => void): PendingActionableClose[] {
+  let unexpired: PendingActionableClose[] = [];
+  try {
+    unexpired = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8"))).pending;
+  } catch (error) {
+    if (nodeErrorCode(error) === "ENOENT") return load();
+    throw error;
+  }
+  const nowMs = Date.now();
+  const agedOut = unexpired.filter((item) => handoffEntryExpired(item, nowMs));
+  if (agedOut.length === 0) return load();
+  const kept = unexpired.filter((item) => !handoffEntryExpired(item, nowMs));
+  if (kept.length === 0) {
+    replacementHandoff = null;
+    unlinkSync(actionableHandoff);
+  } else {
+    writeReplacementHandoff(kept);
+  }
+  const origin = handoffEntryOrigin(agedOut[0]);
+  note(`watcher: dropped ${agedOut.length} stale replacement-session actionable wake(s) (origin pid ${origin.pid} gone, older than ${Math.round(handoffMaxAgeMs / 60000)}m); the durable wake queue already replays these`);
+  return load();
+}
+
+// Wake-coalescing primitives (one companion commit). Three rules act on a
+// pending actionable close AT DELIVERY TIME so main is never woken for a
+// queue someone else already drained, a busy main is not spammed one
+// follow-up per queued actionable, and a pane whose agent stopped weeks
+// ago retriggers no repeated identical stale ping.
+//
+// (1) wakeQueuePendingCount: the durable wake queue ($FM_WAKE_QUEUE, falling
+// back to $STATE/.wake-queue) is the authority the watcher appended to
+// before it closed. A record whose queue shows 0 valid rows is already
+// drained; the close carries no fresh work for main. Rows are valid TSVs
+// with kind in signal|stale|check|heartbeat.
+export function wakeQueuePendingCount(queuePath: string): number {
+  let text: string;
+  try {
+    text = readFileSync(queuePath, "utf8");
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line) continue;
+    const fields = line.split("\t");
+    if (fields.length < 5) continue;
+    if (["signal", "stale", "check", "heartbeat"].includes(fields[2])) count += 1;
+  }
+  return count;
+}
+
+// Default wake-queue path the extension consults. bin/fm-wake-lib.sh owns
+// the name; a test overrides with FM_WAKE_QUEUE.
+function extensionWakeQueuePath(): string {
+  return process.env.FM_WAKE_QUEUE || `${state}/.wake-queue`;
+}
+
+// (2) A batch is a set of pending actionable closes that settle together:
+// one main follow-up subsumes them all. The batch KEEPS every member (so
+// consumption finishes every token's pending record), but the composite
+// message dedupes repeated identical reason texts inside itself so a pane
+// that emits the same line in several consecutive closes still appears
+// once.
+export type PendingActionableBatch = {
+  items: PendingActionableClose[];
+  message: string;
+};
+export function buildPendingActionableBatch(pending: PendingActionableClose[]): PendingActionableBatch {
+  const items = [...pending];
+  if (items.length === 1) return { items, message: items[0].message };
+  const seen = new Set<string>();
+  let dupes = 0;
+  for (const item of pending) {
+    if (seen.has(item.message)) { dupes += 1; continue; }
+    seen.add(item.message);
+  }
+  const lines = [...seen].map((reason) => `- ${reason}`);
+  const dupeSuffix = dupes > 0 ? ` (${dupes} duplicate reason${dupes === 1 ? "" : "s"} settled by the same delivery)` : "";
+  return {
+    items,
+    message: `${items.length} wakes pending (coalesced)${dupeSuffix}:\n${lines.join("\n")}`,
+  };
+}
+
+// (3) Per-pane temporal dedupe: the key a stale wake is keyed on. A stale
+// wake's reason text begins with "stale: <pane-label> ..." - the pane is
+// the stable identity. Anything else (signal:, check:, heartbeat:) is keyed
+// by the full reason text alone since those reasons carry no pane address.
+export function stalePaneKey(message: string): string {
+  const match = message.match(/^stale:[ \t]+(\S+)/);
+  return match ? `pane:${match[1]}` : `other:${message}`;
+}
+
+// Whether this item is suppressed under the temporal map: an identical
+// (pane, reason) pair was already delivered within <ttlMs> and the pane has
+// not changed state since. Returns false when the entry is expired or
+// absent, true when it must not re-fire. Never suppress a fresh pending
+// wake from a live predecessor's session_start replay.
+export function staleWakeSuppressed(
+  deliveredAtMs: Map<string, number>,
+  item: PendingActionableClose,
+  nowMs: number,
+  ttlMs: number,
+): boolean {
+  const key = `${stalePaneKey(item.message)}|${item.message}`;
+  const at = deliveredAtMs.get(key);
+  if (at === undefined) return false;
+  if (nowMs - at > ttlMs) return false;
+  return true;
+}
+export const staleWakeupTtlMs = 10 * 60 * 1000;
 
 function persistReplacementHandoff(pending: PendingActionableClose[]): void {
   if (pending.length === 0) return;
   writeReplacementHandoff(pending);
 }
 
-function loadReplacementHandoff(): PendingActionableClose[] {
+// The replay side of the handoff: the plain flat load, kept as the single
+// call shape the wrapper and every caller share. Expiry and pruning live in
+// loadReplacementHandoffWithExpiry, which activateOwnedWatch drives exactly
+// once per replay; everything else (merge, clear, persist) reads and writes
+// through it WITHOUT re-expiring, so only the owning session_start replays
+// lose entries and a mid-session merge never silently expires anything.
+export function loadReplacementHandoff(): PendingActionableClose[] {
+  let stored: PendingActionableClose[] = [];
   try {
-    const pending = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8")));
-    replacementHandoff = pending;
-    return [...pending];
+    stored = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8"))).pending;
   } catch (error) {
     if (nodeErrorCode(error) === "ENOENT") {
       replacementHandoff = null;
@@ -399,12 +763,14 @@ function loadReplacementHandoff(): PendingActionableClose[] {
     }
     throw error;
   }
+  replacementHandoff = stored;
+  return [...stored];
 }
 
 function mergeReplacementHandoff(pending: PendingActionableClose): void {
   let stored: PendingActionableClose[] = [];
   try {
-    stored = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8")));
+    stored = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8"))).pending;
   } catch (error) {
     if (nodeErrorCode(error) !== "ENOENT") throw error;
   }
@@ -414,7 +780,7 @@ function mergeReplacementHandoff(pending: PendingActionableClose): void {
 
 function clearReplacementHandoff(pending: PendingActionableClose): void {
   try {
-    const stored = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8")));
+    const stored = validateReplacementHandoff(JSON.parse(readFileSync(actionableHandoff, "utf8"))).pending;
     const remaining = stored.filter((item) => item.token !== pending.token);
     if (remaining.length === stored.length) return;
     if (remaining.length > 0) {
@@ -486,11 +852,17 @@ function createGeneration(): SessionGeneration {
     pendingActionables: [],
     cleanupFailure: "",
     unconsumedWakes: new Map(),
+    deliveredStaleAt: new Map(),
+    acceptedCaptures: new Set(),
     deferredClose: null,
+    sendUserMessageRef: { send: null },
   };
 }
 
 function activateGeneration(generation: SessionGeneration): void {
+  // Free the send channel the generation being displaced claimed, so no wake
+  // ever rides a stale conversation's binding.
+  if (activeGeneration && activeGeneration !== generation) activeGeneration.sendUserMessageRef.send = null;
   activeGeneration = generation;
 }
 
@@ -524,6 +896,9 @@ async function waitForGenerationChildClose(armChild: ChildProcess | null): Promi
 }
 
 async function stopSessionGeneration(generation: SessionGeneration, replacement: boolean): Promise<void> {
+  // Release this conversation's send channel first: its session is shutting
+  // down, so nothing after this point may deliver through it.
+  generation.sendUserMessageRef.send = null;
   generation.replacement = replacement;
   let persistedTokens = "";
   try {
@@ -557,8 +932,264 @@ const cleanupOnProcessExit = () => {
 process.once("exit", cleanupOnProcessExit);
 
 export default function (pi: ExtensionAPI) {
+  const debugBinding = ++nextDebugBindingId;
+  const debugPredecessorGeneration = activeGeneration ? activeGeneration.id : null;
   let generation = createGeneration();
-  activateGeneration(generation);
+  // A rebind for a subagent session must not displace the live primary
+  // generation (see "Subagent session safety" above); the primary's own
+  // session_start still activates its generation unconditionally.
+  const bindActivates = !activeGeneration || activeGeneration.stopping;
+  if (bindActivates) activateGeneration(generation);
+  debugLog(debugBinding, "factory_bind", bindActivates ? "activateGeneration" : "keep-live-generation", undefined, () => ({
+    ...generationDebugFields(generation),
+    predecessorActiveGeneration: debugPredecessorGeneration,
+  }));
+
+  // Routine absorption mode (docs/configuration.md "Routine wake absorption"
+  // owns the contract). `banner` (the default, and every unrecognized value)
+  // is the #11 behavior: one informational banner for absorbed routine rows.
+  // `silent` absorbs those rows with no message to the primary at all - the
+  // queue rows are deleted under the wake queue lock through
+  // bin/fm-wake-drain.sh --delete-sequences and the only trace is the ledger
+  // and triage log - while `off` disables absorption. Read fresh each
+  // delivery so a config change takes effect on the next wake.
+  type WakeRoutineMode = "banner" | "silent" | "off";
+
+  function wakeRoutineMode(): WakeRoutineMode {
+    let value = "";
+    try {
+      value = readFileSync(`${config}/wake-routine-mode`, "utf8").trim();
+    } catch {
+      return "banner";
+    }
+    if (value === "silent" || value === "off") return value;
+    return "banner";
+  }
+
+  // Periodic visibility for silent absorption (same config owner). Default
+  // 30 minutes; 0 disables the digest. Malformed values fall back to the
+  // default.
+  function wakeRoutineDigestMins(): number {
+    try {
+      const raw = readFileSync(`${config}/wake-routine-digest-mins`, "utf8").trim();
+      if (/^[0-9]+$/.test(raw)) return Number(raw);
+    } catch {
+      // Absent file: default.
+    }
+    return 30;
+  }
+
+  // Epoch the last issued digest covered. In-memory: sessions are long-lived
+  // supervision primaries, and the rate-limit contract is at-most-every-N
+  // (docs/configuration.md), so a restart may issue extra digests (never
+  // swallow more).
+  let lastRoutineDigestAt = 0;
+
+  // Silent-absorption ledger. One tab-separated line per absorbed wake in
+  // state/.fm-routine-absorbed.tsv: epoch, task key, summary. The leading
+  // line's epoch is the digest window's "since". Cleared after each sent
+  // digest, so the file holds exactly the rows the next digest will count.
+  const routineAbsorbedLog = `${state}/.fm-routine-absorbed.tsv`;
+
+  function recordSilentAbsorption(absorbed: WakeCoalesceRow[]): { count: number; sinceEpoch: number; last: string } {
+    let sinceEpoch = 0;
+    let count = 0;
+    try {
+      if (existsSync(routineAbsorbedLog)) {
+        const lines = readFileSync(routineAbsorbedLog, "utf8").split("\n").filter((line) => line !== "");
+        count = lines.length;
+        const firstTab = lines.length > 0 ? lines[0].indexOf("\t") : -1;
+        sinceEpoch = firstTab > 0 ? Number(lines[0].slice(0, firstTab)) : 0;
+      }
+    } catch {
+      count = 0;
+    }
+    let last = "";
+    for (const row of absorbed) {
+      try {
+        const epoch = Math.floor(Date.now() / 1000);
+        appendFileSync(routineAbsorbedLog, `${epoch}\t${row.key}\t${row.summary || row.kind}\n`);
+        if (count === 0) sinceEpoch = epoch;
+        count += 1;
+      } catch {
+        // Losing a ledger line only degrades one digest entry.
+      }
+      last = `${row.key}: ${row.summary || row.kind}`;
+    }
+    return { count, sinceEpoch, last };
+  }
+
+  // Digest line shape:
+  //   ⚓ digest · <N> routine absorbed since HH:MM (task: last status…)
+  function routineDueDigestText(record: { count: number; sinceEpoch: number; last: string }): string {
+    const due = new Date(record.sinceEpoch * 1000).toTimeString().slice(0, 5);
+    const summary = record.last.length > 50 ? `${record.last.slice(0, 50)}…` : record.last;
+    return `⚓ digest · ${record.count} routine absorbed since ${due} (${summary})`;
+  }
+
+
+  // Cleared after a digest is successfully sent so the "since" window and
+  // count restate exactly what the last digest covered.
+  function clearRoutineAbsorbedLog(): void {
+    try {
+      unlinkSync(routineAbsorbedLog);
+    } catch {
+      // A cleared ledger is courtesy; a leftover line only widens the next
+      // window's count.
+    }
+  }
+
+// Wake text contract. A compact one-line banner replaces the historical
+// multi-line "Run bin/fm-wake-drain.sh first and handle the queued wake..."
+// body. The envelope kind stays "watcher" so fm-operational-input.sh
+// classification, the turn-end guard, and firstmate's supervision protocol
+// are unchanged. The agent learns the new call shape from
+// docs/supervision-protocols/omp.md and the bin/fm-wake-drain.sh header.
+const FM_WAKE_BANNER = "⚓ wake";
+const FM_WAKE_DELIVERY_RULE = "handled by bin/fm-wake-drain.sh --brief";
+
+function wakeTruncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max)}…`;
+}
+
+// Decompose a wake message into its kind and a short continuation (no
+// duplicate "kind:" prefix, no newlines, no absolute path stretch).
+function wakeDecompose(message: string): { kind: string; rest: string } {
+  const trimmed = message.split(/\r?\n/, 1)[0].trim();
+  const m = /^(signal|stale|check|heartbeat|watcher|procevent)(?::\s*|\s+|$)(.*)$/.exec(trimmed);
+  if (m) {
+    const rest = m[2].replace(/^\s+/, "");
+    return { kind: m[1], rest: rest.length > 0 ? rest : "" };
+  }
+  return { kind: "wake", rest: trimmed };
+}
+
+// One-line wake banner. The trailing rule names the only handling command
+// the agent needs so the supervision protocol stays the contract's owner.
+function formatWakeMessage(message: string): string {
+  const { kind, rest } = wakeDecompose(message);
+  const body = rest ? ` ${wakeTruncate(rest, 80)}` : "";
+  return `${FM_WAKE_BANNER} · ${kind}:${body} — ${FM_WAKE_DELIVERY_RULE}`;
+}
+
+// One line covering one or more absorbed routine rows. The agent always
+// sees the absorption count (never a silent swallow).
+function formatAbsorbedWakeSummary(absorbed: { kind: string; key: string; summary?: string }[]): string {
+  const previews = absorbed
+    .slice(0, 2)
+    .map((row) => `${row.key} (${wakeTruncate(row.summary || row.kind, 60)})`)
+    .join(", ");
+  const extra = absorbed.length > 2 ? `, +${absorbed.length - 2}` : "";
+  return `${absorbed.length} routine absorbed: ${previews}${extra}`;
+}
+  // Run bin/fm-wake-drain.sh --brief --ack and return the one-line summary it
+  // presents, or null when the drain fails or there is nothing to present.
+  // A routine drain acks itself (its trailing marker is "(acked)"); an
+  // actionable drain prints a WAKE_ACK_REQUIRED line naming the exact
+  // --ack-through cutoff and recovery generation for what it presented.
+  // bin/fm-wake-drain.sh owns the contract and writes that line to STDERR
+  // while the rows ride stdout, so both streams are scanned: a parser that
+  // reads only stdout never sees the marker, delivers the rows without
+  // their ack contract, and leaves them queued to repeat on the next wake
+  // (the 2026-10-14 live defect). The drain owns the queue read; the
+  // extension only ever runs it immediately before sending a wake message,
+  // so concurrent rows are still serialized through the queue lock.
+  function drainWakeQueueBriefAck(
+    owner: SessionGeneration,
+  ): { rows: string[]; ackPending: boolean; ackThrough: string | null; ackGeneration: string | null } | null {
+    const drain = spawnSync("bash", [fmWakeDrainScript, "--brief", "--ack"], {
+      cwd: fmRoot,
+      encoding: "utf8",
+      env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot, FM_WAKE_QUEUE: extensionWakeQueuePath() },
+    });
+    if (drain.status !== 0) {
+      const detail = ((drain.stderr || "") + "\n" + (drain.stdout || "")).trim() || "no output";
+      surfaceFailure(owner, `watcher: FAILED - bin/fm-wake-drain.sh --brief --ack exited ${drain.status}\n${wakeTruncate(detail, 200)}`);
+      return null;
+    }
+    // Rows on stdout, ack marker on stderr; empty lines never survive either
+    // trim, and a bounded lock skip ("WAKE DRAIN SKIPPED") just keeps the
+    // queue for the next wake rather than presenting a half-drained set.
+    const combined = `${(drain.stdout || "").trim()}\n${(drain.stderr || "").trim()}`.trim();
+    const lines = combined.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line !== "");
+    const markerIndex = lines.findIndex((line) => line === "(acked)" || line.startsWith("WAKE_ACK_REQUIRED:"));
+    const ackLine = markerIndex >= 0 ? lines[markerIndex] : undefined;
+    const rows = ackLine ? lines.slice(0, markerIndex) : lines;
+    if (rows.length === 0) {
+      if (!ackLine) return null;
+      // A marker with no rows (the empty-queue recovery notice) carries no
+      // wake rows for main; treat it as nothing presented rather than waking
+      // over an empty summary.
+      return null;
+    }
+    const ackPending = Boolean(ackLine?.startsWith("WAKE_ACK_REQUIRED:"));
+    let ackThrough: string | null = null;
+    let ackGeneration: string | null = null;
+    if (ackPending && ackLine) {
+      const match = /--ack-through\s+(\d+)\s+--recovery-generation\s+(\S+)/.exec(ackLine);
+      if (match) {
+        ackThrough = match[1];
+        ackGeneration = match[2];
+      }
+    }
+    // Only the rows ride the wake text; the ack contract stays an extension
+    // concern, settled in-extension by ackPresentedWake below.
+    return { rows, ackPending, ackThrough, ackGeneration };
+  }
+
+  // Acknowledge exactly what a --brief --ack drain presented: run its named
+  // --ack-through cutoff under the queue lock so the presented rows leave
+  // the durable queue and no later drain re-presents them. The cutoff the
+  // drain printed was computed against the rows IT presented, and a row
+  // that arrived after presentation sits above the cutoff and is never
+  // consumed (claim_main_rows_locked claims only unreserved rows at or
+  // below it), so acking here is safe against the interleave where a newer
+  // wake landed between presentation and ack. A failed or absent ack keeps
+  // the rows queued and reported, never silently swallowed; the next wake
+  // then re-presents them, which is the loud failure, not the hidden one.
+  function ackPresentedWake(
+    owner: SessionGeneration,
+    drained: { ackPending: boolean; ackThrough: string | null; ackGeneration: string | null },
+  ): void {
+    if (!drained.ackPending || !drained.ackThrough || !drained.ackGeneration) return;
+    let ack;
+    try {
+      ack = spawnSync(
+        "bash",
+        [fmWakeDrainScript, "--ack-through", drained.ackThrough, "--recovery-generation", drained.ackGeneration],
+        {
+          cwd: fmRoot,
+          encoding: "utf8",
+          env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot, FM_WAKE_QUEUE: extensionWakeQueuePath() },
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      surfaceFailure(owner, `watcher: FAILED - the presented wake could not be acknowledged\n${wakeTruncate(message, 200)}`);
+      return;
+    }
+    if (ack.status !== 0) {
+      const detail = ((ack.stderr || "") + "\n" + (ack.stdout || "")).trim() || "no output";
+      surfaceFailure(owner, `watcher: FAILED - the presented wake could not be acknowledged (exit ${ack.status})\n${wakeTruncate(detail, 200)}`);
+    }
+  }
+
+  // Targeted versus global send path ("Send-channel session ownership" at
+  // the top of this file owns the contract): targeted is the session-pinned
+  // closure; global is this factory's own pi closure, correct only before
+  // the owning session_start pins the channel, and always logged so the
+  // lifecycle debug log distinguishes which path delivered.
+  function sendWakeChannel(
+    owner: SessionGeneration,
+    content: string,
+  ): { path: "targeted" | "global"; send: () => unknown } {
+    if (owner.sendUserMessageRef.send) {
+      const send = owner.sendUserMessageRef.send;
+      return { path: "targeted", send: () => send(content, { deliverAs: "followUp" }) };
+    }
+    return { path: "global", send: () => pi.sendUserMessage(content, { deliverAs: "followUp" }) };
+  }
 
   async function sendWake(
     owner: SessionGeneration,
@@ -566,13 +1197,17 @@ export default function (pi: ExtensionAPI) {
     pending?: PendingActionableClose,
   ): Promise<boolean> {
     if (!generationIsLive(owner)) return false;
-    const content = encodeFirstmateOperationalInput(
-      "watcher",
-      `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
-    );
+    // Prune notes for this session ride its first delivered wake rather than
+    // becoming wakes of their own; up to two from one replay (stale-drop and
+    // cap) fit one line block. They ride BEFORE the compact banner so they
+    // never get swallowed by the row-kind prefix.
+    const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
+    const content = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${formatWakeMessage(message)}`);
     if (pending) owner.unconsumedWakes.set(pending.token, { content, pending });
+    const channel = sendWakeChannel(owner, content);
+    debugLog(debugBinding, "wake_send", channel.path, undefined, () => generationDebugFields(owner));
     try {
-      await pi.sendUserMessage(content, { deliverAs: "followUp" });
+      await channel.send();
     } catch (error) {
       if (pending) owner.unconsumedWakes.delete(pending.token);
       throw error;
@@ -584,12 +1219,103 @@ export default function (pi: ExtensionAPI) {
     return generationIsLive(owner);
   }
 
+  // One follow-up carrying a whole batch of pending actionable closes. The
+  // batch's composite text is sent exactly once, then EACH member is
+  // registered in unconsumedWakes under its own token ALL pointing at the
+  // same composite content, so consumeWake (before_agent_start or the
+  // matching user message_start) settles the whole batch at once.
+  async function sendBatchedWake(
+    owner: SessionGeneration,
+    message: string,
+    items: PendingActionableClose[],
+  ): Promise<boolean> {
+    if (items.length === 0) return false;
+    if (!generationIsLive(owner)) return false;
+    const notesSuffix = globalStaleNotes().take().map((note) => `\n\n${note}`).join("");
+    const content = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${formatWakeMessage(message)}`);
+    // Hidden wake path: drain the queue first so the model receives the
+    // already-digested one-line summary in a hidden custom message the chat
+    // never renders; the turn opens on the custom message itself through
+    // triggerTurn:true. Queue acknowledgement settles the exact presentation,
+    // not the durable process-event result. Reconciliation may publish that
+    // unhandled result again with a new queue sequence; coalesce its stable
+    // source/capture key only after omp accepted it in this generation.
+    // Unrelated rows and new capture generations must still reach main.
+    // Fall back to the visible banner if the drain or hidden send fails,
+    // or this omp build has no sendMessage API.
+    const drained = drainWakeQueueBriefAck(owner);
+    if (drained && pi.sendMessage) {
+      const captures: string[] = [];
+      // An unknown acknowledgement contract retains the existing loud
+      // replay behavior rather than earning a suppression receipt.
+      const rows = drained.ackPending && drained.ackThrough && drained.ackGeneration
+        ? drained.rows.filter((row) => {
+          const key = /^check · (procevent:[^ ·]+:\d+) · /.exec(row)?.[1];
+          if (!key) return true;
+          if (owner.acceptedCaptures.has(key)) return false;
+          captures.push(key);
+          return true;
+        })
+        : drained.rows;
+      if (rows.length === 0 && !notesSuffix) {
+        ackPresentedWake(owner, drained);
+        finishAbsorbedItems(owner, items);
+        return generationIsLive(owner);
+      }
+      // Re-key each pending record under the drained summary so a matching
+      // role:"custom" message_start (omp 18.10.4) finishes the record; the
+      // composite content keys only the visible fallback's consumption.
+      const hiddenContent = encodeFirstmateOperationalInput("watcher", `${notesSuffix}${rows.join(" · ")}`);
+      for (const item of items) owner.unconsumedWakes.set(item.token, { content: hiddenContent, pending: item });
+      try {
+        await pi.sendMessage({ customType: "fm.wake", content: hiddenContent, display: false }, { triggerTurn: true, deliverAs: "followUp" });
+        for (const key of captures) owner.acceptedCaptures.add(key);
+        ackPresentedWake(owner, drained);
+        return generationIsLive(owner);
+      } catch {
+        // A rejected hidden send earned no capture receipt. Register the
+        // visible fallback below so its consumption still finishes the batch.
+      }
+    }
+    for (const item of items) owner.unconsumedWakes.set(item.token, { content, pending: item });
+    const channel = sendWakeChannel(owner, content);
+    debugLog(debugBinding, "wake_send", channel.path, undefined, () => generationDebugFields(owner));
+    if (items.length === 1) {
+      try {
+        await channel.send();
+        // The visible fallback still carries the rows the drain presented,
+        // so acknowledge the same presentation set it delivered.
+        if (drained) ackPresentedWake(owner, drained);
+      } catch (error) {
+        for (const item of items) owner.unconsumedWakes.delete(item.token);
+        throw error;
+      }
+      return generationIsLive(owner);
+    }
+    try {
+      await channel.send();
+      if (drained) ackPresentedWake(owner, drained);
+    } catch (error) {
+      for (const item of items) owner.unconsumedWakes.delete(item.token);
+      throw error;
+    }
+    return generationIsLive(owner);
+  }
+
   // omp consumed a main follow-up: an idle main at before_agent_start, a
   // streaming main at the user message_start that joins the running run.
+  // Coalesce rule (2) settles a whole batch here: every entry whose
+  // recorded content matches the consumed text is finished at once (a
+  // batched delivery registered one unconsumedWakes entry per batch member
+  // all under the same composite text).
   function consumeWake(owner: SessionGeneration, text: string): void {
-    for (const [token, wake] of owner.unconsumedWakes) {
+    const matched: UnconsumedWake[] = [];
+    for (const [, wake] of owner.unconsumedWakes) {
       if (wake.content !== text) continue;
-      owner.unconsumedWakes.delete(token);
+      matched.push(wake);
+    }
+    for (const wake of matched) {
+      owner.unconsumedWakes.delete(wake.pending.token);
       wake.pending.delivered = true;
       try {
         finishPendingActionable(owner, wake.pending);
@@ -597,7 +1323,12 @@ export default function (pi: ExtensionAPI) {
         surfaceCleanupFailure(owner, error);
         schedulePendingCleanup(owner);
       }
-      return;
+      // Coalesce rule (3) bookkeeping: rules that fired this delivery are
+      // recorded, so a pane's identical stale repeat inside the TTL quiets.
+      if (/^stale:/.test(wake.pending.message)) {
+        const key = `${stalePaneKey(wake.pending.message)}|${wake.pending.message}`;
+        owner.deliveredStaleAt.set(key, Date.now());
+      }
     }
   }
 
@@ -643,26 +1374,166 @@ export default function (pi: ExtensionAPI) {
     return confirmHandlingDelivery(snapshot());
   }
 
-  async function deliverActionableWake(
-    owner: SessionGeneration,
-    message: string,
-    pending: PendingActionableClose,
-    recovery?: { generation: string; watcherPid: string },
-  ): Promise<boolean> {
-    if (!generationIsLive(owner)) return false;
-    if (recovery) {
-      const confirmed = confirmHandlingDeliveryWithRetry(owner, recovery);
-      if (!confirmed.ok) {
-        const watcherPid = recovery.watcherPid;
-        if (!pidAlive(watcherPid)) {
-          await retireArm(owner.child);
-        }
-        return await sendWake(owner, `${message}\n\n${confirmed.detail}`, pending);
+  // Routine rows are folded into one informational banner. See
+  // bin/fm-ask-mai-coalesce.sh's header for the classification contract;
+  // this site owns only the delivery decision.
+  type WakeCoalesceRow = { kind: string; key: string; payload?: string; summary?: string; seq?: number };
+
+  // Delivery triage gate: called inside deliverActionableWake before a wake
+  // becomes follow-up text. Fail-open on every error shape; deterministic
+  // heartbeats and bare working/paused signals also strip with no MAI call
+  // (bin/fm-ask-mai-coalesce.sh owns that shell).
+  type WakeDeliveryDecision =
+    | { action: "deliver"; absorbedNotice?: WakeCoalesceRow[] }
+    | { action: "absorbed"; absorbedEntries: WakeCoalesceRow[] };
+
+  // Numeric seq extraction uses Number(...) directly so row filtering stays
+  // readable; a coalesce row carrying a usable numeric seq is acknowledged by
+  // that seq, anything else falls back to a coalesce-only parse.
+  function rowsFromCoalesce(value: unknown): WakeCoalesceRow[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry): entry is WakeCoalesceRow => {
+      if (!entry || typeof entry !== "object") return false;
+      if (!("kind" in entry) || !("key" in entry)) return false;
+      return typeof (entry as { kind: unknown }).kind === "string"
+        && typeof (entry as { key: unknown }).key === "string";
+    });
+  }
+
+  function deliveryDecision(): WakeDeliveryDecision {
+    let stdout: string;
+    try {
+      const result = spawnSync(
+        "bash",
+        [fmQuietCoalesceScript, fmHome, `${state}/.wake-queue`, "1"],
+        {
+          cwd: fmRoot,
+          encoding: "utf8",
+          env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot },
+        },
+      );
+      if (result.status !== 0) return { action: "deliver" };
+      stdout = String(result.stdout || "").trim();
+    } catch {
+      return { action: "deliver" };
+    }
+    if (!stdout) return { action: "deliver" };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      return { action: "deliver" };
+    }
+    if (!parsed || typeof parsed !== "object") return { action: "deliver" };
+    if (!("deliver" in parsed) || !("absorbed" in parsed)) return { action: "deliver" };
+    const deliver = rowsFromCoalesce((parsed as Record<string, unknown>).deliver);
+    const absorbed = rowsFromCoalesce((parsed as Record<string, unknown>).absorbed);
+    if (deliver.length > 0) {
+      return absorbed.length > 0
+        ? { action: "deliver", absorbedNotice: absorbed }
+        : { action: "deliver" };
+    }
+    if (absorbed.length > 0) return { action: "absorbed", absorbedEntries: absorbed };
+    return { action: "deliver" };
+  }
+
+  // Retire the pending items of an absorbed routine wake without sending a
+  // message - the banner body's finish block and silent mode's no-digest
+  // path do exactly the same work.
+  function finishAbsorbedItems(owner: SessionGeneration, items: PendingActionableClose[]): void {
+    for (const item of items) {
+      item.delivered = true;
+      try {
+        finishPendingActionable(owner, item);
+      } catch (error) {
+        surfaceCleanupFailure(owner, error);
       }
     }
-    // No supervision branch on omp: every actionable wake goes to main.
-    return await sendWake(owner, message, pending);
   }
+
+  // The silent queue edit is bin/fm-wake-drain.sh --delete-sequences: only
+  // the queue's owner script deletes rows, under its own lock and row
+  // validation, so a contract change there lands here through the same
+  // tests/fm-quiet-wakes.test.sh and tests/fm-wake-queue.test.sh gates.
+  // Absorb routine queue rows with no message to the primary: each row's
+  // exact queue sequence is deleted under the wake queue lock and every
+  // pending item retires. The ledger record, the rate-limit check, and the
+  // digest send happen only after the rows are absorbed, and the digest's
+  // ledger clear follows its successful send, so a failed delete or a failed
+  // send leaves the window intact rather than swallowing it. Returns true
+  // when the silent absorption (and, where due, the digest send) took over
+  // this turn; false when the caller must deliver instead.
+  async function absorbRoutineSilently(
+    owner: SessionGeneration,
+    items: PendingActionableClose[],
+    absorbedEntries: WakeCoalesceRow[],
+  ): Promise<boolean> {
+    const seqs: number[] = [];
+    for (const row of absorbedEntries) {
+      const seq = row.seq;
+      if (typeof seq !== "number" || !Number.isFinite(seq) || seq <= 0) return false;
+      seqs.push(Math.floor(seq));
+    }
+    if (seqs.length === 0) return false;
+    const del = spawnSync("bash", [fmWakeDrainScript, "--delete-sequences", seqs.join(",")], {
+      cwd: fmRoot,
+      encoding: "utf8",
+      env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot },
+    });
+    if (del.status !== 0) return false;
+    finishAbsorbedItems(owner, items);
+    const record = recordSilentAbsorption(absorbedEntries);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const mins = wakeRoutineDigestMins();
+    if (mins > 0 && record.last !== "" && (lastRoutineDigestAt === 0 || nowSec - lastRoutineDigestAt >= mins * 60)) {
+      try {
+        await sendWake(owner, routineDueDigestText(record), undefined);
+        lastRoutineDigestAt = nowSec;
+        clearRoutineAbsorbedLog();
+      } catch {
+        // The rows are absorbed and ledgered; a lost digest only defers
+        // visibility to the next due window.
+      }
+    }
+    return true;
+  }
+
+  async function deliverActionablesWithTriage(
+    owner: SessionGeneration,
+    message: string,
+    items: PendingActionableClose[],
+  ): Promise<boolean> {
+    const mode = wakeRoutineMode();
+    const decision = deliveryDecision();
+    if (decision.action === "absorbed") {
+      if (mode === "silent" && await absorbRoutineSilently(owner, items, decision.absorbedEntries)) {
+        return true;
+      }
+      // Routine banner: finish every pending item so the actionables'
+      // episodes retire, then send ONE informational banner with no pending
+      // token - the agent reads the absorbed count, runs --brief, and
+      // carries on.
+      finishAbsorbedItems(owner, items);
+      return await sendWake(owner, formatAbsorbedWakeSummary(decision.absorbedEntries), undefined);
+    }
+    // The wake still needs its turn. In silent mode a sibling routine row
+    // absorbed in the same call adds no one-line banner: its rows delete
+    // silently through the same absorber and the digest may still fire when
+    // due, so only the deliverable wake itself rides the envelope. A failed
+    // silent delete falls through to the banner path so the routine sibling
+    // still surfaces through its one-line banner.
+    if (mode === "silent" && decision.absorbedNotice && decision.absorbedNotice.length > 0) {
+      if (await absorbRoutineSilently(owner, [], decision.absorbedNotice)) {
+        return await sendBatchedWake(owner, message, items);
+      }
+    }
+    const suffix = decision.absorbedNotice
+      ? `\n\n(${formatAbsorbedWakeSummary(decision.absorbedNotice)})`
+      : "";
+    // No supervision branch on omp: every actionable wake goes to main.
+    return await sendBatchedWake(owner, `${message}${suffix}`, items);
+  }
+
 
   function surfaceFailure(owner: SessionGeneration, message: string): void {
     void sendWake(owner, message).catch(() => {
@@ -736,12 +1607,56 @@ export default function (pi: ExtensionAPI) {
             surfaceCleanupFailure(owner, error);
           }
         }
-        // A record omp has accepted but not consumed is neither redelivered
-        // nor finished here: consumption finishes it, replacement replays it.
-        const pending = owner.pendingActionables.find(
+        // Coalesce rule (1): a close whose durable-wake-queue row is already
+        // drained carries no work for main - mark it delivered and let the
+        // cleanup path at the head of the next iteration clear it.
+        const queueCount = wakeQueuePendingCount(extensionWakeQueuePath());
+        let suppressedPredecessor: string | undefined;
+        for (const candidate of owner.pendingActionables.filter(
+          (item) => !item.delivered && !owner.unconsumedWakes.has(item.token),
+        )) {
+          if (queueCount === 0) {
+            candidate.delivered = true;
+            suppressedPredecessor = candidate.predecessorArmPid;
+            continue;
+          }
+          // Coalesce rule (3): a pane whose stale reason we ALREADY delivered
+          // inside the TTL quiets a repeat of the identical reason; only a
+          // pane whose stale state changed (a fresh reason text) re-pings.
+          if (/^stale:/.test(candidate.message) &&
+              staleWakeSuppressed(owner.deliveredStaleAt, candidate, Date.now(), staleWakeupTtlMs)) {
+            candidate.delivered = true;
+            suppressedPredecessor = candidate.predecessorArmPid;
+          }
+        }
+        for (const dropped of owner.pendingActionables.filter((item) => item.delivered && !attemptedCleanup.has(item.token))) {
+          attemptedCleanup.add(dropped.token);
+          try {
+            finishPendingActionable(owner, dropped);
+          } catch (error) {
+            surfaceCleanupFailure(owner, error);
+          }
+        }
+        // Coalesce rule (2): every still-eligible close settles in ONE main
+        // follow-up. The batch dedupes repeated reason texts inside itself;
+        // a fresh session_start replay of ONE wake never coalesces.
+        const eligible = owner.pendingActionables.filter(
           (item) => !item.delivered && !owner.unconsumedWakes.has(item.token),
         );
-        if (!pending) break;
+        if (eligible.length === 0) {
+          // Coalescing suppresses notification, never watcher ownership.
+          // A real actionable close has already released owner.child; restore
+          // its successor even when no follow-up remains to drive that path.
+          if (suppressedPredecessor !== undefined) {
+            owner.deferredClose = null;
+            const restoration = await restoreAfterActionableClose(owner, suppressedPredecessor);
+            if (restoration.failure) surfaceFailure(owner, restoration.failure);
+            continue;
+          }
+          break;
+        }
+        const batch = buildPendingActionableBatch(eligible.slice(0, 8));
+        const pending = batch.items[0];
         const existingClaim = replacementCoordinator.deliveries.get(pending.token);
         if (existingClaim && existingClaim.owner !== owner) {
           const settlement = await existingClaim.settlement;
@@ -775,12 +1690,20 @@ export default function (pi: ExtensionAPI) {
             releaseClaim();
             return;
           }
-          const message = restoration.failure ? `${pending.message}\n\n${restoration.failure}` : pending.message;
-          const delivered = await deliverActionableWake(owner, message, pending, restoration.recovery);
+          const message = restoration.failure ? `${batch.message}\n\n${restoration.failure}` : batch.message;
+          const delivered = await deliverActionablesWithTriage(owner, message, batch.items);
           if (!delivered) {
             settleClaim("failed");
             releaseClaim();
             return;
+          }
+          // Coalesce rule (3) bookkeeping: recording here right at delivery
+          // (not only at consumption) means even an unconsumed repeat of
+          // the identical stale reason inside the TTL does not re-ping.
+          for (const item of batch.items) {
+            if (!/^stale:/.test(item.message)) continue;
+            const key = `${stalePaneKey(item.message)}|${item.message}`;
+            owner.deliveredStaleAt.set(key, Date.now());
           }
           const awaitingConsumption = owner.unconsumedWakes.has(pending.token);
           if (awaitingConsumption && !generationIsLive(owner)) {
@@ -794,11 +1717,13 @@ export default function (pi: ExtensionAPI) {
           settleClaim("delivered");
           if (!awaitingConsumption) {
             // omp consumed it before this ran.
-            pending.delivered = true;
-            try {
-              finishPendingActionable(owner, pending);
-            } catch (error) {
-              surfaceCleanupFailure(owner, error);
+            for (const item of batch.items) {
+              item.delivered = true;
+              try {
+                finishPendingActionable(owner, item);
+              } catch (error) {
+                surfaceCleanupFailure(owner, error);
+              }
             }
           }
           releaseClaim();
@@ -945,7 +1870,7 @@ export default function (pi: ExtensionAPI) {
       };
     }
     markLoaded();
-    if (owner.child) {
+    if (armOwnershipHealthy(owner)) {
       return {
         ok: true,
         message: `watcher: unchanged - omp extension already owns an arm child; no manual re-arm needed; ${repairOnlyHint}`,
@@ -976,6 +1901,7 @@ export default function (pi: ExtensionAPI) {
     });
     armHostMode.set(armChild, hostMode);
     owner.child = armChild;
+    armStartedAt.set(armChild, Date.now());
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -1031,6 +1957,11 @@ export default function (pi: ExtensionAPI) {
       releaseChild();
       const classification = classifyClose(hostMode, stdout, stderr, code, signal);
       const predecessor = String(armChild.pid ?? "");
+      debugLog(debugBinding, "arm_child_close", generationIsLive(owner) ? `${classification.kind}-handled` : `${classification.kind}-dropped-generation-not-live`, undefined, () => ({
+        ...generationDebugFields(owner),
+        armChild: id,
+        armPid: predecessor,
+      }));
       if (classification.kind === "actionable") {
         const pending = armPendingActionable.get(armChild) ?? createPendingActionable(classification.message, predecessor);
         enqueuePendingActionable(owner, pending);
@@ -1075,7 +2006,7 @@ export default function (pi: ExtensionAPI) {
     let pending: PendingActionableClose[] = [];
     let loadFailure = "";
     try {
-      pending = loadReplacementHandoff();
+      pending = loadReplacementHandoffWithExpiry(loadReplacementHandoff, (note) => globalStaleNotes().push(note));
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       loadFailure = `watcher: FAILED - omp extension could not load a replacement-session actionable wake\n${detail}`;
@@ -1098,34 +2029,128 @@ export default function (pi: ExtensionAPI) {
     return result;
   }
 
-  pi.on?.("before_agent_start", (event) => {
+// Subagent context gate ("Subagent session safety" at the top of this file
+// owns the contract). The primary's ctx.agent.kind is "main" with depth 0 and
+// a subagent's is "sub" (verified 18.8.7, 18.10.4; 18.10.4 task children also
+// carry depth > 0). The gate is defensive beyond that observed shape: it takes
+// depth > 0 as subagent whether or not kind is readable, and treats any
+// ambiguous ctx (absent agent, absent kind, or an unrecognized kind) as a
+// subagent whenever lockOwnership() proves this process is not the fleet's
+// owning primary; a fleet-owning primary keeps main semantics.
+// subagentShutdownContext additionally applies that lock test to a shutdown
+// ctx with no agent at all, where retiring shared primary state is the
+// catastrophic path.
+function subagentContext(ctx: unknown): boolean {
+  if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return false;
+  const agent = ctx.agent;
+  if (!agent || typeof agent !== "object") return false;
+  if ("kind" in agent && agent.kind === "sub") return true;
+  if ("depth" in agent && typeof agent.depth === "number" && agent.depth > 0) return true;
+  // Ambiguous: no kind field, or a kind this extension does not recognize.
+  if (!("kind" in agent) || agent.kind !== "main") return lockOwnership() !== "owned";
+  return false;
+}
+function subagentShutdownContext(ctx: unknown): boolean {
+  if (subagentContext(ctx)) return true;
+  if (!ctx || typeof ctx !== "object" || !("agent" in ctx)) return lockOwnership() !== "owned";
+  return false;
+}
+const subagentArmStatus =
+  "watcher: not armed - this is a subagent session; the supervisor's omp primary owns watcher continuity, so no action is needed here";
+
+  pi.on?.("before_agent_start", (event, ctx) => {
+    if (subagentContext(ctx)) {
+      debugLog(debugBinding, "before_agent_start", "subagent-skip", ctx, () => generationDebugFields(generation));
+      return;
+    }
+    debugLog(debugBinding, "before_agent_start", "consumeWake", ctx, () => generationDebugFields(generation));
     consumeWake(generation, String((event as { prompt?: unknown })?.prompt ?? ""));
   });
-  pi.on?.("message_start", (event) => {
-    const message = (event as { message?: { role?: unknown; content?: unknown } })?.message;
-    if (!message || message.role !== "user") return;
-    consumeWake(generation, userMessageText(message.content));
+  pi.on?.("message_start", (event, ctx) => {
+    if (subagentContext(ctx)) return;
+    if (!event || typeof event !== "object" || !("message" in event)) return;
+    const message = event.message;
+    if (!message || typeof message !== "object") return;
+    const role = "role" in message && typeof message.role === "string" ? message.role : "";
+    const customType = "customType" in message && typeof message.customType === "string" ? message.customType : "";
+    const content = "content" in message ? message.content : undefined;
+    // Hidden wake: the extension delivered watcher work through pi.sendMessage
+    // (customType fm.wake). omp never raises before_agent_start for the turn
+    // that custom message triggers, so consumption settles here, keyed on the
+    // exact content the extension sent. A custom message's content is a raw
+    // string (observed against omp 18.10.4).
+    if (role === "custom" && customType === "fm.wake" && typeof content === "string") {
+      consumeWake(generation, content);
+      return;
+    }
+    if (role !== "user") return;
+    consumeWake(generation, userMessageText(content));
   });
 
-  pi.on?.("session_start", async () => {
+  pi.on?.("session_start", async (_event, ctx) => {
+    if (subagentContext(ctx)) {
+      debugLog(debugBinding, "session_start", "subagent-skip", ctx, () => generationDebugFields(generation));
+      return;
+    }
     if (generation.stopping) generation = createGeneration();
     activateGeneration(generation);
+    // Pin this conversation's send channel to the generation: the handler
+    // past the subagent gate is the owning session ("Send-channel session
+    // ownership" at the top), and the channel survives replacement replays:
+    // the displacement null in activateGeneration runs before this claim.
+    if (!generation.sendUserMessageRef.send) {
+      generation.sendUserMessageRef.send = (sendContent: string, sendOptions?: { deliverAs?: string }) => pi.sendUserMessage(sendContent, sendOptions);
+    }
     markLoaded();
-    if (lockOwnership() !== "owned") return;
-    activateOwnedWatch(generation);
+    // Liveness verification at activation: a generation that already holds an
+    // arm slot must still prove the watcher is alive and beating before this
+    // session_start reports health by silence. A context re-emit re-binds the
+    // extension to re-emit rather than replace, and startArm then re-checks
+    // the same predicate; a slot whose child or beat is gone starts a fresh
+    // arm instead of letting the re-emit window answer "unchanged" (fm-5gh5).
+    if (generation.child && !armOwnershipHealthy(generation)) {
+      debugLog(debugBinding, "session_start", "arm-slot-unhealthy", ctx, () => generationDebugFields(generation));
+      generation.child = null;
+    }
+    if (lockOwnership() !== "owned") {
+      debugLog(debugBinding, "session_start", "activateGeneration-not-lock-owner", ctx, () => generationDebugFields(generation));
+      return;
+    }
+    const result = activateOwnedWatch(generation);
+    debugLog(debugBinding, "session_start", "activateOwnedWatch", ctx, () => ({ ...generationDebugFields(generation), result }));
   });
-  pi.on?.("session_shutdown", async () => {
+  pi.on?.("session_shutdown", async (_event, ctx) => {
+    if (subagentShutdownContext(ctx)) {
+      debugLog(debugBinding, "session_shutdown", "subagent-skip", ctx, () => generationDebugFields(generation));
+      return;
+    }
+    debugLog(debugBinding, "session_shutdown", "stopSessionGeneration", ctx, () => generationDebugFields(generation));
     // omp carries no shutdown reason (verified: `reason` is undefined), so the
     // replacement handoff is always persisted when anything is pending; a
     // terminal quit then merely replays an already-drained wake next start.
     if (replacementCoordinator.receiver === receiveReplacementActionable) replacementCoordinator.receiver = null;
     await stopSessionGeneration(generation, true);
   });
+  // Debug-only observers: registered only when the debug log is enabled, so
+  // the default extension surface is unchanged.
+  if (extensionDebugEnabled) {
+    pi.on?.("agent_end", (_event, ctx) => {
+      debugLog(debugBinding, "agent_end", "observe", ctx, () => generationDebugFields(generation));
+    });
+    pi.on?.("before_subagent_spawn", (event, ctx) => {
+      const spawned = event && typeof event === "object" && "agent" in event ? event.agent : undefined;
+      debugLog(debugBinding, "before_subagent_spawn", "observe", ctx, () => ({ ...generationDebugFields(generation), spawned }));
+    });
+  }
 
   pi.registerCommand?.("fm-watch-arm-omp", {
     description: "Arm firstmate watcher supervision through the omp extension instead of foreground bash.",
     handler: async (_args, ctx) => {
-      const result = activateOwnedWatch(generation);
+      const subagent = subagentContext(ctx);
+      const result = subagent
+        ? { ok: true, message: subagentArmStatus }
+        : activateOwnedWatch(generation);
+      debugLog(debugBinding, "fm-watch-arm-omp", subagent ? "subagent-skip" : "activateOwnedWatch", ctx, () => ({ ...generationDebugFields(generation), result }));
       ctx?.ui?.notify?.(result.message, result.ok ? "info" : "warning");
     },
   });
@@ -1139,8 +2164,16 @@ export default function (pi: ExtensionAPI) {
       "Call fm_watch_arm_omp only for the first required cycle or after a notification says the cycle is missing, failed, or unhealthy. Do not call it after ordinary work, turn completion, or ordinary signal, stale, check, or heartbeat handling because the omp extension owns re-arming. Never run bin/fm-watch-arm.sh through bash.",
     ],
     parameters: Type.Object({}),
-    execute: async () => {
+    execute: async (_toolCallId: unknown, _params: unknown, _signal: unknown, _onUpdate: unknown, ctx: unknown) => {
+      if (subagentContext(ctx)) {
+        debugLog(debugBinding, "fm_watch_arm_omp", "subagent-skip", ctx, () => generationDebugFields(generation));
+        return {
+          content: [{ type: "text", text: subagentArmStatus }],
+          details: { ok: true, message: subagentArmStatus },
+        };
+      }
       const result = activateOwnedWatch(generation);
+      debugLog(debugBinding, "fm_watch_arm_omp", "activateOwnedWatch", ctx, () => ({ ...generationDebugFields(generation), result }));
       return {
         content: [{ type: "text", text: result.message }],
         details: result,

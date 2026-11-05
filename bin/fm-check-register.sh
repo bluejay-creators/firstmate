@@ -2,6 +2,9 @@
 # Bind an intentional custom watcher check to its current bytes.
 # Usage: fm-check-register.sh <id>
 # Retire with fm-check-unregister.sh <id>; do not hand-compose an rm.
+# Cadence: the watcher runs every check on config `FM_CHECK_INTERVAL` unless the
+# check file's header carries `# fm-check-interval: <seconds>`, which gives that
+# one check its own (shorter or longer) cycle from the sweep's next watcher start.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

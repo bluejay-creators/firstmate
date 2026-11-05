@@ -482,9 +482,9 @@ FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT='^(Build|Plan)[[:space:]]+·[[:space:]]+'
 # is deliberately not matched - and the marker is quantifier-free so the same
 # bytes match under LC_ALL=C as under a UTF-8 locale.
 FM_COMPOSER_MODE_HINT_RE_DEFAULT='^[[:space:]]*(⏵|⏸)'
-# omp (Oh My Pi) draws a one-row status line directly BELOW its borderless
-# composer: an identity or spinner cell, then middle-dot separated model, path,
-# git, and context cells. Verified live through Herdr on omp 18.1.11:
+# omp (Oh My Pi) draws a status line below its older borderless composer or
+# directly above the `╰─ ` input gutter in its 18.10 band composer.
+# The latter uses `>` separators; older presets use middle dots.
 # ` π  · ◔ GPT-6-Astra · 🌳 …-workspace · ⑂ detached · ◫ 15.4%/272K ⟲ · (sub)`
 # idle under the unicode preset, ` 󰵗  ·  qwen3:8b ·  … ·  36.7%/41K` under
 # nerd, and ` ⠧ 11s  · …` while busy. Without this rule the bare composer's
@@ -498,9 +498,9 @@ FM_COMPOSER_MODE_HINT_RE_DEFAULT='^[[:space:]]*(⏵|⏸)'
 # ` - `, so its status row never carries a middle dot and a `pi ·` alternative
 # could only ever match typed text), when it opens with one of omp's spinner
 # frames then an elapsed cell, or when it carries the context-usage cell after
-# a middle dot. It is consulted only as the boundary BELOW a bare composer,
-# never on the composer row itself.
-FM_COMPOSER_OMP_STATUS_RE_DEFAULT='^[[:space:]]*(π|󰵗)[[:space:]]+·[[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)|[[:space:]]·[[:space:]].*[0-9]+(\.[0-9]+)?%/[0-9]+K'
+# a middle dot. The same status proof anchors a band gutter immediately below
+# it; status text is never classified as composer input.
+FM_COMPOSER_OMP_STATUS_RE_DEFAULT='^[[:space:]]*(π|󰵗)[[:space:]]+(·|>)[[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)|[[:space:]]·[[:space:]].*[0-9]+(\.[0-9]+)?%/[0-9]+K'
 # Pi's footer stats row opens at column 0 with the session cost when every
 # token counter is zero (`$0.000 (sub) 5.4%/272k (auto)` on pi 0.85.1).
 # That leading `$` is a cost cell, not a dead-shell prompt, only when a digit
@@ -801,6 +801,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
   local top_inner top_spaces='' geometry_check=0 geometry_ambiguous=0
   local content_inner content_spaces bottom_inner bottom_spaces glyph
   local current_indent='' current_family='' row=0 top=-1 valid=0 content_rows=0
+  local previous=''
   # Complete-box results: the box containing the cursor (cursor mode) or the
   # bottom-most complete box (no cursor).
   FM_COMPOSER_SCAN_BOX_TOP=-1
@@ -811,6 +812,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
   FM_COMPOSER_SCAN_CURSOR_EDGE=0
   FM_COMPOSER_SCAN_BARE_ROW=-1
   FM_COMPOSER_SCAN_SHELL_ROW=-1
+  FM_COMPOSER_SCAN_BAND_ROW=-1
   FM_COMPOSER_SCAN_LEFTBAR_START=-1
   FM_COMPOSER_SCAN_LEFTBAR_END=-1
   FM_COMPOSER_SCAN_PI_PAIR_FOUND=0
@@ -841,6 +843,15 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
     fm_composer_normalize_trim_var trimmed
     kind=
     family=
+    # omp 18.10's band composer is an unboxed input row with a curved gutter,
+    # directly below its status band, not the bottom edge of a transcript box.
+    case "$trimmed" in
+      '╰─'|'╰─ '*)
+        if _fm_composer_row_is_omp_status "$previous"; then
+          FM_COMPOSER_SCAN_BAND_ROW=$row
+        fi
+        ;;
+    esac
     case "$trimmed" in
       '╭'*'╮') kind=top; family=rounded ;;
       '┌'*'┐') kind=top; family=light ;;
@@ -1051,6 +1062,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
         *) valid=0 ;;
       esac
     fi
+    previous=$trimmed
     row=$((row + 1))
   done <<EOF
 $pane
@@ -1231,6 +1243,46 @@ _fm_composer_classify_bare_row() {  # <screen> <styled> <row>
 # below a bare composer and must bound its wrap region exactly as an edge does.
 _fm_composer_row_is_omp_status() {  # <trimmed-row>
   fm_composer_idle_matches "$1" "${FM_COMPOSER_OMP_STATUS_RE:-$FM_COMPOSER_OMP_STATUS_RE_DEFAULT}" sensitive
+}
+
+# A band's right-aligned empty-only hint has a bright key and a dim label.
+# Strip it only when ANSI proves that label disappeared; identical typed bytes
+# remain pending. With no styling, preserve the entire hint as pending too.
+_fm_composer_band_content() {  # <raw-row> <styled>
+  local raw=$1 styled=$2 plain content
+  plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
+  fm_composer_normalize_trim_var plain
+  plain=${plain#╰─}
+  fm_composer_normalize_trim_var plain
+  content=$plain
+  if [ "$styled" = 1 ] && fm_composer_idle_matches "$plain" \
+     '^←← to see [0-9]+ running agents?$' sensitive; then
+    content=$(printf '%s\n' "$raw" | fm_composer_strip_ghost)
+    fm_composer_normalize_trim_var content
+    content=${content#╰─}
+    fm_composer_normalize_trim_var content
+    if [ "${#content}" -lt "${#plain}" ]; then
+      case "$plain" in *"$content"*) return 0 ;; esac
+    fi
+  fi
+  printf '%s' "$plain"
+}
+
+_fm_composer_classify_band() {  # <screen> <styled> <first-row> <last-row>
+  local screen=$1 styled=$2 first=$3 last=$4 row raw content
+  row=$first
+  while [ "$row" -le "$last" ]; do
+    raw=$(_fm_composer_screen_row "$row" "$screen")
+    if [ "$row" -eq "$first" ]; then
+      content=$(_fm_composer_band_content "$raw" "$styled")
+    else
+      content=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
+      fm_composer_normalize_trim_var content
+    fi
+    [ -z "$content" ] || { printf 'pending'; return 0; }
+    row=$((row + 1))
+  done
+  printf 'empty'
 }
 
 # _fm_composer_row_is_pi_status: 0 when the trimmed row is Pi's dollar-first
@@ -1522,6 +1574,12 @@ _fm_composer_select_cursorless() {
     FM_COMPOSER_SELECTED_FIRST=$FM_COMPOSER_SCAN_LEFTBAR_START
     FM_COMPOSER_SELECTED_LAST=$FM_COMPOSER_SCAN_LEFTBAR_END
   fi
+  if [ "$FM_COMPOSER_SCAN_BAND_ROW" -gt "$generic" ]; then
+    generic=$FM_COMPOSER_SCAN_BAND_ROW
+    FM_COMPOSER_SELECTED_KIND=band
+    FM_COMPOSER_SELECTED_FIRST=$generic
+    FM_COMPOSER_SELECTED_LAST=$generic
+  fi
   if [ "$FM_COMPOSER_SCAN_INCOMPLETE_BOX_FROM" -gt "$generic" ]; then
     FM_COMPOSER_SELECTED_KIND=
     return 1
@@ -1549,7 +1607,7 @@ _fm_composer_select_cursorless() {
     FM_COMPOSER_SELECTED_KIND=
     return 1
   fi
-  if [ "$FM_COMPOSER_SELECTED_KIND" = bare ]; then
+  if [ "$FM_COMPOSER_SELECTED_KIND" = bare ] || [ "$FM_COMPOSER_SELECTED_KIND" = band ]; then
     next=$((FM_COMPOSER_SELECTED_LAST + 1))
     while :; do
       raw=$(_fm_composer_screen_row "$next" "$plain")
@@ -1613,6 +1671,11 @@ EOF
     content=$(_fm_composer_row_content "$raw" "$styled")
     placeholder_position=0
     case "$FM_COMPOSER_SELECTED_KIND" in
+      band)
+        if [ "$row" -eq "$FM_COMPOSER_SELECTED_FIRST" ]; then
+          content=$(_fm_composer_band_content "$raw" "$styled")
+        fi
+        ;;
       bare)
         if [ "$row" -eq "$FM_COMPOSER_SELECTED_FIRST" ] \
            && fm_composer_leading_agent_glyph_var glyph "$content"; then
@@ -1761,6 +1824,13 @@ EOF
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
   _fm_composer_scan_screen "$plain" "$cy"
   if [ -n "$cy" ]; then
+    if [ "$FM_COMPOSER_SCAN_BAND_ROW" -ge 0 ] \
+       && [ "$cy" -ge "$FM_COMPOSER_SCAN_BAND_ROW" ] \
+       && { [ "$cy" -eq "$FM_COMPOSER_SCAN_BAND_ROW" ] \
+            || _fm_composer_wrap_region_ok "$plain" "$FM_COMPOSER_SCAN_BAND_ROW" "$cy"; }; then
+      _fm_composer_classify_band "$screen" "$styled" "$FM_COMPOSER_SCAN_BAND_ROW" "$cy"
+      return 0
+    fi
     # Cursor mode (tmux): the shape CONTAINING the cursor is the composer.
     if [ "$FM_COMPOSER_SCAN_UNSAFE" = 1 ]; then
       printf 'unknown'; return 0
@@ -1822,6 +1892,10 @@ EOF
     return 0
   fi
   case "$FM_COMPOSER_SELECTED_KIND" in
+    band)
+      _fm_composer_classify_band "$screen" "$styled" \
+        "$FM_COMPOSER_SELECTED_FIRST" "$FM_COMPOSER_SELECTED_LAST"
+      ;;
     pi)
       _fm_composer_pi_verdict "$screen" "$styled" "$has_identity" "$identity"
       ;;

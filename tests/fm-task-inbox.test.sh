@@ -291,7 +291,7 @@ test_ring_skips_dead_agent() {
   : > "$log"
   rc=0
   PATH="$dir/fakebin:$PATH" FM_SEND_LOG="$log" \
-    inbox_lib "$state" fm_task_inbox_ring tmux sess:fm-t1 "$rec" fm-t1 || rc=$?
+    inbox_lib "$state" fm_task_inbox_ring tmux sess:fm-t1 "$rec" fm-t1 retry || rc=$?
   [ "$rc" = 0 ] || fail "an endpoint the classifier cannot see should still be rung, got $rc"
   grep -qF 'Firstmate instruction waiting' "$log" || fail "an unclassifiable endpoint did not receive the doorbell"
   pass "inbox: the ring skips dead or missing endpoints and still rings live or unclassifiable endpoints"
@@ -364,7 +364,7 @@ test_ring_submits_its_own_stuck_doorbell() {
   log="$dir/send.log"; composer="$dir/composer"; drops="$dir/drops"
   ring() {
     PATH="$dir/fakebin:$PATH" FM_SEND_LOG="$log" FM_FAKE_COMPOSER="$composer" \
-      FM_FAKE_DROP_ENTERS="$drops" inbox_lib "$state" fm_task_inbox_ring tmux sess:fm-t1 "$rec" fm-t1
+      FM_FAKE_DROP_ENTERS="$drops" inbox_lib "$state" fm_task_inbox_ring tmux sess:fm-t1 "$rec" fm-t1 retry
   }
 
   : > "$log"; printf '%s' "$doorbell" > "$composer"
@@ -1204,12 +1204,12 @@ test_watcher_successor_busy_reset_failure_surfaces idle
 test_watcher_successor_busy_reset_failure_surfaces busy
 test_watcher_nonbusy_reset_failure_escalates_once idle
 test_watcher_nonbusy_reset_failure_escalates_once protected
-test_watcher_busy_limit_validation 999999999999999999999999999999 2
-test_watcher_busy_limit_validation 1000000000 2
-test_watcher_busy_limit_validation 0 2
-test_watcher_busy_limit_validation 000 2
-test_watcher_busy_limit_validation '' 2
-test_watcher_busy_limit_validation invalid 2
+test_watcher_busy_limit_validation 999999999999999999999999999999 12
+test_watcher_busy_limit_validation 1000000000 12
+test_watcher_busy_limit_validation 0 12
+test_watcher_busy_limit_validation 000 12
+test_watcher_busy_limit_validation '' 12
+test_watcher_busy_limit_validation invalid 12
 test_watcher_busy_limit_validation 1 1
 test_watcher_busy_limit_validation 3 3
 test_watcher_retry_ignores_busy_reset_failure

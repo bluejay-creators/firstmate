@@ -42,7 +42,8 @@ Each adapter:
 - Preserves one child or scheduled retry at a time.
 - Applies bounded exponential retry after an unexpected or failed close.
 
-Pi treats an arm child whose process is already gone as an empty slot even while its close event is still pending, so a repair call or a scheduled retry starts a fresh arm instead of answering unchanged.
+An adapter treats an arm child whose process is already gone as an empty slot even while its close event is still pending, so a repair call or a scheduled retry starts a fresh arm instead of answering unchanged.
+The omp adapter additionally refuses to answer "unchanged" for a live child unless some watcher still beats within the turn-end guard's staleness grace (`fm_watcher_fresh_beat`, bin/fm-wake-lib.sh), and its `session_start` re-verifies that same answer before trusting an existing slot, so a live arm child whose watcher stopped beating - including one a context re-emit carried over - is re-armed instead of reported healthy (fm-5gh5).
 A failed follow-up never cancels continuity restoration.
 
 ### Pi session replacement
@@ -73,6 +74,14 @@ omp's replacement follows its own generation-owner contract in `.omp/extensions/
 
 - It retires the predecessor arm at replacement shutdown instead of retaining it across the handoff.
 - It reports no shutdown reason, so every shutdown with a pending actionable close persists the handoff for the next owning `session_start` to replay.
+- A subagent session (task tool, /tan clone) rebinding the factory is not a replacement: the rebind keeps the primary's live generation active, the session's events carry ctx.agent.kind === "sub" and stand down, and its start, shutdown, and arming calls never touch the supervising session's generation or handoff.
+  The supervision-host extension follows the same rule, so an in-process subagent is safe for bounded read-only or short investigative work (`.agents/skills/harness-adapters/references/harness/omp.md` owns when a supervisor prefers one).
+
+The omp compact-delivery path coalesces an already accepted process-event capture by its `procevent:<source>:<capture-sequence>` identity within the owning session.
+Reconciliation can assign that same unhandled capture a new wake-queue sequence; this does not earn another model notification, including when it rides an unrelated wake.
+Fresh rows and a new capture sequence still deliver.
+Only a successful hidden-message acceptance with a known queue-acknowledgement contract earns this receipt; rejected sends do not.
+The receipt never marks the durable capture handled and resets at session replacement, so an unhandled result remains recoverable.
 
 ### Cursor stop hook
 
@@ -162,6 +171,9 @@ This is deliberate Option B ordering.
 Whenever restoration succeeds, the fleet is protected before the model handles the wake.
 When restoration does not succeed, the model is never left blind.
 
+On omp, an already-drained queue or an identical stale reason inside the suppression window suppresses only the follow-up, never successor restoration.
+The owner still verifies a successor within the same retry bound and surfaces a typed restoration failure if that bound is exhausted.
+
 ### Claude handling successor
 
 Claude's Stop hook also starts one handling successor before notification.
@@ -191,8 +203,12 @@ The bounded turn-end guard enforces recovery at Stop when no watcher is live and
 So a finished, hung, or identity-mismatched claim cannot suppress that recovery ([`turnend-guard.md`](turnend-guard.md#harness-integrations) owns that boundary).
 
 The recovery-episode contract below owns once-per-generation announcement.
-A handling successor does not re-announce.
-It enters its poll loop immediately and keeps scanning signals, stale panes, and checks.
+A handling successor does not re-announce its predecessor's queued work.
+It enters its poll loop immediately and keeps scanning signals, stale panes, checks, and still-pending durable rows newer than its locked startup queue boundary.
+A new inbox row therefore surfaces even if the predecessor's handling confirmation failed or arrived late.
+An append that was already consumed before the next poll does not replay the remaining predecessor rows.
+A republished process-event capture with an existing successful-surfacing receipt is not fresh work for a handling successor, even when publication assigned it a newer queue sequence.
+The row and unhandled result remain durable; independent fresh work and non-successor downtime recovery still surface normally.
 
 ### Manual recovery and other harnesses
 
@@ -222,6 +238,8 @@ The first recovery marks that generation announced, and later empty-queue arms l
 A non-successor watcher start checks the durable queue and recovery marker under their locks.
 If an announced-but-unacknowledged episode has an empty queue, the arm leaves that generation announced, making repeated empty-queue arms idempotent while a long-poll source is merely alive.
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
+A Codex foreground checkpoint skips the announced-episode reopen transition, so an already-announced generation stays announced while the checkpoint continues its bounded supervision.
+Its ordinary arm check still announces a never-announced generation, including one made pending by a durable queue append during the checkpoint.
 
 ### Generation reuse
 
@@ -408,6 +426,10 @@ The EXIT cleanup bounds its wait for `state/.watcher-down.lock` while persisting
 Only positive decimal integers are accepted, including leading-zero forms such as `08`; empty, non-numeric, and zero values (including `00`) fall back to 2 seconds.
 A live foreign holder therefore cannot strand a TERM'd watcher in this marker-lock wait: on timeout the recovery transition fails without releasing the singleton, leaving dead-pid stale evidence for the next arm to republish and clear.
 
+### External Mac watchdog
+
+The optional [Mac watchdog](configuration.md#external-mac-watchdog) requests recovery through the existing omp owner without starting or stopping an arm itself; only the watcher's own fresh beacon proves recovery.
+
 ## Regression coverage
 
 ### Pi and OpenCode watch extension
@@ -438,6 +460,11 @@ The same suite covers ordinary same-process session replacement for `/new`, `/re
 The guard and session-start suites prove that active generation evidence tolerates a fresh-beacon handoff.
 They also prove that a legacy or handoff-phase watcher marker from an absent replacement extension still raises the outage diagnostic.
 
+### omp watch extension
+
+`tests/fm-omp-watch-continuity.test.sh` drives real arm children through drained-queue and repeated-stale suppression, then proves a later actionable wake still arrives with a live successor.
+It also verifies that a suppressed notification cannot swallow the bounded restoration failure.
+
 ### Arm, recovery, triage, and lock suites
 
 `tests/fm-watch-arm.test.sh` covers:
@@ -464,6 +491,10 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 
 - The once-per-generation announcement bound with the real Pi extension against a refused handling handshake.
 - A handling successor that must surface a real crew event instead of going blind.
+- Fresh inbox and other durable rows reaching a handling successor while predecessor work remains pending.
+- A late handling confirmation preserving the outstanding acknowledgement generation without hiding new work.
+- Unchanged predecessor rows and already-consumed newer rows remaining quiet.
+- Process-event republication staying quiet during handling without discarding the result, hiding independent inbox work, or suppressing real downtime recovery.
 
 `tests/fm-watch-triage.test.sh` proves TERM stops a watcher blocked inside a poll's pane capture and still releases its lock and records an acknowledgeable stop.
 It also exercises a single TERM with a live foreign downtime-marker lock holder, retained stale singleton and subsequent arm-style recovery, including decimal `08` and zero `00` cleanup bounds.

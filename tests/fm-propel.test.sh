@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+# Behavioral fixture for the bounded Beads propulsion dispatcher.
+# The board is a real scratch Beads store the fixture builds with the real bd
+# CLI, so bd's blocker/ready/defer semantics stay authoritative; only the
+# roster (herdr) and tasks-axi surfaces are fixture files. The dispatcher no
+# longer consults a quota surface at all.
+set -euo pipefail
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+TMP_ROOT=$(fm_test_tmproot fm-propel)
+FM_TEST_CLEANUP_DIRS+=("$TMP_ROOT")
+PINNED_MODEL='fixture-provider/fixture-model'
+
+PROPEL="$ROOT/bin/fm-propel.sh"
+PANE_CHECK="$ROOT/bin/fm-propel-pane-check.sh"
+FIXTURE="$TMP_ROOT/fixture"
+HOME_DIR="$TMP_ROOT/home"
+BOARD="$TMP_ROOT/board"
+mkdir -p "$FIXTURE" "$HOME_DIR/state" "$HOME_DIR/config" "$HOME_DIR/data" "$HOME_DIR/bin"
+unset FM_CONFIG_OVERRIDE FM_BOARD
+printf '{"harness":"omp","model":"%s"}\n' "$PINNED_MODEL" \
+  > "$HOME_DIR/config/propel-profile.json"
+# Propulsion's pin must not replace or depend on global dispatch rules/defaults.
+printf '%s\n' '{"default":[{"harness":"codex","model":"fixture-global"},{"harness":"cursor","model":"fixture-other"}]}' \
+  > "$HOME_DIR/config/crew-dispatch.json"
+printf 'firstmate\nplatform\nagents\nfixture-service\n' > "$HOME_DIR/config/propel-domains"
+printf '%s\n' "$BOARD" > "$HOME_DIR/config/beads-board"
+
+# Missing tools make this suite impossible rather than green: the dispatcher
+# refuses the same way in production.
+command -v bd >/dev/null 2>&1 || fail 'bd is unavailable; cannot run the propel fixture'
+command -v jq >/dev/null 2>&1 || fail 'jq is unavailable; cannot run the propel fixture'
+command -v tasks-axi >/dev/null 2>&1 || fail 'tasks-axi is unavailable; cannot run the propel fixture'
+
+# A real scratch board with one bead per exercised class. Ids are assigned by
+# bd, so the fixture records them from the create output rather than guessing.
+# Every bd call goes through one helper that clears the launch-inherited hook
+# pins and hook-only git environment (otherwise a worker session's
+# GIT_CONFIG_VALUE_0 hooksPath routes the fixture's `bd init` self-commit
+# through the launch's wrapper and hangs). GIT_CONFIG_PARAMETERS is cleared
+# too because it is what a hook-injected git config would feed back.
+bd_board() { # <bd args...> - run bd from the scratch board with a clean env.
+  (cd "$BOARD" && unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_PARAMETERS \
+    && bd "$@" 2>/dev/null)
+}
+
+mkdir -p "$BOARD"
+bd_board init --force >/dev/null || fail 'bd init failed on the scratch board'
+
+bead_create() { # <title> <labels-csv> [priority]
+  local out id
+  # awk rather than sed: BSD sed under the multibyte locale can silently drop a
+  # line whose match is followed by further multibyte bytes, and the create
+  # output always follows "Created issue: <id>" with the em-dash separator.
+  out=$(bd_board create --title "$1" --labels "$2" -p "${3:-2}") \
+    || fail "bd create failed for: $1"
+  id=$(printf '%s\n' "$out" | awk '/Created issue:/ {print $4; exit}')
+  [ -n "$id" ] || { printf 'bd create output was: %s\n' "$out" >&2; fail "bd create printed no issue id for: $1"; }
+  printf '%s\n' "$id"
+}
+
+ID_SHIP=$(bead_create 'Ship propulsion mechanism' firstmate 1)
+ID_SCOUT=$(bead_create 'Investigate roster drift' 'research,agents' 2)
+ID_CAPTAIN=$(bead_create 'Captain sync with Fixture' captain 1)
+ID_BLOCKER=$(bead_create 'Route the blocker first' platform 2)
+ID_WAITER=$(bead_create 'Blocked waiter keeps waiting' platform 2)
+ID_INFLIGHT=$(bead_create 'Already In flight in the backlog' agents 2)
+ID_META=$(bead_create 'Under way fm-bridge-want' agent-work 2)
+ID_GATE=$(bead_create 'Deferred until a gate' fixture-service 2)
+ID_MODEL=$(bead_create 'Needs a specific model' 'firstmate,model:fixture-other' 3)
+
+bd_board link "$ID_WAITER" "$ID_BLOCKER" --type blocks >/dev/null \
+  || fail "bd link failed wiring $ID_WAITER behind $ID_BLOCKER"
+bd_board update "$ID_GATE" --status deferred >/dev/null || fail 'bd deferred update failed'
+
+# Home surfaces: backlog files the real tasks-axi reads, a meta that proves
+# the meta-backed task is under way, and a propel config that pins this
+# fixture's own board as the home's ready surface.
+printf '%s\n' "$BOARD" > "$HOME_DIR/config/propel-beads-dir"
+cat > "$HOME_DIR/.tasks.toml" <<'TOML'
+backend = "markdown"
+[markdown]
+path = "data/backlog.md"
+archive = "data/done-archive.md"
+done_keep = 10
+TOML
+cat > "$HOME_DIR/data/backlog.md" <<'MD'
+# Backlog
+
+## In flight
+- [ ] fm-old-task - Already In flight in the backlog (repo: firstmate) (kind: ship) (priority: 2)
+
+## Queued
+
+## Done
+MD
+cat > "$HOME_DIR/state/fm-bridge-want.meta" <<'META'
+kind=ship
+project=firstmate
+META
+mkdir -p "$HOME_DIR/state/peers"
+
+FAKEBIN=$(fm_fakebin "$TMP_ROOT")
+
+cat > "$FAKEBIN/herdr" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  'pane current --session default') cat "$FIXTURE/current.json" ;;
+  'tab list --workspace w1 --session default') cat "$FIXTURE/tabs.json" ;;
+  'agent list --session default') cat "$FIXTURE/agents.json" ;;
+  *) exit 4 ;;
+esac
+SH
+cat > "$FIXTURE/current.json" <<'JSON'
+{"result":{"pane":{"workspace_id":"w1","pane_id":"w1:p0"}}}
+JSON
+cat > "$FIXTURE/tabs.json" <<'JSON'
+{"result":{"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"Alice"}]}}
+JSON
+cat > "$FIXTURE/agents.json" <<'JSON'
+{"result":{"agents":[{"tab_id":"w1:t1","workspace_id":"w1","pane_id":"w1:p1","agent_status":"idle"}]}}
+JSON
+printf 'alice\tAlice\n' > "$HOME_DIR/state/peers/peers.tsv"
+
+export FIXTURE
+chmod +x "$FAKEBIN/herdr"
+
+
+# Read-only home guard: the dispatcher reads state/data/config; only the
+# fixture's own PLAN path writes, so trip on any write outside the plan row.
+export PATH="$FAKEBIN:$PATH"
+export FM_HOME=$HOME_DIR FM_ROOT_OVERRIDE=$ROOT HERDR_SESSION=default
+
+# Roster reads against the fixture: bin/fm-peer-roster.sh is production, so the
+# only fabrication is herdr out of fixture files plus bd via the real scratch
+# board.
+export BEADS_DIR=$BOARD/.beads
+
+# This idle wake-mode block runs before the baseline, so no wake gates exist
+# yet and nothing can print for a plan with no fresh surface. The always-present
+# captain and deferred surfaces are masked for this run through --only-tasks.
+cat > "$FIXTURE/agents.json" <<'JSON'
+{"result":{"agents":[]}}
+JSON
+"$PROPEL" --emit-wakes --only-tasks="$ID_INFLIGHT,$ID_WAITER" > "$FIXTURE/run0.out"
+[ -s "$FIXTURE/run0.out" ] && { cat "$FIXTURE/run0.out" >&2; fail 'wake mode printed output on an idle plan'; }
+pass 'idle plan prints nothing in wake mode'
+
+cat > "$FIXTURE/agents.json" <<'JSON'
+{"result":{"agents":[{"tab_id":"w1:t1","workspace_id":"w1","pane_id":"w1:p1","agent_status":"idle"}]}}
+JSON
+
+# --- Baseline (wake mode): fresh dispatch surfaces exactly once, with the
+# operator-selected model on every planned dispatch. --------------------------
+"$PANE_CHECK" "$HOME_DIR" > /dev/null || fail 'pane probe reported the fixture home not-free'
+printf 'note [at=%s]: fresh\n' "$(date +%s)" > "$HOME_DIR/state/peers/alice.log"
+"$PROPEL" --emit-wakes > "$FIXTURE/run1.out" 2> "$FIXTURE/run1.err" || {
+  cat "$FIXTURE/run1.err" >&2
+  fail 'baseline propel run errored'
+}
+count=$(grep -c 'propel: dispatch' "$FIXTURE/run1.out" || true)
+[ "$count" -eq 2 ] || { cat "$FIXTURE/run1.out" >&2; fail 'baseline run did not surface one dispatch per fresh idle slot'; }
+grep -Fq "propel: dispatch $ID_SHIP -> alice (harness omp, model $PINNED_MODEL)" "$FIXTURE/run1.out" \
+  || fail 'the ship-class bead did not dispatch to the idle pane on the configured model'
+grep -Fq "propel: captain decision $ID_CAPTAIN: Captain sync with Fixture" "$FIXTURE/run1.out" \
+  || fail 'captain decision was not announced as an external wake'
+grep -Fq "propel: captain decision $ID_MODEL: requires model fixture-other" "$FIXTURE/run1.out" \
+  || fail 'an explicit model requirement was not surfaced as a captain decision'
+grep -Fq "propel: gate $ID_GATE clears at" "$FIXTURE/run1.out" \
+  || fail 'deferred bead never surfaced as its time gate wake'
+pass 'wake mode announces fresh configured-model dispatches plus captain and gate surfaces'
+
+# Wake announcement is idempotent once every surface has been published.
+"$PROPEL" --emit-wakes > "$FIXTURE/run2.out"
+[ -s "$FIXTURE/run2.out" ] && { cat "$FIXTURE/run2.out" >&2; fail 'repeated run re-announced a published surface'; }
+pass 'repeated polls in wake mode print nothing; wake gates are idempotent'
+
+# Dry-run prints the verdict and the full plan, including the pinned harness.
+"$PROPEL" > "$FIXTURE/run3d.out"
+assert_contains "$(cat "$FIXTURE/run3d.out")" 'propel ' 'the dry-run plan summary opens with the dispatch verdict'
+grep -Fq $'harness\tomp '"$PINNED_MODEL" "$FIXTURE/run3d.out" \
+  || fail 'dry-run plan did not record the operator-selected model on the dispatch'
+grep -Fq $'\troster\talice' "$FIXTURE/run3d.out" \
+  || fail 'dry-run plan did not pair the idle pane with the ship-class bead'
+grep -Fq "$ID_WAITER"$'\troute-blocker\t'"$ID_BLOCKER" "$FIXTURE/run3d.out" \
+  || fail 'blocked waiter routed to its blocker instead of pretending progress'
+grep -Fq "$ID_INFLIGHT"$'\tskip\ttitle-in-flight-or-queued' "$FIXTURE/run3d.out" \
+  || fail 'an In flight backlog title did not dedupe the same-named bead'
+grep -Fq "$ID_META"$'\tskip\twork-underway-in-a-home' "$FIXTURE/run3d.out" \
+  || fail 'a meta-backed underway task did not mask the bead'
+pass 'dry-run verdict, harness pin, recursion, and dedupe hold'
+
+
+# Zero idle panes: the dry-run keeps the honest gate and wake mode emits
+# nothing new once every standing surface was published by the baseline run.
+cat > "$FIXTURE/agents.json" <<'JSON'
+{"result":{"agents":[]}}
+JSON
+"$PROPEL" --emit-wakes > "$FIXTURE/run5.out"
+[ -s "$FIXTURE/run5.out" ] && { cat "$FIXTURE/run5.out" >&2; fail 'a wake surface re-appeared with zero idle panes'; }
+"$PROPEL" > "$FIXTURE/run5d.out"
+grep -Fq $'\tdispatch\t' "$FIXTURE/run5d.out" >/dev/null 2>&1 \
+  && fail 'a dispatch suggestion appeared with zero idle panes'
+grep -Fq "$ID_SHIP"$'\tskip\troster-capacity-gate; not an external wait' "$FIXTURE/run5d.out" \
+  || fail 'zero idle panes did not flip the ship to the honest capacity gate'
+pass 'zero idle panes stay a capacity gate, never an external wait'
+
+
+# One spawn per run even when several beads would queue past the idle pane:
+# add two more dispatchable beads and assert only one crewmate wake appears.
+cat > "$FIXTURE/agents.json" <<'JSON'
+{"result":{"agents":[{"tab_id":"w1:t1","workspace_id":"w1","pane_id":"w1:p1","agent_status":"idle"}]}}
+JSON
+END_EXTRA=$(bead_create 'Third fleet task' firstmate 1)
+END_EXTRA_B=$(bead_create 'Fourth fleet task' firstmate 1)
+"$PROPEL" > "$FIXTURE/run6.out"
+count=$(grep -cE $'\tcrewmate\t' "$FIXTURE/run6.out" || true)
+[ "${count:-0}" -eq 1 ] || fail "run above one spawn per machine: saw $count"
+bd_board update "$END_EXTRA" --status closed >/dev/null || fail 'extra bead cleanup failed'
+bd_board update "$END_EXTRA_B" --status closed >/dev/null || fail 'extra bead cleanup failed'
+pass 'one crewmate per run is enforced'
+
+# --only-tasks pins the plan to the named bead.
+"$PROPEL" --only-tasks="$ID_SCOUT" > "$FIXTURE/run7.out"
+grep -Fq "$ID_SCOUT" "$FIXTURE/run7.out" \
+  || fail '--only-tasks did not include the pinned task'
+grep -Fq "$ID_SHIP" "$FIXTURE/run7.out" \
+  && fail '--only-tasks leaked an unpinned task into the plan'
+pass '--only-tasks narrows the dispatch set exactly'
+
+# A missing board is the verdict `unknown`, never a guessed dispatch.
+out8=$(FM_BOARD=/tmp/fm-propel-absent "$PROPEL" --emit-wakes 2>&1) || rc8=$?
+rc8=${rc8:-0}
+[ "$rc8" -ne 0 ] || fail 'a missing board was still treated as dispatchable'
+printf '%s\n' "$out8" > "$FIXTURE/run8.err"
+grep -Fq 'board is unavailable' "$FIXTURE/run8.err" \
+  || fail 'missing board was not reported as the unknown it is'
+pass 'a missing board is verdicted unknown, not guessed dispatch'
+
+# Propel-check fails closed on an unreadable home.
+"$PANE_CHECK" /tmp/fm-propel-no-such-home > /dev/null 2> "$FIXTURE/pane-missing.err" \
+  && fail 'a missing home was treated as free'
+"$PANE_CHECK" "$HOME_DIR" > "$FIXTURE/pane.out"
+assert_contains "$(cat "$FIXTURE/pane.out")" 'free' 'a home with no declared capacity answers free'
+pass 'pane probe fails closed on missing evidence'
+
+# No operator profile means no model, not an arbitrary dispatch fallback.
+mv "$HOME_DIR/config/propel-profile.json" "$FIXTURE/operator-profile.json"
+if "$PROPEL" --emit-wakes --only-tasks="$ID_SHIP" \
+    > "$FIXTURE/no-profile.out" 2> "$FIXTURE/no-profile.err"; then
+  fail 'missing operator profile still allowed dispatch'
+fi
+[ ! -s "$FIXTURE/no-profile.out" ] || fail 'missing profile emitted a wake'
+pass 'unconfigured model fails closed without a dispatch wake'
+
+# Multiple propulsion candidates cannot silently substitute for an operator pin.
+jq -nc '[{harness:"omp",model:"fixture-provider/first"},
+         {harness:"omp",model:"fixture-provider/second"}]' \
+  > "$HOME_DIR/config/propel-profile.json"
+if "$PROPEL" --emit-wakes --only-tasks="$ID_SHIP" \
+    > "$FIXTURE/ambiguous-profile.out" 2> "$FIXTURE/ambiguous-profile.err"; then
+  fail 'multiple propulsion profiles selected an arbitrary model'
+fi
+[ ! -s "$FIXTURE/ambiguous-profile.out" ] || fail 'ambiguous profile emitted a wake'
+mv "$FIXTURE/operator-profile.json" "$HOME_DIR/config/propel-profile.json"
+pass 'propulsion requires one pin independently of global dispatch defaults'
+
+# Without the shared-board setting, cwd is never an implicit store selector.
+mv "$HOME_DIR/config/beads-board" "$FIXTURE/shared-board"
+if "$PROPEL" --emit-wakes > "$FIXTURE/no-board.out" 2> "$FIXTURE/no-board.err"; then
+  fail 'unconfigured shared board still allowed dispatch'
+fi
+[ ! -s "$FIXTURE/no-board.out" ] || fail 'unconfigured shared board emitted a wake'
+grep -Fq 'shared board is not configured' "$FIXTURE/no-board.err" \
+  || fail 'missing shared board was not reported explicitly'
+mv "$FIXTURE/shared-board" "$HOME_DIR/config/beads-board"
+pass 'unconfigured shared board fails closed rather than inheriting cwd'

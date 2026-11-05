@@ -249,6 +249,94 @@ RUBY
   pass "CI matrices cover every executable serial lane and canonical lint root exactly once"
 }
 
+# The fork's tiered workflow: fast tier blocks on lint + changed tests, heavy
+# tiers gate on their subsystem's path glob, and the hourly sweep records its
+# last-green commit for blame without blocking main and never fires when main
+# has not moved since its previous run.
+test_test_tiers_workflow_structure() {
+  local tiers="$ROOT/.github/workflows/test-tiers.yml"
+  assert_present "$tiers" ".github/workflows/test-tiers.yml is missing"
+  ruby -ryaml -e '
+doc = YAML.load_file(ARGV[0])
+raise "test-tiers must run on pull_request" unless doc[true].key?("pull_request") || doc.fetch("on", {}).key?("pull_request") rescue doc.key?("pull_request")
+on = doc["on"] || doc[true]
+raise "test-tiers must target main" unless on.fetch("pull_request").fetch("branches") == ["main"]
+jobs = doc.fetch("jobs")
+raise "missing fast job" unless jobs.key?("fast")
+fast = jobs.fetch("fast")
+steps = fast.fetch("steps").map { |s| s["name"] }
+raise "fast tier must lint" unless steps.any? { |n| n =~ /lint/i }
+raise "fast tier must run changed tests" unless steps.any? { |n| n =~ /changed-file-selected/i }
+%w[heavy-watcher-lock heavy-herdr-backend heavy-omp-harness].each do |job|
+  raise "missing #{job}" unless jobs.key?(job)
+  j = jobs.fetch(job)
+  raise "#{job} must gate on changed files" unless j.fetch("steps").any? { |s| s["id"] == "gate" }
+  raise "#{job} must skip the suite when untouched" unless j.fetch("steps").any? { |s| s.key?("if") && s["if"].include?("steps.gate.outputs.run") }
+end
+' "$tiers" || fail "test-tiers.yml structure contract"
+  pass "test-tiers.yml fast tier blocks and heavy tiers gate on their subsystem paths"
+}
+
+test_sweep_workflow_structure() {
+  local sweep="$ROOT/.github/workflows/sweep.yml"
+  assert_present "$sweep" ".github/workflows/sweep.yml is missing"
+  ruby -ryaml -e '
+doc = YAML.load_file(ARGV[0])
+on = doc["on"] || doc[true]
+raise "sweep must run on a schedule" unless on.key?("schedule")
+raise "sweep must run on main pushes" unless on.fetch("push").fetch("branches") == ["main"]
+jobs = doc.fetch("jobs")
+raise "sweep must have a skip-if-unchanged gate" unless jobs.key?("skip-if-unchanged")
+raise "sweep must have a sweep job" unless jobs.key?("sweep")
+sweep_job = jobs.fetch("sweep")
+raise "sweep must depend on skip-if-unchanged" unless sweep_job.fetch("needs") == "skip-if-unchanged"
+if_val = sweep_job.fetch("if")
+raise "sweep must run only when changed" unless if_val.include?("changed == ") && if_val.include?("yes")
+steps = sweep_job.fetch("steps")
+names = steps.map { |s| s["name"] }
+raise "sweep must run the full lint walk" unless names.any? { |n| n =~ /complete lint walk/i }
+raise "sweep must run the production-default smoke" unless names.any? { |n| n =~ /production-default/i }
+raise "sweep must run the full sweep" unless names.any? { |n| n =~ /complete test sweep/i }
+raise "sweep must record last-green" unless names.any? { |n| n =~ /last-green/i }
+persist_step = steps.find { |s| s["name"] =~ /Persist sweep state and notify/i }
+raise "sweep must persist state and notify" unless persist_step
+raise "persist step must be conditional" unless persist_step["if"].to_s.include?("always()")
+raise "sweep runs-on must honour a repo variable" unless sweep_job["runs-on"].to_s.include?("vars.SWEEP_RUNNERS")
+' "$sweep" || fail "sweep.yml structure contract"
+  pass "sweep.yml runs hourly skipped-unchanged and writes state/sweep.status with the blame range"
+}
+
+# The upstream no-mistakes gate skips forks while remaining enforced for
+# non-bot pull requests on the parent repository.
+test_no_mistakes_gate_is_repo_gated() {
+  local gate="$ROOT/.github/workflows/no-mistakes-required.yml"
+  assert_present "$gate" "no-mistakes-required.yml is missing"
+  ruby -ryaml -e '
+doc = YAML.load_file(ARGV[0])
+job = doc.fetch("jobs").fetch("check")
+cond = job.fetch("if")
+evaluate = lambda do |repository, author|
+  context = {
+    "github.repository" => repository,
+    "github.event.pull_request.user.login" => author,
+  }
+  cond.split("&&").all? do |clause|
+    match = clause.strip.match(/\A([\w.]+)\s*(==|!=)\s*\x27([^\x27]*)\x27\z/)
+    raise "unsupported gate condition: #{clause}" unless match
+    actual = context.fetch(match[1])
+    match[2] == "==" ? actual == match[3] : actual != match[3]
+  end
+end
+raise "parent human PR must run the gate" unless evaluate.call("kunchenguid/firstmate", "fixture-author")
+raise "fork human PR must skip the gate" if evaluate.call("fixture-org/firstmate", "fixture-author")
+%w[github-actions[bot] dependabot[bot]].each do |author|
+  raise "#{author} must skip the gate" if evaluate.call("kunchenguid/firstmate", author)
+end
+' "$gate" || fail "no-mistakes gate must be repo-conditional"
+  pass "no-mistakes gate skips on forks and stays enforced on kunchenguid/firstmate"
+}
+test_no_mistakes_gate_is_repo_gated
+
 test_ci_matrices_match_executable_partitions
 test_pr_pushes_supersede_within_one_pr
 test_separate_prs_do_not_cancel_each_other
@@ -258,3 +346,5 @@ test_every_job_belongs_to_exactly_one_timeout_tier
 test_fast_tier_shares_one_short_tripwire
 test_normal_tier_shares_one_budget
 test_heavy_tier_keeps_a_step_tripwire_under_a_job_backstop
+test_test_tiers_workflow_structure
+test_sweep_workflow_structure
