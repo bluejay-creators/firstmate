@@ -273,6 +273,8 @@ def decide(policy, facts, collect=False, local_test_receipt=None):
         if environment == "feature" and (not facts["default_branch"]
                 or facts["base"] == facts["default_branch"] or facts["base"] in FEATURE_PROTECTED_REFS):
             reason = "feature grants cannot authorize default, protected or unclassified targets"
+        elif proof == "forge-checks" and not facts["forge_checks_passed"]:
+            reason = "successful forge check evidence is required"
         elif proof == "local-tests" and receipt is None:
             reason = "an exact-head successful local test receipt is required"
         elif proof == "forge-or-local-tests" and not facts["forge_checks_passed"] and receipt is None:

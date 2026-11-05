@@ -186,9 +186,11 @@
 # A grant has id, repository, system (nonempty domain), environment (kstage,
 # staging, nonprod, internal or feature), all_checks_green:true, report_after:true.
 # Only one grant may match a binding. Optional required_proof is forge-checks
-# (default), local-tests or forge-or-local-tests. The latter requires at least one
-# successful reported forge check OR a valid local receipt; no CI and neutral-only
-# checks are not successful CI proof. local-tests always requires a receipt.
+# (default), local-tests or forge-or-local-tests. forge-checks requires at least
+# one successful reported forge check and cannot substitute a local receipt.
+# forge-or-local-tests requires successful forge evidence OR a valid receipt.
+# No CI and neutral-only checks are not successful CI proof.
+# local-tests always requires a receipt.
 # A feature binding asserts an exact operator-certified NON-DEPLOYING target;
 # it is never inferred from its name and must use forge-or-local-tests.
 # Feature autonomy reads live repository default-branch metadata and refuses

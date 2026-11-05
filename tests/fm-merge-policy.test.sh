@@ -59,6 +59,14 @@ class MergePolicy(unittest.TestCase):
         self.assertTrue(decision["report_after"])
         self.assertEqual(decision["facts"]["head"], "a" * 40)
 
+    def test_forge_only_grants_require_positive_ci_even_if_no_check_failed(self):
+        self.facts["forge_checks_passed"] = False
+        self.assertEqual(self.invoke()[0], 1)
+        self.policy["grants"][0]["required_proof"] = "forge-checks"
+        self.assertEqual(self.invoke(receipt=self.receipt())[0], 1)
+        self.facts["forge_checks_passed"] = True
+        self.assertEqual(self.invoke()[0], 0)
+
     def receipt(self):
         return dict(version=1, repository=self.facts["repository"], number=7,
                     base=self.facts["base"], head=self.facts["head"],

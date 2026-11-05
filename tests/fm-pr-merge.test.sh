@@ -4651,12 +4651,14 @@ test_taskless_preserves_required_producer_and_named_waivers() {
 
 test_taskless_grant_and_sensitive_precedence() {
   local case_dir variant
-  for variant in green sensitive kind unclassified truncated; do
+  for variant in green empty-ci neutral-only sensitive kind unclassified truncated; do
     case_dir=$(make_case "taskless-grant-$variant")
     add_gh_mocks "$case_dir" cccccccccccccccccccccccccccccccccccccccc
     rm "$case_dir/state/task-x1.meta"
     write_fixture_grant "$case_dir/home/config"
     case "$variant" in
+      empty-ci) write_github_rollup_json "$case_dir" cccccccccccccccccccccccccccccccccccccccc ;;
+      neutral-only) write_github_rollup_json "$case_dir" cccccccccccccccccccccccccccccccccccccccc "$(check_run ci COMPLETED NEUTRAL)" ;;
       sensitive) printf '[{"filename":"src/iam.py"}]\n' > "$case_dir/github-policy-files.json" ;;
       unclassified) printf '[{"filename":"other/feature.py"}]\n' > "$case_dir/github-policy-files.json" ;;
       truncated) printf '[]\n' > "$case_dir/github-policy-files.json" ;;
