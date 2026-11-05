@@ -49,8 +49,15 @@
 //
 // Loading: any omp session can opt in with `-e <absolute-path>` (fleet
 // workers and secondmates get it from bin/fm-spawn.sh). The inbox directory
-// resolves from $FM_TASK_INBOX, which fm-spawn exports into every launch;
-// with that unset the extension stays inert rather than guessing at a path.
+// resolves from $FM_TASK_INBOX, which fm-spawn exports into every launch.
+// A hand-launched peer sets FM_TASK_INBOX to the absolute
+// "$FM_HOME/state/peers/<peer>.inbox" and loads this same extension on its
+// owner-controlled resume, preserving its existing profile/config/resume flags.
+// Do not set FM_TASK_ID for a peer or restart someone else's session.
+// The sender sources bin/fm-task-inbox-lib.sh and calls
+// fm_task_inbox_listener_live with that same peer inbox before any typed ring.
+// With FM_TASK_INBOX unset, the extension stays inert rather than guessing.
+// Loading it alone is not delivery proof: observe consumption and handled/.
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
