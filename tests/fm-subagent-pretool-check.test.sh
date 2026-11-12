@@ -255,24 +255,29 @@ stdin_send_message() {
 }
 
 test_send_message_to_desktop_session_is_allowed_only_there() {
-  local rc target
-  for target in local_14ed6c97-4bc6-453e-85f3-b2f54f30580c local_0123abcd; do
+  local rc target input_field payload
+  for input_field in tool_input toolInput; do
+    for target in local_14ed6c97-4bc6-453e-85f3-b2f54f30580c local_0123abcd; do
+      rc=0
+      stdin_send_message "{\"tool_name\":\"SendMessage\",\"$input_field\":{\"to\":\"$target\",\"message\":\"hi\"}}" || rc=$?
+      [ "$rc" -eq 0 ] || fail "SendMessage to Desktop session $target via $input_field must allow, got exit $rc: $(cat "$ERR")"
+      [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "SendMessage allow wrote output"
+    done
+    for target in researcher main "worker [3fa9c1]" a1b2c3-agent local_ local_zzzz1234 "local_0123abcd; rm" xlocal_0123abcd \
+                  $'researcher\nlocal_0123abcd' $'local_0123abcd\nresearcher' $'local_0123abcd\n'; do
+      payload=$(jq -cn --arg input "$input_field" --arg target "$target" \
+        '{tool_name:"SendMessage",($input):{to:$target,message:"hi"}}') || fail "could not encode SendMessage payload"
+      rc=0
+      stdin_send_message "$payload" || rc=$?
+      [ "$rc" -eq 2 ] || fail "SendMessage to non-session target '$target' via $input_field must deny, got exit $rc"
+    done
     rc=0
-    stdin_send_message "{\"tool_name\":\"SendMessage\",\"tool_input\":{\"to\":\"$target\",\"message\":\"hi\"}}" || rc=$?
-    [ "$rc" -eq 0 ] || fail "SendMessage to Desktop session $target must allow, got exit $rc: $(cat "$ERR")"
-    [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "SendMessage allow wrote output"
-  done
-  for target in researcher main "worker [3fa9c1]" a1b2c3-agent local_ local_zzzz1234 "local_0123abcd; rm" xlocal_0123abcd; do
+    stdin_send_message "{\"tool_name\":\"SendMessage\",\"$input_field\":{\"message\":\"no target\"}}" || rc=$?
+    [ "$rc" -eq 2 ] || fail "SendMessage without a target via $input_field must deny, got exit $rc"
     rc=0
-    stdin_send_message "{\"tool_name\":\"SendMessage\",\"tool_input\":{\"to\":\"$target\",\"message\":\"hi\"}}" || rc=$?
-    [ "$rc" -eq 2 ] || fail "SendMessage to non-session target '$target' must deny, got exit $rc"
+    stdin_send_message "{\"tool_name\":\"SendMessage\",\"$input_field\":{\"to\":[\"local_0123abcd\"]}}" || rc=$?
+    [ "$rc" -eq 2 ] || fail "SendMessage with a non-string target via $input_field must deny, got exit $rc"
   done
-  rc=0
-  stdin_send_message '{"tool_name":"SendMessage","tool_input":{"message":"no target"}}' || rc=$?
-  [ "$rc" -eq 2 ] || fail "SendMessage without a target must deny, got exit $rc"
-  rc=0
-  stdin_send_message '{"tool_name":"SendMessage","tool_input":{"to":["local_0123abcd"]}}' || rc=$?
-  [ "$rc" -eq 2 ] || fail "SendMessage with a non-string target must deny, got exit $rc"
   expect_deny "tool-only mode has no target to check" SendMessage
   pass "SendMessage passes only to an existing Desktop session id; subagent targets and --tool mode stay denied"
 }

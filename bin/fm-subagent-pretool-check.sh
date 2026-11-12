@@ -164,8 +164,7 @@ done
 # other target (an in-process subagent name or agentId) still fall through to
 # the stem match and are denied.
 if [ "$NORMALIZED" = "sendmessage" ] && [ -n "${PAYLOAD:-}" ]; then
-  TARGET=$(printf '%s' "$PAYLOAD" | jq -r '((.tool_input // .toolInput // {}).to // empty) | strings' 2>/dev/null) || TARGET=""
-  if printf '%s' "$TARGET" | grep -Eq '^local_[0-9A-Fa-f][0-9A-Fa-f-]{7,63}$'; then
+  if printf '%s' "$PAYLOAD" | jq -e '((.tool_input // .toolInput // {}).to) | strings | test("\\Alocal_[0-9A-Fa-f][0-9A-Fa-f-]{7,63}\\z")' >/dev/null 2>&1; then
     exit 0
   fi
 fi

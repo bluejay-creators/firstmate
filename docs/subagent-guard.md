@@ -61,10 +61,10 @@ Four exclusions keep the shape test from producing false positives.
   So it is not the "work, agent, schedule, or isolated workspace that firstmate would not know about" the guard exists to stop, and the stem match on `task` is a false positive rather than a policy.
   The cost of the false positive was concrete: the primary could not track its own plan, and the deny text told it to run `bin/fm-brief.sh` and `bin/fm-spawn.sh` to create a todo entry.
 
-- A `SendMessage` whose `to` is an existing Claude Desktop session id (`local_` followed by that session's hex or UUID id) is allowed.
+- A `SendMessage` whose entire `to` string matches `^local_[0-9A-Fa-f][0-9A-Fa-f-]{7,63}$` is allowed as a Claude Desktop session target; embedded or trailing newlines are denied.
   That is a cross-session message, which is the Claude desktop app's own route between sessions that are already running, the same thing the allowed `mcp__ccd_session_*` calls do.
   It starts no agent, worktree or schedule, so the stem match on `sendmessage` is a false positive for it.
-  The exception reads the target only from the stdin transport: `--tool` mode, and any other target such as an in-process subagent name or agentId, still match the stem and are denied.
+  The exception reads `tool_input.to` or `toolInput.to` only from the stdin transport: `--tool` mode, and any other target such as an in-process subagent name or agentId, still match the stem and are denied.
   A home whose untracked local Claude deny list names `SendMessage` still blocks it at that layer; drop that entry to use cross-session messages.
 
 Both exclusion lists match the whole normalized name, never a substring, so neither can widen by accident: `TaskCreateAgent` and `RemoteTaskCreate` stay denied.
