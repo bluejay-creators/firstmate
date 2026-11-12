@@ -194,6 +194,8 @@ fi
 # checkout has the two equal. Child worktrees never carry the gitignored marker,
 # so this exempts them while guarding every real secondmate home.
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
+# A durable-hosted home is woken by the durable-agent service, not this guard.
+fm_home_durable_hosted "$CONFIG" && exit 0
 
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh

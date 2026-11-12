@@ -599,6 +599,34 @@ test_hook_blocks_in_secondmate_own_home() {
   pass "fm-turnend-guard: blocks a blind turn end in a secondmate's own home (.fm-secondmate-home no longer excludes it)"
 }
 
+test_hook_silent_in_durable_hosted_home() {
+  local dir out status
+  dir=$(make_secondmate_dir "$TMP_ROOT/hook-durable-hosted")
+  : > "$dir/state/task1.meta"
+  mkdir -p "$dir/config"
+  printf 'ide\n' > "$dir/config/durable-hosted"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 0 "$status" "a durable-hosted home must never be blocked by firstmate's guard"
+  [ -z "$out" ] || fail "a durable-hosted home must get no banner, got: $out"
+  pass "fm-turnend-guard: stands down silently in a home marked config/durable-hosted"
+}
+
+test_hook_ignores_invalid_durable_hosted_marker() {
+  local dir out status
+  dir=$(make_secondmate_dir "$TMP_ROOT/hook-durable-hosted-bad")
+  : > "$dir/state/task1.meta"
+  mkdir -p "$dir/config"
+  : > "$dir/config/durable-hosted"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "an empty durable-hosted marker must not disable the guard"
+  rm -f "$dir/config/durable-hosted"
+  printf 'ide\n' > "$TMP_ROOT/durable-hosted-target"
+  ln -s "$TMP_ROOT/durable-hosted-target" "$dir/config/durable-hosted"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "a symlinked durable-hosted marker must not disable the guard"
+  pass "fm-turnend-guard: an empty or symlinked durable-hosted marker keeps the guard on"
+}
+
 # Idle-by-default: an empty-queue secondmate has no in-flight meta, so the guard
 # exits at the in-flight gate - never forcing a busy continuation loop.
 test_hook_silent_in_idle_secondmate_home() {
@@ -2274,6 +2302,8 @@ test_hook_ignores_repo_state_when_fm_home_set
 test_hook_uses_state_override
 test_hook_loop_guard_allows_retry
 test_hook_blocks_in_secondmate_own_home
+test_hook_silent_in_durable_hosted_home
+test_hook_ignores_invalid_durable_hosted_marker
 test_hook_silent_in_idle_secondmate_home
 test_hook_secondmate_loop_guard_allows_retry
 test_hook_secondmate_reinvoke_recovery_loop

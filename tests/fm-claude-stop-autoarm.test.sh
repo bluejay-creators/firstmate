@@ -349,6 +349,23 @@ test_inert_when_afk() {
   pass "auto-arm: inert while AFK owns supervision"
 }
 
+test_inert_in_durable_hosted_home() {
+  local dir out status
+  dir=$(make_secondmate_dir "$TMP_ROOT/durable-hosted")
+  : > "$dir/state/task.meta"
+  printf 'ide\n' > "$dir/config/durable-hosted"
+  write_arm_fixture "$dir" actionable
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 0 "$status" "hook must never arm or rewake in a durable-hosted home"
+  [ ! -e "$dir/state/arm-ran" ] || fail "hook armed in a home marked config/durable-hosted"
+  [ -z "$out" ] || fail "hook must stay silent in a durable-hosted home, got: $out"
+  rm -f "$dir/config/durable-hosted"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "without the marker the same home must rewake as before"
+  [ -e "$dir/state/arm-ran" ] || fail "without the marker the hook must arm as before"
+  pass "auto-arm: inert in a durable-hosted home, unchanged once the marker is gone"
+}
+
 test_stale_lock_recovery_preserves_afk_and_need_gates() {
   local afk_dir idle_dir out status
   afk_dir=$(make_primary_dir "$TMP_ROOT/stale-afk")
@@ -1713,6 +1730,7 @@ test_inert_without_session_lock
 test_reclaims_stale_session_lock_before_arming
 test_inert_when_lock_held_by_other_harness
 test_inert_when_afk
+test_inert_in_durable_hosted_home
 test_stale_lock_recovery_preserves_afk_and_need_gates
 test_resolves_outermost_claude_pid_in_nested_bgspare_chain
 test_inert_when_fleet_idle

@@ -196,6 +196,8 @@ fi
 
 # --- scope: genuine primary checkout only -----------------------------------
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
+# A durable-hosted home is woken by the durable-agent service, not this hook.
+fm_home_durable_hosted "$CONFIG" && exit 0
 
 # --- identity: only the lock-owning session's hooks may arm ------------------
 # A prior session may have died after leaving its numeric harness pid in .lock.

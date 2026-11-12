@@ -34,6 +34,23 @@ fm_primary_root_matches() {
   [ -d "$root/bin" ] || return 1
 }
 
+# Return 0 when the effective config dir $1 marks the home as hosted by the
+# durable-agent service: a regular, non-symlink config/durable-hosted whose
+# first line names the durable role. Such a home's sessions are woken by the
+# service's mailbox, so firstmate's own Stop-hook supervision stands down there.
+fm_home_durable_hosted() {
+  local marker="$1/durable-hosted" role LC_ALL=C
+  [ -L "$marker" ] && return 1
+  [ -f "$marker" ] || return 1
+  IFS= read -r role < "$marker" 2>/dev/null || [ -n "$role" ] || return 1
+  role=${role//[[:space:]]/}
+  [ -n "$role" ] || return 1
+  case "$role" in
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
+
 # Return 0 when $1 is a genuine primary root whose effective state dir $2
 # already exists.
 fm_primary_scope_matches() {

@@ -340,6 +340,11 @@ The primary-authoritative propagation contract, including removal of a mate's lo
 `config/supervision-host` is local to each home and not inherited, because each home's engine and model are its own choice.
 While the home runs the host, main's lease-checked commands also take the per-task lease lock, so a claim by the host's engine cannot race a mutation main already started (`bin/fm-lease-lib.sh`).
 
+## Durable-hosted home (config/durable-hosted)
+
+A local, gitignored `config/durable-hosted` holding one line that names a durable-agent role (for example `ide`) marks the home as hosted by the durable-agent service, which wakes its sessions from that role's mailbox.
+In such a home the Claude Stop hooks `bin/fm-turnend-guard.sh` and `bin/fm-claude-stop-autoarm.sh` stand down silently; an absent, empty, malformed, or symlinked marker leaves them unchanged, and `fm_home_durable_hosted` in `bin/fm-primary-scope-lib.sh` owns the check.
+
 ## External Mac watchdog
 
 An optional macOS LaunchAgent protects an omp-on-Herdr primary when no model turn ends to run its normal guard.
