@@ -1,0 +1,1305 @@
+{
+  "surface": "Real shipped PreToolUse executable; disposable primary and marked secondmate state; no harness or message delivery stub",
+  "records": [
+    {
+      "scenario": "Desktop session target allowed",
+      "label": "tool_name/tool_input: local_14ed6c97-4bc6-453e-85f3-b2f54f30580c",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c",
+          "message": "isolated guard probe"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Desktop session target allowed",
+      "label": "tool_name/tool_input: local_0123abcd",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_0123abcd",
+          "message": "isolated guard probe"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Desktop session target allowed",
+      "label": "tool_name/tool_input: local_ABCDEF01",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_ABCDEF01",
+          "message": "isolated guard probe"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Desktop session target allowed",
+      "label": "tool_name/tool_input: local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "message": "isolated guard probe"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'researcher'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "researcher"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'main'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "main"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'worker [3fa9c1]'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "worker [3fa9c1]"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'a1b2c3-agent'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "a1b2c3-agent"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'local_'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'local_zzzz1234'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_zzzz1234"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'local_x; rm'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_x; rm"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'local_0123abcd; rm'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_0123abcd; rm"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'xlocal_0123abcd'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "xlocal_0123abcd"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'local_0123abc'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_0123abc"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'local_-1234567'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_-1234567"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'LOCAL_0123abcd'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "LOCAL_0123abcd"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: ' local_0123abcd'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": " local_0123abcd"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 'local_0123abcd '",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_0123abcd "
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: None",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": null
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: False",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": false
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: 123",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": 123
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: ['local_0123abcd']",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": [
+            "local_0123abcd"
+          ]
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: {'to': 'local_0123abcd'}",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": {
+            "to": "local_0123abcd"
+          }
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: missing target",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "message": "no target"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "tool_input: 'researcher\\nlocal_0123abcd'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "researcher\nlocal_0123abcd"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "tool_input: 'local_0123abcd\\nresearcher'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_0123abcd\nresearcher"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "tool_input: 'local_0123abcd\\n'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_0123abcd\n"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "tool_input: '\\nlocal_0123abcd'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "\nlocal_0123abcd"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "tool_input: 'local_0123abcd\\r\\n'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_0123abcd\r\n"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "tool_input: 'local_0123abcd\\x00'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_0123abcd\u0000"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: invalid envelope 'invalid input'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": "invalid input"
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: invalid envelope []",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": []
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "tool_input: invalid envelope 5",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": 5
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Tool-only mode denied despite valid stdin",
+      "label": "--tool SendMessage with valid stdin",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude --tool SendMessage",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Future tools stay guarded and MCP stays allowed",
+      "label": "SendMessageAgent",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessageAgent",
+        "tool_input": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessageAgent, delegation-shaped on \\\"agent\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Future tools stay guarded and MCP stays allowed",
+      "label": "FutureSendMessage",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "FutureSendMessage",
+        "tool_input": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: FutureSendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Future tools stay guarded and MCP stays allowed",
+      "label": "SendMessageRemote",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessageRemote",
+        "tool_input": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessageRemote, delegation-shaped on \\\"remote\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Future tools stay guarded and MCP stays allowed",
+      "label": "mcp__ccd_session_send_message",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "mcp__ccd_session_send_message",
+        "tool_input": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Desktop session target allowed",
+      "label": "toolName/toolInput: local_14ed6c97-4bc6-453e-85f3-b2f54f30580c",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c",
+          "message": "isolated guard probe"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Desktop session target allowed",
+      "label": "toolName/toolInput: local_0123abcd",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_0123abcd",
+          "message": "isolated guard probe"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Desktop session target allowed",
+      "label": "toolName/toolInput: local_ABCDEF01",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_ABCDEF01",
+          "message": "isolated guard probe"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Desktop session target allowed",
+      "label": "toolName/toolInput: local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "message": "isolated guard probe"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'researcher'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "researcher"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'main'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "main"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'worker [3fa9c1]'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "worker [3fa9c1]"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'a1b2c3-agent'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "a1b2c3-agent"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'local_'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'local_zzzz1234'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_zzzz1234"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'local_x; rm'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_x; rm"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'local_0123abcd; rm'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_0123abcd; rm"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'xlocal_0123abcd'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "xlocal_0123abcd"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'local_0123abc'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_0123abc"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'local_-1234567'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_-1234567"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'LOCAL_0123abcd'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "LOCAL_0123abcd"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: ' local_0123abcd'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": " local_0123abcd"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 'local_0123abcd '",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_0123abcd "
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: None",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": null
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: False",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": false
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: 123",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": 123
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: ['local_0123abcd']",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": [
+            "local_0123abcd"
+          ]
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: {'to': 'local_0123abcd'}",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": {
+            "to": "local_0123abcd"
+          }
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: missing target",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "message": "no target"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "toolInput: 'researcher\\nlocal_0123abcd'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "researcher\nlocal_0123abcd"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "toolInput: 'local_0123abcd\\nresearcher'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_0123abcd\nresearcher"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "toolInput: 'local_0123abcd\\n'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_0123abcd\n"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "toolInput: '\\nlocal_0123abcd'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "\nlocal_0123abcd"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "toolInput: 'local_0123abcd\\r\\n'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_0123abcd\r\n"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Whole-string newline bypass denied",
+      "label": "toolInput: 'local_0123abcd\\x00'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_0123abcd\u0000"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: invalid envelope 'invalid input'",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": "invalid input"
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: invalid envelope []",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": []
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Non-session and invalid targets denied",
+      "label": "toolInput: invalid envelope 5",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": 5
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Tool-only mode denied despite valid stdin",
+      "label": "--tool SendMessage with valid stdin",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --tool SendMessage",
+      "stdin": {
+        "toolName": "SendMessage",
+        "toolInput": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Future tools stay guarded and MCP stays allowed",
+      "label": "SendMessageAgent",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessageAgent",
+        "toolInput": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessageAgent, delegation-shaped on \\\"agent\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessageAgent, delegation-shaped on \\\"agent\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Future tools stay guarded and MCP stays allowed",
+      "label": "FutureSendMessage",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "FutureSendMessage",
+        "toolInput": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: FutureSendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: FutureSendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Future tools stay guarded and MCP stays allowed",
+      "label": "SendMessageRemote",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "SendMessageRemote",
+        "toolInput": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "{\"decision\":\"deny\",\"reason\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessageRemote, delegation-shaped on \\\"remote\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessageRemote, delegation-shaped on \\\"remote\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Future tools stay guarded and MCP stays allowed",
+      "label": "mcp__ccd_session_send_message",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh",
+      "stdin": {
+        "toolName": "mcp__ccd_session_send_message",
+        "toolInput": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Secondmate guard allows Desktop only",
+      "label": "secondmate Desktop target",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 0,
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "result": "pass"
+    },
+    {
+      "scenario": "Secondmate guard allows Desktop only",
+      "label": "secondmate subagent target",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "researcher"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    },
+    {
+      "scenario": "Original false denial reproduced at base",
+      "label": "base valid Desktop target denied",
+      "command": "/Users/jubin/.no-mistakes/worktrees/086b234068d7/01M78C41521K7FRGYKNNYVRV5E/.guard-live-ek0brpg4/baseline/bin/fm-subagent-pretool-check.sh --claude",
+      "stdin": {
+        "tool_name": "SendMessage",
+        "tool_input": {
+          "to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"
+        }
+      },
+      "expected_exit": 2,
+      "exit": 2,
+      "stdout": "",
+      "stderr": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"},\"systemMessage\":\"[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work (blocked tool: SendMessage, delegation-shaped on \\\"sendmessage\\\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception.\"}\n",
+      "result": "pass"
+    }
+  ]
+}

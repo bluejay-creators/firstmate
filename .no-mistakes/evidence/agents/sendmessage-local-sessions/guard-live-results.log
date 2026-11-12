@@ -1,0 +1,101 @@
+Real PreToolUse guard validation
+Product: bin/fm-subagent-pretool-check.sh
+Isolation: worktree-local disposable primary and marked secondmate homes; FM_ALLOW_SUBAGENT unset; no live fleet lifecycle calls.
+Invocation: JSON payload on stdin, --claude for Claude and default output mode for Grok; --tool SendMessage boundary also exercised.
+
+Desktop session target allowed
+{"case": "tool_name/tool_input: local_14ed6c97-4bc6-453e-85f3-b2f54f30580c", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c", "message": "isolated guard probe"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+{"case": "tool_name/tool_input: local_0123abcd", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_0123abcd", "message": "isolated guard probe"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+{"case": "tool_name/tool_input: local_ABCDEF01", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_ABCDEF01", "message": "isolated guard probe"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+{"case": "tool_name/tool_input: local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "message": "isolated guard probe"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+{"case": "toolName/toolInput: local_14ed6c97-4bc6-453e-85f3-b2f54f30580c", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c", "message": "isolated guard probe"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+{"case": "toolName/toolInput: local_0123abcd", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_0123abcd", "message": "isolated guard probe"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+{"case": "toolName/toolInput: local_ABCDEF01", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_ABCDEF01", "message": "isolated guard probe"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+{"case": "toolName/toolInput: local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "message": "isolated guard probe"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+
+Non-session and invalid targets denied
+{"case": "tool_input: 'researcher'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "researcher"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'main'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "main"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'worker [3fa9c1]'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "worker [3fa9c1]"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'a1b2c3-agent'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "a1b2c3-agent"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_zzzz1234'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_zzzz1234"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_x; rm'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_x; rm"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_0123abcd; rm'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_0123abcd; rm"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'xlocal_0123abcd'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "xlocal_0123abcd"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_0123abc'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_0123abc"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_-1234567'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_-1234567"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'LOCAL_0123abcd'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "LOCAL_0123abcd"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: ' local_0123abcd'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": " local_0123abcd"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_0123abcd '", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_0123abcd "}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: None", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": null}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: False", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": false}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 123", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": 123}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: ['local_0123abcd']", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": ["local_0123abcd"]}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: {'to': 'local_0123abcd'}", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": {"to": "local_0123abcd"}}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: missing target", "stdin": {"tool_name": "SendMessage", "tool_input": {"message": "no target"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: invalid envelope 'invalid input'", "stdin": {"tool_name": "SendMessage", "tool_input": "invalid input"}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: invalid envelope []", "stdin": {"tool_name": "SendMessage", "tool_input": []}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: invalid envelope 5", "stdin": {"tool_name": "SendMessage", "tool_input": 5}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'researcher'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "researcher"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'main'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "main"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'worker [3fa9c1]'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "worker [3fa9c1]"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'a1b2c3-agent'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "a1b2c3-agent"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_zzzz1234'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_zzzz1234"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_x; rm'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_x; rm"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_0123abcd; rm'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_0123abcd; rm"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'xlocal_0123abcd'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "xlocal_0123abcd"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_0123abc'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_0123abc"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_-1234567'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_-1234567"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'LOCAL_0123abcd'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "LOCAL_0123abcd"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: ' local_0123abcd'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": " local_0123abcd"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_0123abcd '", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_0123abcd "}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: None", "stdin": {"toolName": "SendMessage", "toolInput": {"to": null}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: False", "stdin": {"toolName": "SendMessage", "toolInput": {"to": false}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 123", "stdin": {"toolName": "SendMessage", "toolInput": {"to": 123}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: ['local_0123abcd']", "stdin": {"toolName": "SendMessage", "toolInput": {"to": ["local_0123abcd"]}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: {'to': 'local_0123abcd'}", "stdin": {"toolName": "SendMessage", "toolInput": {"to": {"to": "local_0123abcd"}}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: missing target", "stdin": {"toolName": "SendMessage", "toolInput": {"message": "no target"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: invalid envelope 'invalid input'", "stdin": {"toolName": "SendMessage", "toolInput": "invalid input"}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: invalid envelope []", "stdin": {"toolName": "SendMessage", "toolInput": []}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: invalid envelope 5", "stdin": {"toolName": "SendMessage", "toolInput": 5}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+
+Whole-string newline bypass denied
+{"case": "tool_input: 'researcher\\nlocal_0123abcd'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "researcher\nlocal_0123abcd"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_0123abcd\\nresearcher'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_0123abcd\nresearcher"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_0123abcd\\n'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_0123abcd\n"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: '\\nlocal_0123abcd'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "\nlocal_0123abcd"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_0123abcd\\r\\n'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_0123abcd\r\n"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "tool_input: 'local_0123abcd\\x00'", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_0123abcd\u0000"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'researcher\\nlocal_0123abcd'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "researcher\nlocal_0123abcd"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_0123abcd\\nresearcher'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_0123abcd\nresearcher"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_0123abcd\\n'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_0123abcd\n"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: '\\nlocal_0123abcd'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "\nlocal_0123abcd"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_0123abcd\\r\\n'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_0123abcd\r\n"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "toolInput: 'local_0123abcd\\x00'", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_0123abcd\u0000"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+
+Tool-only mode denied despite valid stdin
+{"case": "--tool SendMessage with valid stdin", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "--tool SendMessage with valid stdin", "stdin": {"toolName": "SendMessage", "toolInput": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+
+Future tools stay guarded and MCP stays allowed
+{"case": "SendMessageAgent", "stdin": {"tool_name": "SendMessageAgent", "tool_input": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "FutureSendMessage", "stdin": {"tool_name": "FutureSendMessage", "tool_input": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "SendMessageRemote", "stdin": {"tool_name": "SendMessageRemote", "tool_input": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+{"case": "mcp__ccd_session_send_message", "stdin": {"tool_name": "mcp__ccd_session_send_message", "tool_input": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+{"case": "SendMessageAgent", "stdin": {"toolName": "SendMessageAgent", "toolInput": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "FutureSendMessage", "stdin": {"toolName": "FutureSendMessage", "toolInput": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "SendMessageRemote", "stdin": {"toolName": "SendMessageRemote", "toolInput": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 2, "stdout_decision": "deny", "stderr_decision": "deny", "result": "pass"}
+{"case": "mcp__ccd_session_send_message", "stdin": {"toolName": "mcp__ccd_session_send_message", "toolInput": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+
+Secondmate guard allows Desktop only
+{"case": "secondmate Desktop target", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 0, "stdout_decision": "(empty)", "stderr_decision": "(empty)", "result": "pass"}
+{"case": "secondmate subagent target", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "researcher"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+
+Original false denial reproduced at base
+{"case": "base valid Desktop target denied", "stdin": {"tool_name": "SendMessage", "tool_input": {"to": "local_14ed6c97-4bc6-453e-85f3-b2f54f30580c"}}, "exit": 2, "stdout_decision": "(empty)", "stderr_decision": "deny", "result": "pass"}
+
+Disposable validation directory removed after probes. No source or test changes made. No Claude Desktop delivery claim; this change owns hook classification only.
