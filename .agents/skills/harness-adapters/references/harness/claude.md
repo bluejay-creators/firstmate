@@ -88,10 +88,9 @@ Claude's PreToolUse seatbelt blocks directly, and its deny is honored only with 
 ### Delegation guard
 
 Claude delegation, scheduling, and worktree tools can create work without `state/<id>.meta`, making guards unable to count it.
-`../../../bin/fm-subagent-pretool-check.sh` denies delegation-shaped tool names.
 A primary should also keep an untracked home-local `permissions.deny` for known delegation tools so they disappear from the schema.
 Never track it in project `.claude/settings.json`, which is Claude-only and propagates to worker copies where it would disarm legitimate delegation.
-`../../../docs/subagent-guard.md` owns the contract, recommendation, `FM_ALLOW_SUBAGENT=1`, and applicability review.
+`../../../docs/subagent-guard.md` owns the delegation guard contract, exclusions, local hardening recommendation, `FM_ALLOW_SUBAGENT=1`, and applicability review.
 
 On Claude 2.1.217 the tool presents as `Agent`, and both `Agent` and `Task` worked as deny keys in an A/B with nonsense control.
 `permissions.allow` pre-approves rather than controls availability, so no closed positive allowlist exists.

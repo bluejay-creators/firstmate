@@ -25,10 +25,10 @@
 # It matches a delegation-SHAPED tool name rather than a fixed list, so a future
 # tool that ships before anyone updates a local deny list is still refused.
 #
-# The guard is narrow by design. It classifies ONE thing: the shape of the tool
-# name. It makes no judgment about whether the work should be delegated at all,
-# which is a reasoning boundary no tool-shape hook can enforce.
-# See docs/subagent-guard.md for the complete contract and validation record.
+# The guard is narrow by design: name-shape classification with the exclusions
+# documented in docs/subagent-guard.md. It makes no judgment about whether the
+# work should be delegated at all, which is a reasoning boundary no tool-shape
+# hook can enforce. That document owns the complete contract and validation record.
 #
 # Usage:
 #   <PreToolUse JSON on stdin> | bin/fm-subagent-pretool-check.sh
