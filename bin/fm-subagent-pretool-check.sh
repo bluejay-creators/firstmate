@@ -156,6 +156,20 @@ for allowed in $OBSERVE_ONLY_TOOLS $PLAN_ONLY_TOOLS; do
   [ "$NORMALIZED" != "$allowed" ] || exit 0
 done
 
+# A SendMessage addressed to an existing Claude Desktop session (`to` is that
+# session's `local_<id>`) is a cross-session message, the app's own route
+# between already-running sessions: it starts no agent and no work firstmate
+# would not know about, exactly like the mcp__ccd_session_* calls allowed
+# above. Only the stdin transport carries the target, so --tool mode and every
+# other target (an in-process subagent name or agentId) still fall through to
+# the stem match and are denied.
+if [ "$NORMALIZED" = "sendmessage" ] && [ -n "${PAYLOAD:-}" ]; then
+  TARGET=$(printf '%s' "$PAYLOAD" | jq -r '((.tool_input // .toolInput // {}).to // empty) | strings' 2>/dev/null) || TARGET=""
+  if printf '%s' "$TARGET" | grep -Eq '^local_[0-9A-Fa-f][0-9A-Fa-f-]{7,63}$'; then
+    exit 0
+  fi
+fi
+
 MATCHED=""
 for stem in $DELEGATION_STEMS; do
   case "$NORMALIZED" in

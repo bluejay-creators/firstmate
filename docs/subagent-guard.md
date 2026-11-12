@@ -47,7 +47,7 @@ agent  subagent  task  workflow  cron  schedul  worktree
 delegate  spawn  dispatch  handoff  remote  sendmessage  monitor
 ```
 
-Three exclusions keep the shape test from producing false positives.
+Four exclusions keep the shape test from producing false positives.
 
 - A name beginning `mcp__` is never classified.
   An MCP server chooses its own tool names, a task or agent noun there is common, and it has no bearing on fleet dispatch.
@@ -60,6 +60,12 @@ Three exclusions keep the shape test from producing false positives.
   That list has no executor: it spawns no agent, allocates no worktree, registers no schedule, and starts nothing that could outlive the session or escape a firstmate guard.
   So it is not the "work, agent, schedule, or isolated workspace that firstmate would not know about" the guard exists to stop, and the stem match on `task` is a false positive rather than a policy.
   The cost of the false positive was concrete: the primary could not track its own plan, and the deny text told it to run `bin/fm-brief.sh` and `bin/fm-spawn.sh` to create a todo entry.
+
+- A `SendMessage` whose `to` is an existing Claude Desktop session id (`local_` followed by that session's hex or UUID id) is allowed.
+  That is a cross-session message, which is the Claude desktop app's own route between sessions that are already running, the same thing the allowed `mcp__ccd_session_*` calls do.
+  It starts no agent, worktree or schedule, so the stem match on `sendmessage` is a false positive for it.
+  The exception reads the target only from the stdin transport: `--tool` mode, and any other target such as an in-process subagent name or agentId, still match the stem and are denied.
+  A home whose untracked local Claude deny list names `SendMessage` still blocks it at that layer; drop that entry to use cross-session messages.
 
 Both exclusion lists match the whole normalized name, never a substring, so neither can widen by accident: `TaskCreateAgent` and `RemoteTaskCreate` stay denied.
 Folding the two lists together would be the drift risk, because the observe-or-stop rationale is not true of a tool that writes.

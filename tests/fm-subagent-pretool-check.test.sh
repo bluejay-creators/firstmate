@@ -245,6 +245,38 @@ test_stdin_transports_and_output_shapes() {
   pass "both stdin transports classify correctly and Claude's deny keeps stdout empty"
 }
 
+stdin_send_message() {
+  local payload=$1 rc=0
+  : > "$OUT"; : > "$ERR"
+  printf '%s' "$payload" \
+    | FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
+      "$CHECK" --claude > "$OUT" 2> "$ERR" || rc=$?
+  return "$rc"
+}
+
+test_send_message_to_desktop_session_is_allowed_only_there() {
+  local rc target
+  for target in local_14ed6c97-4bc6-453e-85f3-b2f54f30580c local_0123abcd; do
+    rc=0
+    stdin_send_message "{\"tool_name\":\"SendMessage\",\"tool_input\":{\"to\":\"$target\",\"message\":\"hi\"}}" || rc=$?
+    [ "$rc" -eq 0 ] || fail "SendMessage to Desktop session $target must allow, got exit $rc: $(cat "$ERR")"
+    [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "SendMessage allow wrote output"
+  done
+  for target in researcher main "worker [3fa9c1]" a1b2c3-agent local_ local_zzzz1234 "local_0123abcd; rm" xlocal_0123abcd; do
+    rc=0
+    stdin_send_message "{\"tool_name\":\"SendMessage\",\"tool_input\":{\"to\":\"$target\",\"message\":\"hi\"}}" || rc=$?
+    [ "$rc" -eq 2 ] || fail "SendMessage to non-session target '$target' must deny, got exit $rc"
+  done
+  rc=0
+  stdin_send_message '{"tool_name":"SendMessage","tool_input":{"message":"no target"}}' || rc=$?
+  [ "$rc" -eq 2 ] || fail "SendMessage without a target must deny, got exit $rc"
+  rc=0
+  stdin_send_message '{"tool_name":"SendMessage","tool_input":{"to":["local_0123abcd"]}}' || rc=$?
+  [ "$rc" -eq 2 ] || fail "SendMessage with a non-string target must deny, got exit $rc"
+  expect_deny "tool-only mode has no target to check" SendMessage
+  pass "SendMessage passes only to an existing Desktop session id; subagent targets and --tool mode stay denied"
+}
+
 test_malformed_transport_fails_open() {
   local rc payload
   for payload in '{not-json' '' '{}' '{"tool_name":null}'; do
@@ -277,6 +309,7 @@ test_missing_jq_stdin_transport_fails_open() {
 }
 
 test_guard_denies_every_currently_known_delegation_tool
+test_send_message_to_desktop_session_is_allowed_only_there
 test_guard_denies_hypothetical_future_tools
 test_guard_allows_ordinary_and_observe_only_tools
 test_guard_allows_session_local_todo_tools
